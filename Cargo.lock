@@ -1373,8 +1373,6 @@ dependencies = [
 [[package]]
 name = "eframe"
 version = "0.37.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9c5642501a65ca657d05f00c643a5c14ff2346cb3818032bfe23d58e1f8e5f84"
 dependencies = [
  "ahash",
  "bytemuck",
@@ -5144,7 +5142,7 @@ checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 
 [[package]]
 name = "stewardget-cli"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -5159,7 +5157,7 @@ dependencies = [
 
 [[package]]
 name = "stewardget-core"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "aes",
  "cbc",
@@ -5185,7 +5183,7 @@ dependencies = [
 
 [[package]]
 name = "stewardget-gui"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "arboard",
  "directories",

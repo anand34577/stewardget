@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use egui::{Align, Color32, CornerRadius, Frame, Layout, Margin, RichText, Stroke, Ui};
-use stewardget_core::util::{expand_pattern, format_bytes, format_duration, format_speed, parse_size};
+use stewardget_core::util::{expand_pattern, format_bytes, parse_size};
 
 use crate::table::free_space;
 use stewardget_core::{
@@ -1020,91 +1020,6 @@ impl StewardGetApp {
 // ---- Completion & power ---------------------------------------------------------------
 
 impl StewardGetApp {
-    /// IDM-style "Download complete" dialog (optional, see Settings).
-    pub fn completion_dialog(&mut self, ctx: &egui::Context) {
-        if self.add.is_some() || self.confirm.is_some() {
-            return;
-        }
-        let Some(&id) = self.completed.front() else { return };
-        let Some(d) = self.snap.downloads.iter().find(|d| d.id == id).cloned() else {
-            self.completed.pop_front();
-            return;
-        };
-        let p = self.palette;
-        let mut close = false;
-        let mut never = false;
-        let modal = modal("stewardget-complete", &p).show(ctx, |ui| {
-            ui.set_width(460.0);
-            title(ui, &p, Icon::CheckCircle, "Download complete");
-            ui.horizontal(|ui| {
-                widgets::icon(ui, Icon::for_category(d.category), 28.0, p.category(d.category));
-                ui.vertical(|ui| {
-                    ui.add(
-                        egui::Label::new(RichText::new(&d.file_name).family(theme::semi()).color(p.text)).truncate(),
-                    );
-                    let secs = d.finished_at.unwrap_or(d.added_at).saturating_sub(d.added_at).max(1);
-                    ui.label(
-                        RichText::new(format!(
-                            "{} · {} · average {}",
-                            format_bytes(d.downloaded),
-                            format_duration(secs),
-                            format_speed(d.downloaded as f64 / secs as f64)
-                        ))
-                        .size(12.5)
-                        .color(p.text_dim),
-                    );
-                    if d.checksum_verified {
-                        ui.label(RichText::new("Checksum verified").size(12.5).color(p.green));
-                    }
-                    if stewardget_core::util::disguised_program(&d.file_name) {
-                        ui.label(
-                            RichText::new("A program disguised as a document or picture: do not open it.")
-                                .size(12.5)
-                                .color(p.red),
-                        );
-                    }
-                });
-            });
-            ui.add_space(6.0);
-            ui.add(
-                egui::Label::new(RichText::new(d.path.display().to_string()).size(12.0).color(p.text_dim)).truncate(),
-            );
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                let mut off = false;
-                if widgets::toggle(ui, &mut off, &p).clicked() {
-                    never = true;
-                }
-                ui.label(RichText::new("Don't show this again").size(12.5).color(p.text_dim));
-            });
-            footer(ui, |ui| {
-                if widgets::button(ui, ButtonKind::Primary, Some(Icon::External), "Open", true, &p).clicked() {
-                    let _ = stewardget_core::util::open_with_system(&d.path);
-                    close = true;
-                }
-                if widgets::button(ui, ButtonKind::Ghost, Some(Icon::FolderOpen), "Show in folder", true, &p).clicked()
-                {
-                    let _ = stewardget_core::util::reveal_in_file_manager(&d.path);
-                    close = true;
-                }
-                if widgets::button(ui, ButtonKind::Ghost, None, "Close", true, &p).clicked() {
-                    close = true;
-                }
-            });
-        });
-        if never {
-            let mut config = self.engine.config();
-            config.completion_dialog = false;
-            let r = self.engine.update_config(config);
-            self.report(r);
-            self.completed.clear();
-            return;
-        }
-        if close || modal.should_close() {
-            self.completed.pop_front();
-        }
-    }
-
     /// Countdown before quitting, sleeping or shutting down.
     pub fn power_dialog(&mut self, ctx: &egui::Context) {
         const SECS: u64 = 30;

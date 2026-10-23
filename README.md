@@ -97,11 +97,11 @@ StewardGet keeps everything that made IDM great and fixes the rest.
 - **Add dialog with link check** (real file name, size, resume support), free-space hint, duplicate detection,
   batch patterns (`img[001-120].jpg`), recent folders, "Download later".
 - Drag downloads onto a queue in the sidebar to move them; start and stop each queue on its own.
-- **Progress window** for each download, like IDM's: speed, time left, resume support, the parts, Pause.
+- **Progress window** for each download, like IDM's, also while StewardGet is in the tray: transfer rate, time left, resume support, each connection's progress, the parts, its own speed limit, Pause. It turns into *Download complete* when the file is done.
   Opens by itself for a download started on its own; double-click any download to open it.
 - **Properties** (F2): rename or move files on disk, change link, connections, limits, headers, checksum.
 - Clear problem messages with the right fix: refresh link, resume anyway, start over, move to another drive.
-- Optional *Download complete* dialog, "when all downloads finish" quit / sleep / shut down (with a countdown).
+- Optional *Download complete* window for every finished download, "when all downloads finish" quit / sleep / shut down (with a countdown).
 - Hash tool (MD5, SHA-1, SHA-256, SHA-512) for finished files; import and export link lists.
 - Multi-select (Ctrl/Shift), context menus, keyboard shortcuts, double-click to open, clipboard monitoring.
 - Five themes, six accent colours, interface zoom, Inter typeface and Lucide icons; fully responsive layout.
