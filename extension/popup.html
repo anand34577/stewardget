@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>StewardGet</title>
+  <style>
+    :root {
+      --bg: #10131a; --card: #171b24; --border: #252b38; --text: #e6e8ef; --dim: #8a93a6;
+      --accent: #2dd4bf; --green: #34d399; --red: #f87171; --control: #383f50;
+    }
+    @media (prefers-color-scheme: light) {
+      :root { --bg: #f6f7fb; --card: #fff; --border: #e3e6ee; --text: #151821; --dim: #667085; --accent: #0d9488; --green: #059669; --red: #dc2626; --control: #cbd0dc; }
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; width: 300px; background: var(--bg); color: var(--text); font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+    header { display: flex; align-items: center; gap: 10px; padding: 14px 16px; border-bottom: 1px solid var(--border); }
+    header img { width: 28px; height: 28px; }
+    header h1 { font-size: 15px; margin: 0; flex: 1; }
+    .version { font-size: 11px; font-weight: 400; color: var(--dim); }
+    .status { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--dim); }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--dim); }
+    .dot.on { background: var(--green); } .dot.off { background: var(--red); }
+    main { padding: 12px 16px 16px; display: grid; gap: 12px; }
+    .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    label { color: var(--dim); font-size: 12px; }
+    input[type=text], input[type=number], input[type=password] {
+      width: 100%; padding: 7px 10px; border-radius: 8px; border: 1px solid var(--control);
+      background: var(--card); color: var(--text); font: inherit;
+    }
+    input:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: transparent; }
+    .field { display: grid; gap: 4px; }
+    .switch { position: relative; width: 36px; height: 20px; flex: none; }
+    .switch input { opacity: 0; width: 0; height: 0; }
+    .slider { position: absolute; inset: 0; background: var(--control); border-radius: 20px; cursor: pointer; transition: .15s; }
+    .slider::before { content: ""; position: absolute; width: 14px; height: 14px; left: 3px; top: 3px; background: #fff; border-radius: 50%; transition: .15s; }
+    .switch input:checked + .slider { background: var(--accent); }
+    .switch input:checked + .slider::before { transform: translateX(16px); }
+    button { padding: 8px; border: 0; border-radius: 8px; background: var(--accent); color: #04211d; font: inherit; font-weight: 600; cursor: pointer; }
+    .hint { color: var(--dim); font-size: 11px; margin: 0; }
+    .notice { display: grid; gap: 6px; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--card); }
+    .notice strong { font-size: 13px; }
+    .notice.warn { border-color: var(--red); }
+    button.secondary { background: transparent; color: var(--text); border: 1px solid var(--control); }
+    .media { display: grid; gap: 6px; }
+    .media h2 { margin: 0; font-size: 12px; font-weight: 600; color: var(--dim); text-transform: uppercase; letter-spacing: .04em; }
+    .media ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; max-height: 220px; overflow-y: auto; }
+    .media li { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 8px; background: var(--card); border: 1px solid var(--border); }
+    .media .info { flex: 1; min-width: 0; }
+    .media .name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .media .meta { font-size: 11px; color: var(--dim); }
+    .media button { padding: 5px 10px; font-size: 12px; flex: none; }
+    [hidden] { display: none !important; }
+  </style>
+</head>
+<body>
+  <header>
+    <img src="icons/icon48.png" alt="">
+    <h1>StewardGet <span id="version" class="version"></span></h1>
+    <span class="status"><span id="dot" class="dot"></span><span id="state">checking…</span></span>
+  </header>
+  <main>
+    <div class="notice">
+      <strong id="message">Checking…</strong>
+      <p id="hint" class="hint" hidden></p>
+      <p id="last" class="hint" hidden></p>
+      <button id="open" class="secondary" hidden>Open StewardGet</button>
+    </div>
+    <section id="media" class="media" hidden>
+      <h2>Media on this page</h2>
+      <ul id="mediaList"></ul>
+      <p class="hint">Videos and audio this page played. Streams (HLS) are saved as one file. Play the video first if it isn't listed.</p>
+    </section>
+    <div id="access" class="notice warn" hidden>
+      <strong>Allow access to websites</strong>
+      <p class="hint">Firefox needs your permission before the extension can read download links and hand them to StewardGet.</p>
+      <button id="grant" class="secondary">Allow access</button>
+    </div>
+    <div class="row">
+      <span>Capture browser downloads</span>
+      <label class="switch"><input id="enabled" type="checkbox"><span class="slider"></span></label>
+    </div>
+    <div class="field">
+      <label for="minSizeKb">Leave files smaller than (KB) to the browser</label>
+      <input id="minSizeKb" type="number" min="0" step="1">
+    </div>
+    <div class="field">
+      <label for="skipExtensions">Never capture these extensions</label>
+      <input id="skipExtensions" type="text" placeholder="e.g. pdf, jpg">
+    </div>
+    <div class="field">
+      <label for="skipSites">Never capture on these sites</label>
+      <input id="skipSites" type="text" placeholder="e.g. mybank.com, intranet.local">
+    </div>
+    <button id="site" class="secondary" hidden></button>
+    <div class="row">
+      <div class="field" style="flex:1"><label for="port">Port</label><input id="port" type="number" min="1024" max="65535"></div>
+      <div class="field" style="flex:2"><label for="token">Token (optional)</label><input id="token" type="password"></div>
+    </div>
+    <button id="save">Save</button>
+    <button id="all" class="secondary">Download all links on this page…</button>
+    <p id="allResult" class="hint" hidden></p>
+    <p class="hint">Hold Alt while clicking a link to keep that download in the browser. Right-click any link → “Download with StewardGet”, or the page → “Download all links with StewardGet…” to pick from a list in StewardGet. Expired link? Use “Refresh link” in StewardGet, then download the file again here — StewardGet resumes where it stopped.</p>
+  </main>
+  <script src="popup.js"></script>
+</body>
+</html>

@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>dev.stewardget.StewardGet</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT OR Apache-2.0</project_license>
+  <name>StewardGet</name>
+  <summary>Fast, resumable download manager</summary>
+  <description>
+    <p>
+      StewardGet splits each download across several connections, resumes after
+      crashes and restarts, and never throws partial data away. It comes with a
+      desktop app, a terminal dashboard and a browser extension that hands your
+      browser's downloads to StewardGet.
+    </p>
+    <p>No telemetry, no ads, no accounts.</p>
+  </description>
+  <launchable type="desktop-id">dev.stewardget.StewardGet.desktop</launchable>
+  <url type="homepage">https://github.com/anand34577/stewardget</url>
+  <url type="bugtracker">https://github.com/anand34577/stewardget/issues</url>
+  <url type="help">https://github.com/anand34577/stewardget/wiki</url>
+  <developer id="io.github.anand34577">
+    <name>StewardGet contributors</name>
+  </developer>
+  <provides>
+    <binary>stewardget</binary>
+    <binary>stewardget-gui</binary>
+  </provides>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="@VERSION@" date="@DATE@"/>
+  </releases>
+</component>

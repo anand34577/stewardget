@@ -1,0 +1,34 @@
+{
+  "manifest_version": 3,
+  "name": "StewardGet Download Manager",
+  "short_name": "StewardGet",
+  "version": "0.7.0",
+  "description": "Send browser downloads to StewardGet: segmented, resumable, fast. Includes expired-link recapture. No tracking.",
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "permissions": ["downloads", "contextMenus", "cookies", "storage", "alarms", "scripting", "webRequest"],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["content.js"],
+      "run_at": "document_start",
+      "all_frames": true
+    }
+  ],
+  "action": {
+    "default_title": "StewardGet",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png"
+    }
+  }
+}

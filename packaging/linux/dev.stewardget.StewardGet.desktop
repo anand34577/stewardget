@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=StewardGet
+GenericName=Download Manager
+Comment=Fast, resumable downloads with browser integration
+Exec=stewardget-gui %U
+Icon=dev.stewardget.StewardGet
+Terminal=false
+Categories=Network;FileTransfer;
+Keywords=download;downloader;manager;accelerator;resume;
+StartupNotify=true
+StartupWMClass=dev.stewardget.StewardGet

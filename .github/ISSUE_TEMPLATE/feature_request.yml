@@ -1,0 +1,20 @@
+name: Feature request
+description: Suggest an idea or an improvement
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: Describe the problem or the situation first; the solution comes next.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: How could StewardGet help?
+  - type: textarea
+    id: other
+    attributes:
+      label: How do other download managers handle it?
+      description: Optional. IDM, AB Download Manager, aria2, browser built-ins…

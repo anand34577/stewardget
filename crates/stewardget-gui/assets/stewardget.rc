@@ -1,0 +1,2 @@
+// Windows executable icon (other platforms use the window icon set at runtime).
+1 ICON "../../assets/icon.ico"

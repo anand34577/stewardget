@@ -1,0 +1,298 @@
+name: Release
+
+# Tags (v1.2.3) build, test and publish every package. Pull requests that touch
+# packaging build and test the same packages without publishing anything.
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - "packaging/**"
+      - "extension/**"
+      - ".github/workflows/release.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  LINUX_DEPS: libxkbcommon-dev libwayland-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libgl1-mesa-dev rpm
+
+jobs:
+  build:
+    name: build (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            name: windows-x64
+          - os: windows-11-arm
+            name: windows-arm64
+          - os: ubuntu-22.04 # older glibc, so the binaries run on more distributions
+            name: linux-x64
+          - os: ubuntu-22.04-arm
+            name: linux-arm64
+          - os: macos-latest
+            name: macos-universal
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+          targets: ${{ runner.os == 'macOS' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+      - name: System libraries
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y $LINUX_DEPS
+
+      - name: Version
+        env:
+          TAG: ${{ github.ref_name }}
+          IS_TAG: ${{ startsWith(github.ref, 'refs/tags/') }}
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          if [ "$IS_TAG" = true ] && [ "v$version" != "$TAG" ]; then
+            echo "Tag $TAG does not match Cargo.toml version $version" >&2
+            exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Build
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            cargo build --release --locked --target aarch64-apple-darwin
+            cargo build --release --locked --target x86_64-apple-darwin
+            mkdir -p target/release
+            for bin in stewardget stewardget-gui; do
+              lipo -create -output "target/release/$bin" \
+                "target/aarch64-apple-darwin/release/$bin" "target/x86_64-apple-darwin/release/$bin"
+            done
+          else
+            cargo build --release --locked
+          fi
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        env:
+          NAME: ${{ matrix.name }}
+        run: |
+          arch=${NAME#windows-}
+          mkdir -p "bin/$arch" dist
+          cp target/release/stewardget-gui.exe target/release/stewardget.exe "bin/$arch/"
+          dir="StewardGet-$VERSION-$NAME-portable"
+          mkdir -p "$dir"
+          cp target/release/stewardget-gui.exe target/release/stewardget.exe LICENSE-MIT LICENSE-APACHE "$dir/"
+          printf '%s\r\n' \
+            "StewardGet keeps its settings, download list and statistics in the data folder" \
+            "next to this file, so the whole folder can live on a USB drive." \
+            "Delete this file to use the normal per-user location instead." > "$dir/portable"
+          7z a -tzip "dist/StewardGet-$NAME-portable.zip" "$dir" > /dev/null
+          ./bin/$arch/stewardget.exe --version
+
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        env:
+          NAME: ${{ matrix.name }}
+        run: packaging/linux/package.sh "$VERSION" "${NAME#linux-}" target/release dist
+
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        run: packaging/macos/package.sh "$VERSION" target/release dist
+
+      - name: Test the packages (Linux)
+        if: runner.os == 'Linux'
+        env:
+          NAME: ${{ matrix.name }}
+        run: |
+          arch=${NAME#linux-}
+          # .deb
+          sudo apt-get install -y "./dist/stewardget-linux-$arch.deb"
+          stewardget --version
+          desktop-file-validate /usr/share/applications/dev.stewardget.StewardGet.desktop || true
+          sudo apt-get remove -y stewardget
+          # install.sh from a local copy of the release files
+          (cd dist && sha256sum * > "$RUNNER_TEMP/SHA256SUMS.txt") && cp "$RUNNER_TEMP/SHA256SUMS.txt" dist/
+          STEWARDGET_MIRROR="file://$PWD/dist" sh packaging/install.sh --no-launch
+          "$HOME/.local/bin/stewardget" --version
+          test -f "$HOME/.local/share/applications/dev.stewardget.StewardGet.desktop"
+          sh packaging/install.sh --uninstall
+          test ! -e "$HOME/.local/bin/stewardget"
+          rm dist/SHA256SUMS.txt
+          # .rpm, in a Fedora container
+          if [ "$arch" = x64 ]; then
+            docker run --rm -v "$PWD/dist:/dist:ro" fedora:latest \
+              sh -c "dnf install -y -q /dist/stewardget-linux-x64.rpm && stewardget --version"
+          fi
+
+      - name: Test the packages (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          (cd dist && shasum -a 256 * > "$RUNNER_TEMP/SHA256SUMS.txt") && cp "$RUNNER_TEMP/SHA256SUMS.txt" dist/
+          STEWARDGET_MIRROR="file://$PWD/dist" sh packaging/install.sh --no-launch
+          /Applications/StewardGet.app/Contents/MacOS/stewardget --version
+          codesign --verify --deep --strict /Applications/StewardGet.app
+          sh packaging/install.sh --uninstall
+          test ! -e /Applications/StewardGet.app
+          rm dist/SHA256SUMS.txt
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: pkg-${{ matrix.name }}
+          path: dist/*
+          if-no-files-found: error
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: runner.os == 'Windows'
+        with:
+          name: bin-${{ matrix.name }}
+          path: bin/*
+          if-no-files-found: error
+
+  windows-installer:
+    needs: build
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: bin-windows-*
+          path: bin
+          merge-multiple: true
+      - name: Inno Setup and Pillow
+        run: |
+          if ! ls "/c/Program Files (x86)"/Inno\ Setup*/ISCC.exe > /dev/null 2>&1; then
+            choco install innosetup -y --no-progress
+          fi
+          python -m pip install --quiet pillow
+      - name: Build the installer
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          python packaging/windows/wizard_images.py build/wizard
+          iscc=$(ls "/c/Program Files (x86)"/Inno\ Setup*/ISCC.exe | tail -1)
+          "$iscc" -Q \
+            "-DAppVersion=$version" \
+            "-DBinX64=$(cygpath -w "$PWD/bin/x64")" \
+            "-DBinArm64=$(cygpath -w "$PWD/bin/arm64")" \
+            "-DImages=$(cygpath -w "$PWD/build/wizard")" \
+            "-DOutputDir=$(cygpath -w "$PWD/dist")" \
+            packaging/windows/stewardget.iss
+          ls -l dist
+      - name: Test the installer
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP 'StewardGet test'
+          $p = Start-Process dist\StewardGet-Setup.exe -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CURRENTUSER', "/DIR=`"$dir`"", '/TASKS=path' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "setup exit code $($p.ExitCode)" }
+          & "$dir\stewardget.exe" --version
+          if ($LASTEXITCODE -ne 0) { throw 'stewardget.exe did not run' }
+          if (-not ([Environment]::GetEnvironmentVariable('Path', 'User') -split ';' -contains $dir)) { throw 'not on PATH' }
+          $p = Start-Process "$dir\unins000.exe" -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "uninstall exit code $($p.ExitCode)" }
+          Start-Sleep -Seconds 2
+          if (Test-Path "$dir\stewardget.exe") { throw 'files left behind' }
+          if ([Environment]::GetEnvironmentVariable('Path', 'User') -split ';' -contains $dir) { throw 'PATH entry left behind' }
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: pkg-windows-installer
+          path: dist/StewardGet-Setup.exe
+          if-no-files-found: error
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [build, windows-installer]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: pkg-*
+          path: dist
+          merge-multiple: true
+      - name: Browser extension and install scripts
+        run: |
+          # One build per browser family; they differ only in manifest.json.
+          mkdir -p "$RUNNER_TEMP/firefox"
+          cp -r extension/. "$RUNNER_TEMP/firefox/"
+          mv "$RUNNER_TEMP/firefox/manifest.firefox.json" "$RUNNER_TEMP/firefox/manifest.json"
+          (cd extension && zip -qr ../dist/stewardget-browser-extension.zip . -x README.md manifest.firefox.json)
+          cp packaging/install.sh packaging/install.ps1 dist/
+      - name: Sign the Firefox add-on (when AMO keys are configured)
+        env:
+          AMO_JWT_ISSUER: ${{ secrets.AMO_JWT_ISSUER }}
+          AMO_JWT_SECRET: ${{ secrets.AMO_JWT_SECRET }}
+        run: |
+          if [ -z "$AMO_JWT_ISSUER" ] || [ -z "$AMO_JWT_SECRET" ]; then
+            echo "No AMO_JWT_ISSUER / AMO_JWT_SECRET secrets: skipping stewardget-firefox.xpi."
+            exit 0
+          fi
+          npx --yes web-ext@8.2.0 sign --channel=unlisted --source-dir "$RUNNER_TEMP/firefox" \
+            --artifacts-dir "$RUNNER_TEMP/xpi" --api-key "$AMO_JWT_ISSUER" --api-secret "$AMO_JWT_SECRET"
+          cp "$RUNNER_TEMP"/xpi/*.xpi dist/stewardget-firefox.xpi
+      - name: Checksums
+        run: |
+          cd dist
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+      - name: Release notes
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version="${TAG#v}"
+          awk -v head="## [$version]" '
+            index($0, head) == 1 { on = 1; next }
+            on && index($0, "## [") == 1 { exit }
+            on { print }
+          ' CHANGELOG.md > notes.md
+          test -s notes.md
+          cat >> notes.md <<'EOF'
+
+          ## Install
+
+          | System | Download |
+          |---|---|
+          | Windows 10/11 (x64 and ARM64) | **StewardGet-Setup.exe**, or the portable zip |
+          | macOS 11+ (Apple silicon and Intel) | **StewardGet-macos.dmg** |
+          | Debian, Ubuntu, Mint | **stewardget-linux-x64.deb** / **stewardget-linux-arm64.deb** |
+          | Fedora, openSUSE, RHEL | **stewardget-linux-x64.rpm** / **stewardget-linux-arm64.rpm** |
+          | Any Linux | the install script below, or the .tar.gz |
+
+          Or install from a terminal:
+
+          ```sh
+          # Linux and macOS
+          curl -fsSL https://github.com/anand34577/stewardget/releases/latest/download/install.sh | sh
+          ```
+
+          ```powershell
+          # Windows (PowerShell)
+          irm https://github.com/anand34577/stewardget/releases/latest/download/install.ps1 | iex
+          ```
+
+          Then connect your browser from **Settings › Browser** in the app. Step-by-step guides are in the
+          [wiki](https://github.com/anand34577/stewardget/wiki). The builds are not code-signed yet; the
+          [installation guide](https://github.com/anand34577/stewardget/wiki/Installation) explains the one-time
+          warning Windows and macOS show. `SHA256SUMS.txt` lists the checksum of every file.
+          EOF
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: gh release create "$TAG" dist/* --title "StewardGet ${TAG#v}" --notes-file notes.md --verify-tag

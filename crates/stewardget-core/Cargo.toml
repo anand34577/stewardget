@@ -1,0 +1,38 @@
+[package]
+name = "stewardget-core"
+description = "The download engine behind StewardGet: segmented, resumable, rate-limited HTTP downloads."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+tokio = { workspace = true, features = ["net", "io-util"] }
+tokio-util.workspace = true
+futures-util.workspace = true
+reqwest.workspace = true
+getrandom = "0.3"
+url.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+directories.workspace = true
+percent-encoding.workspace = true
+httpdate.workspace = true
+chrono.workspace = true
+sha2.workspace = true
+sha1.workspace = true
+md-5.workspace = true
+aes.workspace = true
+cbc.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["io-util", "net"] }

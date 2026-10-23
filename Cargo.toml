@@ -1,0 +1,56 @@
+[workspace]
+resolver = "3"
+members = ["crates/stewardget-core", "crates/stewardget-cli", "crates/stewardget-gui"]
+default-members = ["crates/stewardget-core", "crates/stewardget-cli", "crates/stewardget-gui"]
+
+[workspace.package]
+version = "0.7.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/anand34577/stewardget"
+authors = ["StewardGet contributors"]
+rust-version = "1.90"
+
+[workspace.dependencies]
+stewardget-core = { path = "crates/stewardget-core" }
+
+tokio = { version = "1.54", features = ["rt-multi-thread", "macros", "time", "sync", "signal"] }
+tokio-util = "0.7.20"
+futures-util = { version = "0.3.34", default-features = false, features = ["std"] }
+reqwest = { version = "0.13.5", features = ["stream", "socks"] }
+url = "2.5.8"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+thiserror = "2.0.21"
+directories = "6.0.0"
+percent-encoding = "2.3.2"
+httpdate = "1.0.3"
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
+sha2 = "0.11.1"
+sha1 = "0.11.0"
+md-5 = "0.11.0"
+aes = "0.8.4"
+cbc = { version = "0.1.2", features = ["alloc"] }
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Graphics_Dwm", "Win32_System_DataExchange", "Win32_System_Diagnostics_Debug", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_Ioctl", "Win32_System_Power", "Win32_System_Registry", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+libc = "0.2"
+
+clap = { version = "4.6.7", features = ["derive"] }
+ratatui = "0.30.2"
+indicatif = "0.18.6"
+anyhow = "1.0.104"
+
+eframe = { version = "0.37.0", default-features = false, features = ["accesskit", "clipboard", "default_fonts", "glow", "links", "persistence", "system_fonts", "wayland", "x11"] }
+egui = "0.37.0"
+rfd = "0.17.2"
+arboard = { version = "3.7.0", default-features = false, features = ["wayland-data-control"] }
+tray-icon = "0.26.1"
+notify-rust = "4.18.2"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true
+
+[profile.dev.package."*"]
+opt-level = 2

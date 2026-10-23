@@ -1,0 +1,43 @@
+name: Bug report
+description: Something doesn't work as expected
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report this. Please **don't paste private links, cookies or tokens**.
+        For security problems use the Security tab instead of an issue.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Add a link from …
+        2. Pause it at …
+        3. …
+  - type: input
+    id: error
+    attributes:
+      label: Error message
+      description: The text shown in the details pane, if any.
+  - type: dropdown
+    id: frontend
+    attributes:
+      label: Where
+      options: [Desktop app, Terminal UI, stewardget get / CLI, Browser extension]
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: StewardGet version and operating system
+      placeholder: 0.1.0 on Windows 11
+    validations:
+      required: true
