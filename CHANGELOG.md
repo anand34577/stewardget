@@ -4,6 +4,38 @@ All notable changes to StewardGet are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.7.1] - 2026-10-23
+
+Downloads from the browser now feel like they do in IDM and AB Download
+Manager: small windows of their own, with the main window left alone.
+
+### Fixed
+- A download from the browser no longer flashes the main window before the
+  new-download window: only the small window opens, also while StewardGet is
+  in the tray or minimised.
+- The progress window now opens while StewardGet is in the tray or minimised.
+  It used to appear only when the main window was on screen.
+- A download that finishes or fails within a second still gets its window,
+  instead of nothing.
+- The *Download complete* window shows while StewardGet is in the tray; it
+  was drawn inside the main window, so it waited there unseen.
+
+### Changed
+- The progress window is laid out like IDM's: status, file size, downloaded,
+  transfer rate, time left and resume support each on their own line, the
+  link, and a bar with each connection's progress. *Show details* lists the
+  parts with what each one is doing; the choice is kept for the next window.
+- It sets the download's own speed limit, and turns into *Download complete*
+  (Open, Show in folder) when the file is done.
+- Pausing a download whose server can't resume asks first, since it would
+  have to start over.
+- A failed download's window says what went wrong and offers *Retry*, or
+  *Start over* when the server stopped supporting resume.
+- Small windows open centred on the screen, a little apart when there are
+  several.
+- The new-download window offers *Show it* for a link that is already in your
+  list.
+
 ## [0.7.0] - 2026-10-23
 
 Velox is now **StewardGet**. Another download manager already used the name
@@ -407,6 +439,7 @@ The first public release.
 - `stewardget get`: one-off downloads with progress bars.
 - `stewardget add`: sends links to the running app.
 
+[0.7.1]: https://github.com/anand34577/stewardget/releases/tag/v0.7.1
 [0.7.0]: https://github.com/anand34577/stewardget/releases/tag/v0.7.0
 [0.6.0]: https://github.com/anand34577/stewardget/releases/tag/v0.6.0
 [0.5.1]: https://github.com/anand34577/stewardget/releases/tag/v0.5.1
