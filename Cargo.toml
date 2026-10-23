@@ -2,6 +2,7 @@
 resolver = "3"
 members = ["crates/stewardget-core", "crates/stewardget-cli", "crates/stewardget-gui"]
 default-members = ["crates/stewardget-core", "crates/stewardget-cli", "crates/stewardget-gui"]
+exclude = ["vendor"]
 
 [workspace.package]
 version = "0.7.0"
@@ -54,3 +55,8 @@ strip = true
 
 [profile.dev.package."*"]
 opt-level = 2
+
+# eframe with a fix for small windows opened while the main window is hidden;
+# see vendor/README.md.
+[patch.crates-io]
+eframe = { path = "vendor/eframe" }

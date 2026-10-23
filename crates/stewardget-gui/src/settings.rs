@@ -220,7 +220,7 @@ impl StewardGetApp {
                     ui,
                     &p,
                     "Progress window",
-                    "Open a small window with speed, parts and Pause for each download you start on its own (batches don't open one each). Double-click a download to open it any time.",
+                    "Open a small window with the speed, each connection's progress and Pause for each download you start on its own, also while StewardGet is in the tray (batches don't open one each). It turns into Download complete when the file is done. Double-click a download to open it any time.",
                     |ui| {
                         toggle(ui, &mut draft.progress_window, &p);
                     },
@@ -257,8 +257,8 @@ impl StewardGetApp {
                 row(
                     ui,
                     &p,
-                    "Download complete dialog",
-                    "Show a dialog with Open and Show in folder when a download finishes.",
+                    "Download complete window",
+                    "Also show Download complete, with Open and Show in folder, for downloads that had no progress window open, such as the files of a batch.",
                     |ui| {
                         toggle(ui, &mut draft.completion_dialog, &p);
                     },

@@ -54,6 +54,10 @@ pub struct CaptureWindow {
     /// Content height of the last frame, to fit the window to it.
     height: f32,
     focus_pending: bool,
+    /// "Show it" on the download already in the list.
+    show_existing: Option<stewardget_core::DownloadId>,
+    /// Where it opened, picked once so it never jumps.
+    pos: Option<egui::Pos2>,
 }
 
 impl CaptureWindow {
@@ -81,6 +85,8 @@ impl CaptureWindow {
             error: None,
             height: 0.0,
             focus_pending: true,
+            show_existing: None,
+            pos: None,
             items,
         };
         if window.items.len() > 1 {
@@ -167,7 +173,10 @@ impl StewardGetApp {
         let width = if single { 470.0 } else { 580.0 };
         let waiting: usize = self.inbox.lock().unwrap().iter().map(Vec::len).sum();
         let title = if single { "New download" } else { "New downloads" };
+        let height = if single { w.height.max(240.0) } else { LIST_HEIGHT };
+        let pos = *w.pos.get_or_insert_with(|| crate::app::screen_spot(ctx, vec2(width, height), 0));
         let builder = egui::ViewportBuilder::default()
+            .with_position(pos)
             .with_title(format!("{title} – StewardGet"))
             .with_app_id("dev.stewardget.StewardGet")
             // A single download fits its content; the list has a fixed start size and can be resized.
@@ -225,6 +234,11 @@ impl StewardGetApp {
             }
         });
 
+        if let Some(id) = w.show_existing.take() {
+            // Its progress window, or "Download complete" if it is done.
+            self.open_progress(id);
+            decision = Some(Decision::Cancel);
+        }
         match decision {
             None => self.capture = Some(w),
             Some(Decision::Cancel) => {}
@@ -297,7 +311,15 @@ impl StewardGetApp {
             };
             ui.horizontal(|ui| {
                 widgets::icon(ui, Icon::Info, 13.0, p.yellow);
-                ui.add(egui::Label::new(RichText::new(text).size(12.0).color(p.yellow)).truncate());
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if widgets::button(ui, ButtonKind::Tool, Some(Icon::Eye), "Show it", true, &p)
+                        .on_hover_text("Open the download already in your list instead")
+                        .clicked()
+                    {
+                        w.show_existing = Some(d.id);
+                    }
+                    ui.add(egui::Label::new(RichText::new(text).size(12.0).color(p.yellow)).truncate());
+                });
             });
         }
         if stewardget_core::util::disguised_program(&name) {

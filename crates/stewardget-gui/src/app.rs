@@ -1,6 +1,6 @@
 //! Application state and the window frame: toolbar, sidebar, status bar.
 
-use std::collections::{BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -129,14 +129,14 @@ pub struct StewardGetApp {
     pub restart: Option<ConfirmRestart>,
     pub refresh: Option<RefreshDialog>,
     pub properties: Option<PropertiesDialog>,
-    /// Finished downloads waiting to be announced in the completion dialog.
-    pub completed: VecDeque<DownloadId>,
     pub settings_draft: Option<Config>,
     pub settings_tab: crate::settings::Tab,
     pub limit_text: String,
     pub toasts: Vec<Toast>,
     /// Open progress windows, one per download.
     pub progress: Vec<crate::progress::ProgressWindow>,
+    /// The progress windows show the parts table (IDM's "Show details").
+    pub progress_details: bool,
     /// The keyboard shortcuts sheet is open.
     pub shortcuts_open: bool,
     pub hashes: HashMap<DownloadId, HashJob>,
@@ -165,16 +165,8 @@ pub struct StewardGetApp {
     pub close_prompt: Option<bool>,
     /// The window is closing for real (not minimising to the background).
     quitting: bool,
-    /// Minimise the main window again once the new-download window is up.
-    reminimize: bool,
     /// The main window is hidden in the tray (not just minimised).
     hidden: bool,
-    /// Frames drawn so far; the new-download window may only open on a window that is drawing.
-    ui_frames: u64,
-    /// `ui_frames` when the main window was last brought back for a download.
-    reveal_frames: u64,
-    /// The main window was only raised for the new-download window and goes back down after.
-    park_after_capture: bool,
     /// Another program (e.g. the installer) asked StewardGet to quit.
     quit_requested: Arc<AtomicBool>,
     /// Another launch of StewardGet asked for the window.
@@ -227,6 +219,18 @@ impl StewardGetApp {
                 ctx.request_repaint();
             });
         }
+        {
+            // Wake up as soon as a download is added or changes state, also in
+            // the tray, where the app otherwise only looks every few seconds:
+            // its progress window must not wait for that.
+            let (mut events, ctx) = (engine.subscribe(), cc.egui_ctx.clone());
+            runtime.spawn(async move {
+                use tokio::sync::broadcast::error::RecvError;
+                while !matches!(events.recv().await, Err(RecvError::Closed)) {
+                    ctx.request_repaint();
+                }
+            });
+        }
         // Links on the command line ("Open with StewardGet") go through the same window.
         let mut launched = Vec::new();
         if !launch.urls.is_empty() {
@@ -277,12 +281,12 @@ impl StewardGetApp {
             restart: None,
             refresh: None,
             properties: None,
-            completed: VecDeque::new(),
             settings_draft: None,
             settings_tab: crate::settings::Tab::General,
             limit_text: String::new(),
             toasts: Vec::new(),
             progress: Vec::new(),
+            progress_details: false,
             shortcuts_open: false,
             hashes: HashMap::new(),
             after_all: AfterAll::Nothing,
@@ -299,11 +303,7 @@ impl StewardGetApp {
             delete_queue: None,
             close_prompt: None,
             quitting: false,
-            reminimize: false,
             hidden: false,
-            ui_frames: 0,
-            reveal_frames: 0,
-            park_after_capture: false,
             quit_requested,
             show_requested,
             start_minimized: launch.background,
@@ -590,9 +590,18 @@ impl StewardGetApp {
         let mut new_running = Vec::new();
         let (mut finished_names, mut failed_names) = (Vec::new(), Vec::new());
         let completion_dialog = self.cfg.completion_dialog;
+        // Finished downloads to show in their own "Download complete" window.
+        let mut announce = Vec::new();
         for d in &self.snap.downloads {
             let prev = self.last_status.insert(d.id, d.status);
-            if prev.is_none() && matches!(d.status, Status::Queued | Status::Connecting | Status::Downloading) {
+            // A small file can be done, or a bad link have failed, before the
+            // first look: it still gets its window, which then says "Download
+            // complete" or what went wrong.
+            let just_added = d.added_at + 15 >= stewardget_core::util::now_unix();
+            if prev.is_none()
+                && (matches!(d.status, Status::Queued | Status::Connecting | Status::Downloading | Status::Verifying)
+                    || (d.status.is_finished() && just_added))
+            {
                 new_running.push(d.id);
             }
             if prev.is_some_and(|p| p != d.status) {
@@ -600,7 +609,7 @@ impl StewardGetApp {
                     Status::Completed => {
                         finished_names.push(d.file_name.clone());
                         if completion_dialog {
-                            self.completed.push_back(d.id);
+                            announce.push(d.id);
                         } else {
                             events.push((format!("Finished: {}", d.file_name), self.palette.green));
                         }
@@ -617,6 +626,9 @@ impl StewardGetApp {
         if self.cfg.progress_window && new_running.len() == 1 {
             self.open_progress(new_running[0]);
         }
+        for id in announce {
+            self.announce_completion(id);
+        }
         let finished = !finished_names.is_empty();
         let in_background = ctx.input(|i| {
             !i.focused || i.raw.viewports.get(&egui::ViewportId::ROOT).and_then(|v| v.minimized).unwrap_or(false)
@@ -629,14 +641,10 @@ impl StewardGetApp {
         }
         // One lookup set per frame: checking each id against the whole list was
         // quadratic and showed up with thousands of downloads.
-        if self.last_status.len() != self.snap.downloads.len()
-            || !self.selection.is_empty()
-            || !self.completed.is_empty()
-        {
+        if self.last_status.len() != self.snap.downloads.len() || !self.selection.is_empty() {
             let ids: std::collections::HashSet<DownloadId> = self.snap.downloads.iter().map(|d| d.id).collect();
             self.last_status.retain(|id, _| ids.contains(id));
             self.selection.retain(|id| ids.contains(id));
-            self.completed.retain(|id| ids.contains(id));
         }
         for (text, color) in events {
             self.toast(text, color);
@@ -735,7 +743,6 @@ impl StewardGetApp {
             || self.refresh.is_some()
             || self.properties.is_some()
             || self.power_countdown.is_some()
-            || !self.completed.is_empty()
             || self.queue_dialog.is_some()
             || self.category_dialog.is_some()
             || self.delete_queue.is_some()
@@ -1718,7 +1725,27 @@ impl StewardGetApp {
     }
 }
 
+/// Where a small window of `size` opens: centred on the screen a little above
+/// the middle, like IDM's, and `nth` steps down and right of the previous ones
+/// so several don't hide each other.
+pub fn screen_spot(ctx: &egui::Context, size: egui::Vec2, nth: usize) -> egui::Pos2 {
+    let screen = ctx.input(|i| i.viewport().monitor_size).unwrap_or(egui::vec2(1366.0, 768.0));
+    let step = 28.0 * (nth % 6) as f32;
+    egui::pos2(((screen.x - size.x) / 2.0).max(0.0) + step, ((screen.y - size.y) * 0.4).max(0.0) + step)
+}
+
 impl StewardGetApp {
+    /// Brings the main window up on the download list with `id` selected.
+    pub(crate) fn show_in_list(&mut self, ctx: &egui::Context, id: DownloadId) {
+        self.page = Page::Downloads;
+        self.filter = ListFilter::All;
+        self.search.clear();
+        self.selection = std::iter::once(id).collect();
+        self.anchor = Some(id);
+        self.show_details = true;
+        self.show_window(ctx);
+    }
+
     /// Restores and focuses the main window, from the tray or the taskbar.
     fn show_window(&mut self, ctx: &egui::Context) {
         self.hidden = false;
@@ -1744,7 +1771,6 @@ impl StewardGetApp {
 impl eframe::App for StewardGetApp {
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
-        self.ui_frames += 1;
         if self.engine.config().theme == Theme::System || self.applied_look.is_none() {
             self.apply_appearance(&ctx);
         }
@@ -1810,7 +1836,6 @@ impl eframe::App for StewardGetApp {
         self.restart_dialog(&ctx);
         self.refresh_dialog(&ctx);
         self.properties_dialog(&ctx);
-        self.completion_dialog(&ctx);
         self.power_dialog(&ctx);
         self.welcome_dialog(&ctx);
         self.queue_dialog(&ctx);
@@ -1823,10 +1848,6 @@ impl eframe::App for StewardGetApp {
         self.progress_windows(&ctx);
         self.drag_overlay(&ctx);
         self.draw_toasts(&ctx);
-        if std::mem::take(&mut self.reminimize) && self.capture.is_some() {
-            // The new-download window is up: the main window can go back down.
-            self.park(&ctx);
-        }
     }
 
     /// Runs every pass, also while the window is minimised (when `ui` is skipped),
@@ -1848,7 +1869,7 @@ impl eframe::App for StewardGetApp {
             // Put away: it can be shown normally from now on.
             windows_hwnd::uncloak(hwnd);
             self.cloaked = None;
-        } else if minimized && !self.hidden && self.capture.is_none() && !self.reminimize {
+        } else if minimized && !self.hidden {
             // The minimise button: go to the tray instead of the taskbar.
             if self.tray.is_some() && self.cfg.minimize_to_tray {
                 self.park(ctx);
@@ -1863,26 +1884,19 @@ impl eframe::App for StewardGetApp {
         if self.quit_requested.swap(false, Ordering::SeqCst) {
             self.quit(ctx);
         }
-        if self.capture.is_none() && !self.inbox.lock().unwrap().is_empty() {
-            // The new-download window is drawn from the main window's frame, so
-            // a minimised or hidden main window is raised first, and the new
-            // window only opens once it is really drawing. The main window goes
-            // back down afterwards.
-            if minimized || self.hidden {
-                self.hidden = false;
-                self.park_after_capture = true;
-                self.reveal_frames = self.ui_frames;
-                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
-                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
-            } else if self.ui_frames >= self.reveal_frames + 2 {
-                self.next_capture();
-                if self.capture.is_some() && std::mem::take(&mut self.park_after_capture) {
-                    self.reminimize = true;
-                }
-            }
-        }
+        self.next_capture();
         if fresh {
             self.track_transitions(ctx);
+        }
+        // The small windows (new download, progress) are drawn from the main
+        // window's pass, which eframe skips while that window is away. Ask for
+        // the pass anyway, so they appear on their own, like IDM's, and the
+        // main window stays where it is.
+        let small_windows = self.capture.is_some() || !self.progress.is_empty();
+        let away = self.hidden || minimized;
+        if away && small_windows {
+            ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaintWhileHidden);
+            ctx.request_repaint();
         }
         self.watch_clipboard(ctx);
         self.handle_tray(ctx);
@@ -1894,8 +1908,9 @@ impl eframe::App for StewardGetApp {
         }
         let busy = self.snap.downloads.iter().any(|d| d.status.is_active() || d.retry_in.is_some());
         // Out of sight there is little to redraw: wake rarely, and only about
-        // once a second while the clipboard is watched.
-        let away = self.hidden || minimized;
+        // once a second while the clipboard is watched. A progress window on
+        // screen counts as in sight.
+        let away = away && !small_windows;
         let wait = match (busy, away) {
             (true, false) => 120,
             (true, true) => 500,
