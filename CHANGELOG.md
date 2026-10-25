@@ -4,7 +4,7 @@ All notable changes to StewardGet are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions follow
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.7.2] - 2026-10-25
 
 ### Security
 - Clients without a token can no longer skip the new-download question
