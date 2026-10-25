@@ -10,7 +10,7 @@ edition = "2024"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/anand34577/stewardget"
 authors = ["StewardGet contributors"]
-rust-version = "1.90"
+rust-version = "1.95"
 
 [workspace.dependencies]
 stewardget-core = { path = "crates/stewardget-core" }

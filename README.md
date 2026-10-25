@@ -175,7 +175,7 @@ the same steps. Details: [Browser extension guide](https://github.com/anand34577
 
 ### Build from source
 
-With a recent Rust toolchain (1.90+):
+With a recent Rust toolchain (1.95+):
 
 ```sh
 git clone https://github.com/anand34577/stewardget
