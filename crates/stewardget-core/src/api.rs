@@ -302,12 +302,16 @@ async fn handle(mut stream: TcpStream, inner: Weak<Inner>) {
                 id: u64,
                 action: crate::CaptureAction,
             }
-            // Where files may go is the user's call, not a client's: only a
-            // token holder (the command line, scripts) can pick the folder.
+            // Where files may go, whether the user is asked first and which
+            // headers are sent are the user's call, not a client's: only a
+            // token holder (the command line, scripts) can decide those.
             let captures: Vec<Capture> = if trusted {
                 captures
             } else {
-                captures.into_iter().map(|c| Capture { directory: None, ..c }).collect()
+                captures
+                    .into_iter()
+                    .map(|c| Capture { directory: None, direct: false, headers: Vec::new(), ..c })
+                    .collect()
             };
             match engine.capture_many(captures) {
                 Ok(results) => {

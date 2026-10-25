@@ -73,7 +73,7 @@ pub(crate) struct Store {
 impl Store {
     /// Opens (creating if needed) a data directory and takes its lock.
     pub fn open(dir: PathBuf) -> Result<Self, Error> {
-        std::fs::create_dir_all(&dir)?;
+        fsio::create_private_dir(&dir)?;
         let lock = File::options().create(true).truncate(false).write(true).open(dir.join(LOCK))?;
         match lock.try_lock() {
             Ok(()) => {}

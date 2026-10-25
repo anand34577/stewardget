@@ -112,8 +112,9 @@ pub fn sanitize(name: &str) -> String {
     if out.is_empty() {
         out = "download".to_owned();
     }
-    let stem = out.split('.').next().unwrap_or("").to_ascii_uppercase();
-    const RESERVED: [&str; 4] = ["CON", "PRN", "AUX", "NUL"];
+    // Windows ignores spaces before the dot: `CON .txt` is the console too.
+    let stem = out.split('.').next().unwrap_or("").trim_end().to_ascii_uppercase();
+    const RESERVED: [&str; 6] = ["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"];
     let reserved_numbered =
         (stem.starts_with("COM") || stem.starts_with("LPT")) && stem.len() == 4 && stem.as_bytes()[3].is_ascii_digit();
     if RESERVED.contains(&stem.as_str()) || reserved_numbered {
@@ -208,6 +209,8 @@ mod tests {
         assert_eq!(sanitize("a<b>c?.txt"), "a_b_c_.txt");
         assert_eq!(sanitize("../../etc/passwd"), "passwd");
         assert_eq!(sanitize("CON.txt"), "_CON.txt");
+        assert_eq!(sanitize("CON .txt"), "_CON .txt");
+        assert_eq!(sanitize("CONIN$"), "_CONIN$");
         assert_eq!(sanitize("  .hidden. "), "hidden");
         assert_eq!(sanitize(""), "download");
         let long = format!("{}.iso", "x".repeat(400));

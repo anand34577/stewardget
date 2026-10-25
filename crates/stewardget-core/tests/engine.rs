@@ -448,6 +448,15 @@ async fn browser_api_accepts_extensions_and_rejects_web_pages() {
     assert_eq!(snap.downloads[0].options.referrer.as_deref(), Some("https://example.com/page"));
     let id = snap.downloads[0].id;
     assert_eq!(wait_for(&engine, id, Status::Completed, 30).await, Status::Completed);
+
+    // Without a token a client can't skip the desktop app's question.
+    let asked = std::sync::Arc::new(std::sync::Mutex::new(0usize));
+    let sink = asked.clone();
+    engine.set_capture_handler(move |batch| *sink.lock().unwrap() += batch.len());
+    let pushy = format!(r#"{{"url":"{}","direct":true,"paused":true}}"#, server.url);
+    let reply = post(port, "x-stewardget-client: extension\r\n", &pushy).await;
+    assert!(reply.contains("\"pending\""), "{reply}");
+    assert_eq!(*asked.lock().unwrap(), 1);
     engine.shutdown().await;
 }
 

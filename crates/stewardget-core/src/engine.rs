@@ -126,6 +126,8 @@ pub(crate) struct Inner {
     state: Mutex<State>,
     /// One save at a time: they share temporary file names.
     persist_lock: Mutex<()>,
+    /// Settings changes are read-modify-write: one at a time.
+    config_lock: Mutex<()>,
     events: broadcast::Sender<Event>,
     shutdown: CancellationToken,
     shutting_down: AtomicBool,
@@ -330,6 +332,7 @@ impl Engine {
             config: RwLock::new(config),
             store,
             persist_lock: Mutex::new(()),
+            config_lock: Mutex::new(()),
             state: Mutex::new(State {
                 items,
                 next_id,
@@ -433,7 +436,9 @@ impl Engine {
                 .find(|i| {
                     let same_size = capture.size.is_some() && capture.size == i.rec.total;
                     let same_name = hinted_name.as_deref().is_some_and(|n| same_file_name(n, &i.rec.file_name));
-                    same_size || (same_name && (capture.size.is_none() || i.rec.total.is_none()))
+                    // A size alone could be any other file; resuming with it would corrupt the partial data.
+                    (same_size && (same_name || hinted_name.is_none()))
+                        || (same_name && (capture.size.is_none() || i.rec.total.is_none()))
                 })
                 .map(|i| i.rec.id)
         };
@@ -487,6 +492,7 @@ impl Engine {
                 && let Some(run) = &mut item.run
             {
                 run.on_stop = AfterStop::Pause;
+                item.frozen = Some(run.shared.table.lock().unwrap().received());
                 run.cancel.cancel();
                 inner.set_status(item, Status::Paused);
             }
@@ -828,9 +834,10 @@ impl Engine {
 
     /// Global speed cap, bytes/second (`0` = unlimited). Applies instantly.
     pub fn set_speed_limit(&self, bytes_per_sec: u64) {
+        let _one_at_a_time = self.inner.config_lock.lock().unwrap();
         let mut config = self.config();
         config.speed_limit = bytes_per_sec;
-        let _ = self.update_config(config);
+        let _ = self.apply_config(config);
     }
 
     /// Per-download speed cap, bytes/second (`0` = unlimited). Applies instantly.
@@ -850,10 +857,26 @@ impl Engine {
     /// Applies and persists new settings. Network settings affect downloads
     /// started afterwards; limits and concurrency apply immediately.
     pub fn update_config(&self, config: Config) -> Result<(), Error> {
+        let _one_at_a_time = self.inner.config_lock.lock().unwrap();
+        self.apply_config(config)
+    }
+
+    fn apply_config(&self, config: Config) -> Result<(), Error> {
         let config = config.sanitized();
-        let client = build_client(&config)?;
-        *self.inner.client.write().unwrap() = client;
+        // Rebuilding drops the connection pool: only do it when the network settings changed.
+        let rebuild = {
+            let old = self.inner.config.read().unwrap();
+            old.user_agent != config.user_agent
+                || old.connect_timeout_secs != config.connect_timeout_secs
+                || old.http1_only != config.http1_only
+                || old.insecure_tls != config.insecure_tls
+                || old.proxy != config.proxy
+        };
+        let client = if rebuild { Some(build_client(&config)?) } else { None };
         self.inner.store.save_config(&config)?;
+        if let Some(client) = client {
+            *self.inner.client.write().unwrap() = client;
+        }
         {
             // Downloads of a deleted queue join the main queue, and every
             // download follows the current category rules.

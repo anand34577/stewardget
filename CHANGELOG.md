@@ -4,6 +4,35 @@ All notable changes to StewardGet are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.7.2] - 2026-10-25
+
+### Security
+- Clients without a token can no longer skip the new-download question
+  (`direct`) or add request headers through the local API.
+- Settings, the download list and partial-download files are created readable
+  by their owner only (Linux and macOS); the data folder is private too.
+- HLS streams no longer send cookies or passwords to other hosts named in a
+  playlist.
+- `stewardget config` hides tokens and proxy credentials.
+
+### Fixed
+- A partial file that was cut short is reported instead of finishing with holes.
+- A fresh browser link attaches to a waiting download only when the file name
+  also matches, not on size alone.
+- Batch patterns such as `[a-b][a-b]…` no longer take exponential time, and
+  `[A-z]` is not a range.
+- `CON .txt`, `CONIN$` and `CONOUT$` are made safe on Windows.
+- A file name starting with `-` is passed as `./-name` to the after-download
+  program.
+- Enter no longer accepts a new-download window in its first moments.
+- Changing the speed limit keeps open connections; settings changes cannot
+  overwrite each other.
+- `%` in the program path works in the Linux login item.
+
+### Changed
+- CI checks dependencies with `cargo audit` and builds with the minimum Rust
+  version.
+
 ## [0.7.1] - 2026-10-23
 
 Downloads from the browser now feel like they do in IDM and AB Download

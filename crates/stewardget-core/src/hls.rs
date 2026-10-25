@@ -365,7 +365,14 @@ impl Fetcher<'_> {
     }
 
     async fn get(&self, url: &Url, range: Option<(u64, u64)>) -> Result<Vec<u8>, Error> {
-        let mut req = self.job.client.get(url.clone()).headers(self.headers.clone());
+        // Cookies and passwords belong to the site they were meant for, not to
+        // whatever hosts a playlist names.
+        let headers = if crate::task::same_origin(&self.job.url, url) {
+            self.headers.clone()
+        } else {
+            crate::task::without_credentials(self.headers.clone())
+        };
+        let mut req = self.job.client.get(url.clone()).headers(headers);
         if let Some((offset, len)) = range {
             req = req.header(header::RANGE, format!("bytes={offset}-{}", offset + len.max(1) - 1));
         }

@@ -5,7 +5,7 @@ default-members = ["crates/stewardget-core", "crates/stewardget-cli", "crates/st
 exclude = ["vendor"]
 
 [workspace.package]
-version = "0.7.1"
+version = "0.7.2"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/anand34577/stewardget"

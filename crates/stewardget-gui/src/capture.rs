@@ -58,6 +58,8 @@ pub struct CaptureWindow {
     show_existing: Option<stewardget_core::DownloadId>,
     /// Where it opened, picked once so it never jumps.
     pos: Option<egui::Pos2>,
+    /// When the window appeared: Enter pressed for something else just before must not accept it.
+    opened: std::time::Instant,
 }
 
 impl CaptureWindow {
@@ -87,6 +89,7 @@ impl CaptureWindow {
             focus_pending: true,
             show_existing: None,
             pos: None,
+            opened: std::time::Instant::now(),
             items,
         };
         if window.items.len() > 1 {
@@ -225,7 +228,11 @@ impl StewardGetApp {
             ui.input(|i| {
                 if i.viewport().close_requested() || i.key_pressed(egui::Key::Escape) {
                     decision = Some(Decision::Cancel);
-                } else if i.key_pressed(egui::Key::Enter) && !i.modifiers.shift && single {
+                } else if i.key_pressed(egui::Key::Enter)
+                    && !i.modifiers.shift
+                    && single
+                    && w.opened.elapsed() > Duration::from_millis(600)
+                {
                     decision = decision.or(Some(Decision::Add { later: false }));
                 }
             });
