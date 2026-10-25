@@ -16,7 +16,7 @@ pub struct Stats {
     pub peak_speed: f64,
     /// Seconds during which at least one download was transferring.
     pub active_secs: f64,
-    /// Bytes per day, keyed by days since the Unix epoch (UTC).
+    /// Bytes per day, keyed by local calendar days since 1970-01-01.
     pub daily: BTreeMap<i64, u64>,
     pub first_seen: u64,
 }

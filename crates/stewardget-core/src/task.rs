@@ -137,10 +137,18 @@ async fn run_inner(job: &Job) -> Result<Outcome, Error> {
         {
             return Err(Error::RemoteChanged);
         }
-        Some(c) => Some(
-            SegmentTable::from_persisted(&c.segments, probe.total.unwrap_or(0))
-                .ok_or_else(|| Error::Io("the progress file is damaged".into()))?,
-        ),
+        Some(c) => {
+            let table = SegmentTable::from_persisted(&c.segments, probe.total.unwrap_or(0))
+                .ok_or_else(|| Error::Io("the progress file is damaged".into()))?;
+            // A partial file cut short or replaced since would finish with holes.
+            let needed = c.segments.iter().map(|&(start, _, written)| start + written).max().unwrap_or(0);
+            if std::fs::metadata(&part).map_or(0, |m| m.len()) < needed {
+                return Err(Error::Io(
+                    "the partial file is shorter than the progress file says; restart the download".into(),
+                ));
+            }
+            Some(table)
+        }
     };
     let fresh = resumed.is_none();
     let table = match (resumed, probe.total) {
@@ -311,12 +319,12 @@ async fn checkpoint(ctl: &mut ControlFile, shared: &Shared, meta: &Path, file: &
 }
 
 /// Same scheme, host and port.
-fn same_origin(a: &Url, b: &Url) -> bool {
+pub(crate) fn same_origin(a: &Url, b: &Url) -> bool {
     a.origin() == b.origin()
 }
 
 /// The request headers minus the ones that carry credentials.
-fn without_credentials(mut headers: HeaderMap) -> HeaderMap {
+pub(crate) fn without_credentials(mut headers: HeaderMap) -> HeaderMap {
     headers.remove(header::COOKIE);
     headers.remove(header::AUTHORIZATION);
     headers.remove(header::PROXY_AUTHORIZATION);

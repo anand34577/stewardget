@@ -74,6 +74,30 @@ fn set_sparse(file: &File) {
     }
 }
 
+/// Creates (or truncates) a file only its owner can read: settings and the
+/// download list hold access tokens and browser cookies.
+fn create_private(path: &Path) -> io::Result<File> {
+    let mut options = File::options();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options.open(path)
+}
+
+/// Creates a data directory that only its owner can enter.
+pub(crate) fn create_private_dir(dir: &Path) -> io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(())
+}
+
 /// Writes `data` to a temp file next to `path`, then renames it into place.
 pub(crate) fn write_atomic(path: &Path, data: &[u8]) -> io::Result<()> {
     let mut tmp = path.as_os_str().to_owned();
@@ -81,7 +105,7 @@ pub(crate) fn write_atomic(path: &Path, data: &[u8]) -> io::Result<()> {
     let tmp = std::path::PathBuf::from(tmp);
     {
         use std::io::Write;
-        let mut f = File::create(&tmp)?;
+        let mut f = create_private(&tmp)?;
         f.write_all(data)?;
         f.sync_data()?;
     }
@@ -143,5 +167,20 @@ pub(crate) fn move_file(from: &Path, to: &Path) -> io::Result<()> {
             std::fs::remove_file(from)
         }
         Err(e) => Err(e),
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    #[test]
+    fn state_files_are_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("stewardget-perm-{}", std::process::id()));
+        super::create_private_dir(&dir).unwrap();
+        let file = dir.join("settings.json");
+        super::write_atomic(&file, b"{}").unwrap();
+        assert_eq!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777, 0o700);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

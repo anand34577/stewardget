@@ -467,7 +467,16 @@ fn stats() -> anyhow::Result<()> {
 
 fn config() -> anyhow::Result<()> {
     let dir = EngineOptions::default_data_dir();
-    let config = EngineOptions::peek_config(&dir).unwrap_or_default();
+    let mut config = EngineOptions::peek_config(&dir).unwrap_or_default();
+    // This output gets pasted into bug reports: keep the secrets out of it.
+    for secret in [&mut config.control_token, &mut config.api_token, &mut config.mcp_token] {
+        if secret.is_some() {
+            *secret = Some("<hidden>".into());
+        }
+    }
+    if config.proxy.as_deref().is_some_and(|p| p.contains('@')) {
+        config.proxy = Some("<hidden: contains credentials>".into());
+    }
     println!("Data directory: {}", dir.display());
     println!("Settings file:  {}\n", dir.join("settings.json").display());
     println!("{}", serde_json::to_string_pretty(&config)?);

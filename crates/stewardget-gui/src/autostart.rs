@@ -230,6 +230,10 @@ mod imp {
             if matches!(c, '"' | '`' | '$' | '\\') {
                 quoted.push('\\');
             }
+            // `%` starts a field code in Exec lines.
+            if c == '%' {
+                quoted.push('%');
+            }
             quoted.push(c);
         }
         quoted.push('"');

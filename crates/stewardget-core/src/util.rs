@@ -325,7 +325,11 @@ pub fn expand_pattern(input: &str, limit: usize) -> Vec<String> {
         }
         let (mut ca, mut cb) = (a.chars(), b.chars());
         match (ca.next(), ca.next(), cb.next(), cb.next()) {
-            (Some(x), None, Some(y), None) if x.is_ascii_alphabetic() && y.is_ascii_alphabetic() => {
+            (Some(x), None, Some(y), None)
+                if x.is_ascii_alphabetic()
+                    && y.is_ascii_alphabetic()
+                    && x.is_ascii_lowercase() == y.is_ascii_lowercase() =>
+            {
                 let (lo, hi) = (x.min(y), x.max(y));
                 Some((lo..=hi).map(String::from).collect())
             }
@@ -340,9 +344,11 @@ pub fn expand_pattern(input: &str, limit: usize) -> Vec<String> {
         let rest = expand_pattern(&input[close + 1..], limit);
         return rest.into_iter().map(|r| format!("{}{r}", &input[..=close])).collect();
     };
+    // Expanded once: doing it per value makes the time double with every pattern.
+    let tails = expand_pattern(&input[close + 1..], limit);
     let mut out = Vec::new();
     for v in values {
-        for tail in expand_pattern(&input[close + 1..], limit) {
+        for tail in &tails {
             if out.len() >= limit {
                 return out;
             }
@@ -481,7 +487,11 @@ const AFTER_DOWNLOAD_LIMIT: std::time::Duration = std::time::Duration::from_secs
 
 fn command_args(command: &str, path: &Path, url: &str) -> Vec<String> {
     let dir = path.parent().map(|d| d.display().to_string()).unwrap_or_default();
-    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let mut name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    // A server-chosen name must not read as an option to the program.
+    if name.starts_with('-') {
+        name.insert_str(0, "./");
+    }
     let full = path.display().to_string();
     split_command(command)
         .into_iter()
@@ -526,6 +536,7 @@ mod tests {
         let path = Path::new("/dl/a & rm -rf ~.zip");
         let args = command_args("7z x {path} -o{dir}/out", path, "https://x/a");
         assert_eq!(args, ["7z", "x", "/dl/a & rm -rf ~.zip", "-o/dl/out"], "a file name stays one argument");
+        assert_eq!(command_args("tool {name}", Path::new("/dl/-rf"), "u"), ["tool", "./-rf"]);
     }
 
     #[test]
@@ -599,6 +610,10 @@ mod tests {
         assert_eq!(expand_pattern("https://x/[1-100]", 5).len(), 5);
         assert_eq!(expand_pattern("https://x/[9-1]", 2), ["https://x/9", "https://x/8"]);
         assert_eq!(expand_pattern("https://x/[1-999999]", 3).len(), 3);
+        // Many patterns must not take exponential time.
+        let many = format!("https://x/{}", "[a-b]".repeat(60));
+        assert_eq!(expand_pattern(&many, 100).len(), 100);
+        assert_eq!(expand_pattern("https://x/[A-z]", 100), ["https://x/[A-z]"]);
         assert_eq!(expand_pattern("http://[::1]/f[1-2]", 10), ["http://[::1]/f1", "http://[::1]/f2"]);
     }
 }
