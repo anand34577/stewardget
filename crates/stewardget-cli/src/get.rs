@@ -32,6 +32,12 @@ pub async fn run(args: GetArgs) -> anyhow::Result<ExitCode> {
             None => std::env::current_dir()?,
         },
         auto_categorize: false,
+        // Files go where the command says (`--dir` or here), not to the
+        // desktop app's per-category folders.
+        category_dirs: Default::default(),
+        // Like the global limit, the desktop app's time-of-day limit doesn't
+        // apply; `--limit` does.
+        speed_schedule: Default::default(),
         connections: args.connections.unwrap_or(base.connections),
         max_concurrent: args.jobs.unwrap_or(base.max_concurrent.max(urls.len().min(4))),
         speed_limit: args.limit.unwrap_or(0),

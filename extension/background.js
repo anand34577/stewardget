@@ -140,10 +140,11 @@ function shortName(item) {
 }
 
 /** Sends one download to StewardGet. Resolves to the API result, or null if StewardGet is unreachable. */
-async function sendToStewardGet({ url, fileName, size, referrer, storeId }) {
+async function sendToStewardGet({ url, fallbackUrl, fileName, size, referrer, storeId }) {
   const s = await settings();
   const body = {
     url,
+    fallback_url: fallbackUrl && fallbackUrl !== url ? fallbackUrl : null,
     file_name: fileName || null,
     size: size > 0 ? size : null,
     referrer: referrer || null,
@@ -251,7 +252,7 @@ function shouldCapture(item, s) {
   if (!/^https?:/i.test(url)) return false; // blob:, data:, file: stay in the browser
   if (s.minSizeKb > 0 && item.totalBytes > 0 && item.totalBytes < s.minSizeKb * 1024) return false;
   const skip = s.skipExtensions
-    .split(",")
+    .split(/[\s,;]+/)
     .map((e) => e.trim().replace(/^\./, "").toLowerCase())
     .filter(Boolean);
   let path = "";
@@ -329,18 +330,48 @@ function classify(url, headers) {
   return { kind: "file", type: type || ext_, size: total };
 }
 
+// The service worker is stopped when idle, which emptied the list (and the
+// badge) after half a minute; it is kept in session storage as well.
+const session = ext.storage.session;
+const saveTimers = new Map();
+
+/** The media entries of a tab, reloaded after the service worker restarted. */
+async function mediaOf(tabId) {
+  if (!media.has(tabId) && session) {
+    const key = `media:${tabId}`;
+    const saved = (await session.get(key).catch(() => ({})))[key];
+    if (Array.isArray(saved) && !media.has(tabId)) media.set(tabId, new Map(saved.map((m) => [m.url, m])));
+  }
+  return media.get(tabId);
+}
+
+function saveMedia(tabId) {
+  if (!session) return;
+  clearTimeout(saveTimers.get(tabId));
+  saveTimers.set(
+    tabId,
+    setTimeout(() => {
+      saveTimers.delete(tabId);
+      const key = `media:${tabId}`;
+      const list = [...(media.get(tabId)?.values() ?? [])];
+      (list.length ? session.set({ [key]: list }) : session.remove(key)).catch(() => {});
+    }, 300),
+  );
+}
+
 ext.webRequest.onHeadersReceived.addListener(
-  (d) => {
+  async (d) => {
     if (d.tabId < 0 || d.statusCode >= 400) return;
     const found = classify(d.url, d.responseHeaders);
     if (!found) return;
     const url = stripHash(d.url);
-    const list = media.get(d.tabId) ?? new Map();
+    const list = (await mediaOf(d.tabId)) ?? new Map();
     const known = list.get(url);
     // Players fetch the same file in many ranges; keep one entry with the real size.
     list.set(url, { url, ...found, size: Math.max(found.size ?? 0, known?.size ?? 0), at: known?.at ?? Date.now() });
     while (list.size > MAX_MEDIA) list.delete(list.keys().next().value);
     media.set(d.tabId, list);
+    saveMedia(d.tabId);
     showMediaCount(d.tabId);
   },
   { urls: ["http://*/*", "https://*/*"], types: ["media", "xmlhttprequest", "object", "other"] },
@@ -356,11 +387,16 @@ function showMediaCount(tabId) {
 // A new page starts with an empty list.
 ext.tabs.onUpdated.addListener((tabId, change) => {
   if (change.status === "loading" && change.url) {
-    media.delete(tabId);
+    media.set(tabId, new Map());
+    saveMedia(tabId);
     showMediaCount(tabId);
   }
 });
-ext.tabs.onRemoved.addListener((tabId) => media.delete(tabId));
+ext.tabs.onRemoved.addListener((tabId) => {
+  media.set(tabId, new Map());
+  saveMedia(tabId);
+  media.delete(tabId);
+});
 
 /** A file name for a media entry: the URL's own name when it has one, else the page title. */
 function mediaName(entry, tab) {
@@ -378,54 +414,112 @@ function mediaName(entry, tab) {
   return `${title}.${ext_}`;
 }
 
-ext.downloads.onCreated.addListener(async (item) => {
-  const s = await settings();
-  if (item.state !== "in_progress" || !shouldCapture(item, s)) return;
-  if (fromForm(item)) {
-    note(true, `Kept ${shortName(item)} in the browser: it came from a form, which StewardGet can't repeat`);
-    return;
-  }
+/** Downloads already handled, so one is never sent twice. */
+const handled = new Set();
 
-  // Hold the browser download while we ask StewardGet; give it back if StewardGet is not running.
-  try {
-    await ext.downloads.pause(item.id);
-  } catch {
-    /* already finished or not pausable */
-  }
-  // A tiny file can finish before the pause lands; then the browser already has it.
-  try {
-    const [now] = await ext.downloads.search({ id: item.id });
-    if (now && now.state !== "in_progress") return;
-  } catch {
-    /* keep going */
-  }
+/** Sends a browser download to StewardGet. Resolves to whether StewardGet took it. */
+async function handOver(item) {
+  // The link as clicked, not where it redirected to: signed redirects
+  // (GitHub releases, S3, CDNs) expire within minutes, which would break a
+  // long or resumed download. StewardGet falls back to the final address when
+  // the link was a one-time one.
+  const original = /^https?:/i.test(item.url || "") ? item.url : item.finalUrl;
   const result = await sendToStewardGet({
-    url: item.finalUrl || item.url,
+    url: original,
+    fallbackUrl: item.finalUrl,
     fileName: item.filename,
-    size: item.totalBytes || item.fileSize,
+    size: item.totalBytes > 0 ? item.totalBytes : item.fileSize,
     referrer: item.referrer,
     storeId: item.cookieStoreId, // Firefox containers; undefined in Chromium
   });
   if (result) {
-    try {
-      await ext.downloads.cancel(item.id);
-      await ext.downloads.erase({ id: item.id });
-    } catch {
-      /* ignore */
-    }
     setBadge(result.action === "refreshed" ? "↻" : "✓");
     note(true, `Sent ${shortName(item)} to StewardGet`);
   } else {
-    // StewardGet could not take it: the browser keeps the download, nothing is lost.
-    try {
-      await ext.downloads.resume(item.id);
-    } catch {
-      /* ignore */
-    }
     setBadge("!");
     note(false, `${lastFailure}; the browser kept ${shortName(item)}`);
   }
-});
+  return Boolean(result);
+}
+
+async function dropBrowserCopy(id) {
+  try {
+    await ext.downloads.cancel(id);
+  } catch {
+    /* already gone */
+  }
+  try {
+    await ext.downloads.erase({ id });
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Whether this download should go to StewardGet at all. */
+async function wanted(item) {
+  if (handled.has(item.id)) return false;
+  const s = await settings();
+  if (item.state !== "in_progress" || !shouldCapture(item, s)) return false;
+  if (fromForm(item)) {
+    note(true, `Kept ${shortName(item)} in the browser: it came from a form, which StewardGet can't repeat`);
+    return false;
+  }
+  handled.add(item.id);
+  return true;
+}
+
+if (ext.downloads.onDeterminingFilename) {
+  // Chromium: the browser waits for this listener before it shows a Save As
+  // dialog or its download bubble, however long the service worker took to
+  // wake up. (Reacting in `onCreated` raced with both, so the browser's own
+  // dialog appeared some of the time.) The item also carries the name the
+  // browser settled on, from `Content-Disposition`, instead of an empty one.
+  ext.downloads.onDeterminingFilename.addListener((item, suggest) => {
+    const proceed = () => {
+      try {
+        suggest();
+      } catch {
+        /* the download is gone */
+      }
+    };
+    (async () => {
+      if (!(await wanted(item))) return proceed();
+      if (await handOver(item)) {
+        // Cancelled before any name was confirmed: no dialog, no bubble.
+        await dropBrowserCopy(item.id);
+      } else {
+        proceed(); // StewardGet could not take it: the browser carries on, nothing is lost.
+      }
+    })().catch(proceed);
+    return true; // answering asynchronously
+  });
+} else {
+  // Firefox has no such event: hold the download while StewardGet is asked.
+  ext.downloads.onCreated.addListener(async (item) => {
+    if (!(await wanted(item))) return;
+    try {
+      await ext.downloads.pause(item.id);
+    } catch {
+      /* already finished or not pausable */
+    }
+    // A tiny file can finish before the pause lands; then the browser already has it.
+    try {
+      const [now] = await ext.downloads.search({ id: item.id });
+      if (now && now.state !== "in_progress") return;
+    } catch {
+      /* keep going */
+    }
+    if (await handOver(item)) {
+      await dropBrowserCopy(item.id);
+    } else {
+      try {
+        await ext.downloads.resume(item.id);
+      } catch {
+        /* ignore */
+      }
+    }
+  });
+}
 
 function setBadge(text) {
   ext.action.setBadgeBackgroundColor({ color: "#14b8a6" });
@@ -500,8 +594,8 @@ ext.runtime.onMessage.addListener((msg, _sender, reply) => {
     return true;
   }
   if (msg?.type === "media") {
-    ext.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
-      const list = [...(media.get(tab?.id)?.values() ?? [])].map((m) => ({ ...m, name: mediaName(m, tab) }));
+    ext.tabs.query({ active: true, currentWindow: true }).then(async ([tab]) => {
+      const list = [...((await mediaOf(tab?.id))?.values() ?? [])].map((m) => ({ ...m, name: mediaName(m, tab) }));
       // Streams first (usually what you want), then the largest files.
       list.sort((a, b) => (a.kind === b.kind ? (b.size || 0) - (a.size || 0) : a.kind === "hls" ? -1 : 1));
       reply({ media: list });
@@ -510,7 +604,7 @@ ext.runtime.onMessage.addListener((msg, _sender, reply) => {
   }
   if (msg?.type === "grab-media" && typeof msg.url === "string") {
     ext.tabs.query({ active: true, currentWindow: true }).then(async ([tab]) => {
-      const entry = media.get(tab?.id)?.get(msg.url) ?? { url: msg.url, kind: "file", type: "" };
+      const entry = (await mediaOf(tab?.id))?.get(msg.url) ?? { url: msg.url, kind: "file", type: "" };
       const result = await sendToStewardGet({
         url: msg.url,
         fileName: mediaName(entry, tab),

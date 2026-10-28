@@ -76,6 +76,10 @@ pub struct DownloadOptions {
     pub referrer: Option<String>,
     /// Override the `User-Agent` (the browser's, for captured downloads).
     pub user_agent: Option<String>,
+    /// Where the browser's request finally landed. The download uses its
+    /// stable link first (a signed redirect expires within minutes) and this
+    /// one only when that link no longer works (a one-time link).
+    pub fallback_url: Option<String>,
 }
 
 /// A request to add a download.
@@ -104,6 +108,9 @@ pub struct Capture {
     pub file_name: Option<String>,
     /// Size reported by the browser, if known.
     pub size: Option<u64>,
+    /// The address the browser's request ended at after redirects, when it
+    /// differs from `url`; tried when `url` no longer works.
+    pub fallback_url: Option<String>,
     pub referrer: Option<String>,
     pub user_agent: Option<String>,
     /// `Cookie` header value for the URL.

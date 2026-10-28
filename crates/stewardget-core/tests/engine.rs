@@ -29,6 +29,8 @@ struct ServerOpts {
     down_first: usize,
     /// Answer the first n requests with 429 and `Retry-After: 2`.
     slow_down_first: usize,
+    /// `Content-Disposition` header to send.
+    disposition: Option<&'static str>,
 }
 
 struct Server {
@@ -137,8 +139,9 @@ connection: close
         }
         _ => ("200 OK", data, String::new()),
     };
+    let disposition = opts.disposition.map(|d| format!("content-disposition: {d}\r\n")).unwrap_or_default();
     let head = format!(
-        "HTTP/1.1 {status}\r\ncontent-length: {}\r\n{extra}{}etag: \"{}\"\r\ncontent-type: application/octet-stream\r\nconnection: close\r\n\r\n",
+        "HTTP/1.1 {status}\r\ncontent-length: {}\r\n{extra}{}{disposition}etag: \"{}\"\r\ncontent-type: application/octet-stream\r\nconnection: close\r\n\r\n",
         body.len(),
         if opts.ranges { "accept-ranges: bytes\r\n" } else { "" },
         etag,
@@ -629,7 +632,7 @@ async fn the_desktop_app_can_ask_before_browser_downloads_start() {
     let dir = temp_dir("ask");
     let engine = Engine::start(EngineOptions::in_memory().with_config(config(&dir))).unwrap();
     let capture = |name: &str| Capture {
-        url: format!("https://example.com/files/{name}"),
+        url: format!("https://example.com/download?file={name}"),
         file_name: Some(format!("C:\\Users\\me\\Downloads\\{name}")),
         cookies: Some("session=1".into()),
         referrer: Some("https://example.com/page".into()),
@@ -884,4 +887,51 @@ async fn the_api_and_mcp_manage_downloads() {
     let off = http(port, &head, ping).await;
     assert!(off.starts_with("HTTP/1.1 404"), "{off}");
     engine.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_browser_download_gets_the_servers_name_not_the_links_id() {
+    let server = serve(
+        64 * 1024,
+        ServerOpts { ranges: true, disposition: Some(r#"attachment; filename="Real Name.zip""#), ..Default::default() },
+    )
+    .await;
+    let dir = temp_dir("capture-name");
+    let engine = Engine::start(EngineOptions::in_memory().with_config(config(&dir))).unwrap();
+    let capture = |file_name: Option<&str>| Capture {
+        url: server.url.clone(),
+        file_name: file_name.map(Into::into),
+        ..Default::default()
+    };
+
+    // No name from the browser, or only the link's last segment (what a browser
+    // reports before it has read the response): the server's name wins.
+    for hint in [None, Some("test file.bin"), Some(r"C:\Users\me\Downloads\test file.bin")] {
+        let (id, action) = engine.capture(capture(hint)).unwrap();
+        assert_eq!(action, CaptureAction::Added);
+        assert_eq!(wait_for(&engine, id, Status::Completed, 20).await, Status::Completed);
+        let name = engine.download(id).unwrap().file_name;
+        assert!(name.starts_with("Real Name") && name.ends_with(".zip"), "{hint:?} gave {name}");
+    }
+
+    // A name the browser really chose is kept.
+    let (id, _) = engine.capture(capture(Some(r"C:\Users\me\Downloads\chosen.zip"))).unwrap();
+    assert_eq!(wait_for(&engine, id, Status::Completed, 20).await, Status::Completed);
+    assert_eq!(engine.download(id).unwrap().file_name, "chosen.zip");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn pausing_wins_over_an_automatic_retry() {
+    // Every request fails, so the task ends with a retryable error; the user
+    // paused it meanwhile, and it must stay paused rather than be re-queued.
+    let server = serve(4 * 1024 * 1024, ServerOpts { ranges: true, down_first: 1000, ..Default::default() }).await;
+    let dir = temp_dir("pause-vs-retry");
+    let cfg = Config { max_retries: 1, auto_retry: 5, auto_retry_delay_secs: 1, ..config(&dir) };
+    let engine = Engine::start(EngineOptions::in_memory().with_config(cfg)).unwrap();
+    let id = engine.add(NewDownload::new(&server.url)).unwrap();
+    wait_for(&engine, id, Status::Connecting, 10).await;
+    engine.pause(id).unwrap();
+    tokio::time::sleep(Duration::from_secs(4)).await;
+    let d = engine.download(id).unwrap();
+    assert_eq!(d.status, Status::Paused, "{:?}", d.error);
 }

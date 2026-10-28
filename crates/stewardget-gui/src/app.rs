@@ -23,6 +23,10 @@ use crate::table::{SortKey, TableState};
 use crate::theme::{self, Palette};
 use crate::widgets::{self, ButtonKind};
 
+/// Downloads that appear together and still get a progress window each;
+/// more than this (a page's worth of links) get none.
+pub const PROGRESS_WINDOWS_AT_ONCE: usize = 3;
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ListFilter {
     All,
@@ -622,9 +626,13 @@ impl StewardGetApp {
                 }
             }
         }
-        // Like IDM: a download started on its own gets a progress window; a batch doesn't get dozens.
-        if self.cfg.progress_window && new_running.len() == 1 {
-            self.open_progress(new_running[0]);
+        // Like IDM: a download started on its own gets a progress window; a
+        // batch doesn't get dozens. Two browser downloads arriving within the
+        // same look still get one each.
+        if self.cfg.progress_window && new_running.len() <= PROGRESS_WINDOWS_AT_ONCE {
+            for id in new_running {
+                self.open_progress(id);
+            }
         }
         for id in announce {
             self.announce_completion(id);

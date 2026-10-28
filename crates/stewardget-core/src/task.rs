@@ -106,7 +106,15 @@ pub(crate) fn request_headers(options: &DownloadOptions) -> HeaderMap {
 
 async fn run_inner(job: &Job) -> Result<Outcome, Error> {
     let headers = request_headers(&job.options);
-    let probe = probe_with_retry(job, &headers).await?;
+    let probe = match probe_with_retry(job, &job.url, &headers).await {
+        // The stable link stopped working (a one-time link the browser used
+        // up): the address the browser was finally sent to may still work.
+        Err(e @ Error::Http(400..=499)) => match fallback(job) {
+            Some(url) => probe_with_retry(job, &url, &headers).await.map_err(|_| e)?,
+            None => return Err(e),
+        },
+        other => other?,
+    };
     if crate::hls::is_playlist(&job.url, &probe) {
         return crate::hls::run(job, &headers, probe).await;
     }
@@ -194,10 +202,12 @@ async fn run_inner(job: &Job) -> Result<Outcome, Error> {
     let file = Arc::new(file);
     let ctx = Arc::new(WorkerCtx {
         client: job.client.clone(),
-        url: probe.final_url.clone(),
-        // Cookies and passwords belong to the host they were meant for, not to
-        // wherever a redirect ends up (a CDN, a storage bucket).
-        headers: if same_origin(&job.url, &probe.final_url) { headers } else { without_credentials(headers) },
+        url: std::sync::RwLock::new(probe.final_url.clone()),
+        origin: job.url.clone(),
+        redirected: probe.final_url != job.url,
+        total: probe.total,
+        relinks: tokio::sync::Mutex::new(0),
+        headers,
         ranged,
         etag: probe.etag.clone(),
         file: Arc::clone(&file),
@@ -269,8 +279,18 @@ pub(crate) async fn finalize(
     }
     job.shared.total.store(written, Ordering::Relaxed);
 
-    // Flush and close the handle; Windows can't rename an open file.
-    tokio::task::spawn_blocking(move || file.sync_all()).await.map_err(std::io::Error::other)??;
+    // Without a known size, a retry starts over at byte 0; an attempt that got
+    // further before it broke must not leave its tail behind. Then flush and
+    // close the handle (Windows can't rename an open file).
+    let size_unknown = probe.total.is_none();
+    tokio::task::spawn_blocking(move || {
+        if size_unknown {
+            file.set_len(written)?;
+        }
+        file.sync_all()
+    })
+    .await
+    .map_err(std::io::Error::other)??;
 
     let verified = match job.options.checksum.clone() {
         Some(checksum) => {
@@ -295,7 +315,8 @@ pub(crate) async fn finalize(
         let name = dest.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         filename::unique_path(dir, &name, |p| p.exists())
     };
-    std::fs::rename(part, &final_path)?;
+    let (from, to) = (part.to_path_buf(), final_path.clone());
+    tokio::task::spawn_blocking(move || fsio::rename(&from, &to)).await.map_err(std::io::Error::other)??;
     let _ = std::fs::remove_file(meta);
     if let Some(lm) = &probe.last_modified {
         fsio::set_mtime_from_http(&final_path, lm);
@@ -341,7 +362,12 @@ fn build_headers(pairs: &[(String, String)]) -> HeaderMap {
     map
 }
 
-async fn probe_with_retry(job: &Job, headers: &HeaderMap) -> Result<Probe, Error> {
+/// The browser's final address for a captured download, if there is one.
+fn fallback(job: &Job) -> Option<Url> {
+    job.options.fallback_url.as_deref().and_then(|u| Url::parse(u).ok()).filter(|u| *u != job.url)
+}
+
+async fn probe_with_retry(job: &Job, url: &Url, headers: &HeaderMap) -> Result<Probe, Error> {
     let mut attempt = 0;
     loop {
         let result = tokio::select! {
@@ -349,7 +375,7 @@ async fn probe_with_retry(job: &Job, headers: &HeaderMap) -> Result<Probe, Error
             _ = job.cancel.cancelled() => return Err(Error::Cancelled),
             // A server that accepts the connection and never answers must not
             // leave the download "Connecting" forever.
-            r = tokio::time::timeout(Duration::from_secs(job.config.read_timeout_secs), probe::probe(&job.client, &job.url, headers)) => r.unwrap_or(Err(Error::Timeout)),
+            r = tokio::time::timeout(Duration::from_secs(job.config.read_timeout_secs), probe::probe(&job.client, url, headers)) => r.unwrap_or(Err(Error::Timeout)),
         };
         match result {
             Ok(p) => return Ok(p),
@@ -378,7 +404,16 @@ pub(crate) async fn backoff(attempt: u32, server_asked: Option<u64>, cancel: &Ca
 
 struct WorkerCtx {
     client: Client,
-    url: Url,
+    /// Where segments are fetched: the link after redirects. A signed link
+    /// that expires (GitHub, S3) is replaced by a fresh one, see [`relink`].
+    url: std::sync::RwLock<Url>,
+    /// The link as added, which hands out fresh redirects.
+    origin: Url,
+    redirected: bool,
+    total: Option<u64>,
+    /// Fresh redirects fetched so far.
+    relinks: tokio::sync::Mutex<u32>,
+    /// All request headers; credentials are dropped for other hosts.
     headers: HeaderMap,
     ranged: bool,
     etag: Option<String>,
@@ -394,9 +429,61 @@ struct WorkerCtx {
     header_timeout: Duration,
 }
 
+/// Most fresh redirects fetched for one run of a download.
+const MAX_RELINKS: u32 = 50;
+
 impl WorkerCtx {
     fn table(&self) -> std::sync::MutexGuard<'_, SegmentTable> {
         self.shared.table.lock().unwrap()
+    }
+
+    fn current_url(&self) -> Url {
+        self.url.read().unwrap().clone()
+    }
+
+    /// Request headers for `url`: cookies and passwords belong to the host
+    /// they were meant for, not to wherever a redirect ends up.
+    fn headers_for(&self, url: &Url) -> HeaderMap {
+        if same_origin(&self.origin, url) { self.headers.clone() } else { without_credentials(self.headers.clone()) }
+    }
+
+    /// Whether `e` may mean that the redirected link expired. Signed links
+    /// (GitHub release assets, S3, CDNs) stop working after a few minutes;
+    /// open connections keep going, but every new range request is refused.
+    fn link_expired(&self, e: &Error) -> bool {
+        self.redirected && matches!(e, Error::Http(401 | 403 | 404 | 410))
+    }
+
+    /// Asks the original link for a fresh redirect, after `failed` stopped
+    /// working, and checks that it still serves the same file. Several
+    /// connections may fail at once: only the first one asks.
+    async fn relink(&self, failed: &Url) -> Result<(), Error> {
+        let mut count = self.relinks.lock().await;
+        if self.current_url() != *failed {
+            return Ok(()); // another connection already got a fresh one
+        }
+        if *count >= MAX_RELINKS {
+            return Err(Error::Http(403));
+        }
+        *count += 1;
+        let probe = tokio::select! {
+            biased;
+            _ = self.stop.cancelled() => return Err(Error::Cancelled),
+            r = tokio::time::timeout(self.read_timeout, probe::probe(&self.client, &self.origin, &self.headers)) => {
+                r.map_err(|_| Error::Timeout)??
+            }
+        };
+        if probe.total != self.total {
+            let show = |t: Option<u64>| t.map_or("unknown".into(), util::format_bytes);
+            return Err(Error::SizeChanged { old: show(self.total), new: show(probe.total) });
+        }
+        if let (Some(a), Some(b)) = (&self.etag, &probe.etag)
+            && a != b
+        {
+            return Err(Error::RemoteChanged);
+        }
+        *self.url.write().unwrap() = probe.final_url;
+        Ok(())
     }
 }
 
@@ -410,7 +497,8 @@ async fn worker(ctx: Arc<WorkerCtx>) -> Result<(), Error> {
         let mut attempt = 0;
         loop {
             let before = ctx.table().segments[idx].written;
-            match fetch_segment(&ctx, idx).await {
+            let url = ctx.current_url();
+            match fetch_segment(&ctx, idx, &url).await {
                 Ok(()) => {
                     ctx.table().segments[idx].active = false;
                     break;
@@ -419,6 +507,18 @@ async fn worker(ctx: Arc<WorkerCtx>) -> Result<(), Error> {
                     ctx.table().release(idx);
                     return Ok(());
                 }
+                Err(e) if ctx.link_expired(&e) => match ctx.relink(&url).await {
+                    Ok(()) => {} // try again with the fresh link
+                    Err(Error::Cancelled) => {
+                        ctx.table().release(idx);
+                        return Ok(());
+                    }
+                    Err(fresh) => {
+                        ctx.table().release(idx);
+                        // The original error explains more than a failed second look.
+                        return Err(if fresh.is_retryable() { e } else { fresh });
+                    }
+                },
                 Err(e) => {
                     let progressed = ctx.table().segments[idx].written > before;
                     if progressed {
@@ -454,7 +554,7 @@ async fn worker(ctx: Arc<WorkerCtx>) -> Result<(), Error> {
 
 /// Streams one segment into the file. Returns `Ok` once the segment's
 /// (possibly shrunk) end is reached.
-async fn fetch_segment(ctx: &WorkerCtx, idx: usize) -> Result<(), Error> {
+async fn fetch_segment(ctx: &WorkerCtx, idx: usize, url: &Url) -> Result<(), Error> {
     let (offset, end) = {
         let mut t = ctx.table();
         let s = &mut t.segments[idx];
@@ -468,7 +568,7 @@ async fn fetch_segment(ctx: &WorkerCtx, idx: usize) -> Result<(), Error> {
         return Ok(());
     }
 
-    let mut req = ctx.client.get(ctx.url.clone()).headers(ctx.headers.clone());
+    let mut req = ctx.client.get(url.clone()).headers(ctx.headers_for(url));
     if ctx.ranged {
         req = req.header(header::RANGE, format!("bytes={offset}-{}", end - 1));
         if let Some(etag) = &ctx.etag {

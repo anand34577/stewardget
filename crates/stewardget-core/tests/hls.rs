@@ -185,3 +185,25 @@ async fn live_streams_are_refused_clearly() {
     assert!(engine.download(id).unwrap().error.unwrap().contains("live stream"));
     engine.shutdown().await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn byte_range_pieces_survive_a_server_that_ignores_ranges() {
+    // Three pieces cut from one file with #EXT-X-BYTERANGE; this server answers
+    // every range with the whole file, so each piece has to be cut out locally.
+    let whole: Vec<u8> = (0..5000u32).map(|i| (i % 253) as u8).collect();
+    let mut routes: HashMap<String, (&'static str, Vec<u8>)> = HashMap::new();
+    let playlist = "#EXTM3U\n#EXT-X-BYTERANGE:1000@0\n#EXTINF:4,\nall.ts\n#EXT-X-BYTERANGE:1500\n#EXTINF:4,\nall.ts\n#EXT-X-BYTERANGE:500@3000\n#EXTINF:4,\nall.ts\n#EXT-X-ENDLIST\n";
+    routes.insert("/s/index.m3u8".into(), ("application/vnd.apple.mpegurl", playlist.as_bytes().to_vec()));
+    routes.insert("/s/all.ts".into(), ("video/mp2t", whole.clone()));
+    let base = serve(routes, Duration::ZERO).await;
+    let dir = temp_dir("byterange");
+    let engine = engine(&dir);
+    let id = engine.add(NewDownload::new(format!("{base}/s/index.m3u8"))).unwrap();
+    let status = wait_for(&engine, id, Status::Completed, 30).await;
+    let view = engine.download(id).unwrap();
+    assert_eq!(status, Status::Completed, "{:?}", view.error);
+    let expected: Vec<u8> = [&whole[..2500], &whole[3000..3500]].concat();
+    let got = std::fs::read(&view.path).unwrap();
+    assert_eq!(got.len(), expected.len());
+    assert!(got == expected, "the pieces are not the right parts of the file");
+}

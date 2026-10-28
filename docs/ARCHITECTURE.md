@@ -74,6 +74,12 @@ static splitting loses the most time.
   the connection made progress.
 - **Connection-limited servers**: a worker that keeps failing without receiving
   data while siblings are healthy releases its range and exits; others steal it.
+- **Expiring signed links**: when the link redirected (GitHub release assets,
+  S3) and a range request is refused with 401/403/404/410, the original link is
+  probed again for a fresh redirect; it is used when size and `ETag` still
+  match (at most 50 times per run). A captured download also keeps the
+  browser's final address (`fallback_url`), used when the original link no
+  longer works at all (a one-time link).
 - Fatal errors (4xx, range ignored, remote changed, disk errors) stop the whole
   download and are reported in plain language.
 - **Automatic retry**: a download that still fails with a retryable error is
@@ -126,6 +132,14 @@ page each came from; the desktop app feeds them to the new-download window.
 `awaiting_link` and the captured file has the same size (or the same name when a
 size is unknown), its URL is replaced (`set_url`) and it resumes with relaxed
 validation; otherwise a new download is queued.
+
+In Chromium the extension takes downloads in `downloads.onDeterminingFilename`,
+which the browser waits for before it shows a Save As dialog or its download
+bubble; it also carries the browser's file name. Firefox has no such event, so
+there the download is paused in `onCreated` while StewardGet is asked. The
+extension sends the link as clicked (`url`) and where it landed
+(`fallback_url`). A browser name that is only the link's last segment is not
+used, so the server's `Content-Disposition` name wins.
 
 The extension pings once a minute with `X-StewardGet-Browser` and
 `X-StewardGet-Extension-Version`, which the snapshot exposes as `extension`, so the

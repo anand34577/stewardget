@@ -4,6 +4,45 @@ All notable changes to StewardGet are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+- Chromium browsers no longer show their own Save As dialog or download
+  bubble some of the time: the extension takes the download before the
+  browser asks for a file name (`downloads.onDeterminingFilename`), instead of
+  racing the browser after it started.
+- Downloads from the browser get the server's file name instead of an id from
+  the link (`5a26b454-bf1a-…`): a name that is only the link's last segment no
+  longer overrides `Content-Disposition`, also when the new-download window is
+  accepted before the server answered.
+- Accepting the new-download window opens the progress window right away, and
+  downloads that arrive together (up to three) each get one.
+- Signed links that expire mid-download (GitHub release assets, S3) are
+  replaced with a fresh redirect instead of failing with HTTP 403. The
+  extension sends the link as clicked, with the final address as a fallback
+  for one-time links.
+- Pausing, restarting or refreshing a link wins over an automatic retry when
+  the download fails at that moment; a download paused just before quitting
+  stays paused.
+- Finishing or saving progress no longer fails with "Access is denied" while
+  a virus scanner or the search indexer briefly holds the file (Windows).
+- Lifting a speed limit wakes connections that were waiting under the old one.
+- A download of unknown size that had to start over no longer keeps bytes from
+  the earlier attempt at its end.
+- HLS: pieces cut from one file are correct when the server ignores `Range`;
+  a stalled playlist can be paused and times out; oversized playlists are
+  refused while reading; a refreshed link resumes the stream; variants with
+  their sound inside are preferred over ones with a separate audio track.
+- Site grabber: relative links follow redirects and `<base href>`, and the
+  search stops once the file budget is reached.
+- The after-download program no longer expands placeholders that appear in a
+  file name.
+- `stewardget get` saves into `--dir` (or the current folder), not the desktop
+  app's category folders, and ignores its time-of-day speed limit.
+- The parts table in the progress window uses the full width.
+- The extension's video list survives the browser stopping its background
+  script; "skip these extensions" accepts spaces as separators.
+
 ## [0.7.3] - 2026-10-25
 
 ### Security

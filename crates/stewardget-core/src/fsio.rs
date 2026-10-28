@@ -109,7 +109,30 @@ pub(crate) fn write_atomic(path: &Path, data: &[u8]) -> io::Result<()> {
         f.write_all(data)?;
         f.sync_data()?;
     }
-    std::fs::rename(&tmp, path)
+    rename(&tmp, path)
+}
+
+/// `std::fs::rename`, retried for a moment on Windows while another program
+/// (a virus scanner, the search indexer, a backup tool) has the file open.
+/// Defender scans every finished download, so without this a download could
+/// reach 100 % and then fail with "Access is denied".
+pub(crate) fn rename(from: &Path, to: &Path) -> io::Result<()> {
+    let mut attempt = 0u64;
+    loop {
+        match std::fs::rename(from, to) {
+            Err(e) if cfg!(windows) && attempt < 20 && transient(&e) => {
+                attempt += 1;
+                std::thread::sleep(std::time::Duration::from_millis(25 * attempt.min(8)));
+            }
+            other => return other,
+        }
+    }
+}
+
+/// Access denied (5), sharing violation (32) or lock violation (33): another
+/// process holds the file for now.
+fn transient(e: &io::Error) -> bool {
+    matches!(e.raw_os_error(), Some(5 | 32 | 33))
 }
 
 /// Sets the modification time from an HTTP `Last-Modified` value.
@@ -158,7 +181,7 @@ pub(crate) fn move_file(from: &Path, to: &Path) -> io::Result<()> {
     if let Some(dir) = to.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    match std::fs::rename(from, to) {
+    match rename(from, to) {
         Ok(()) => Ok(()),
         // Only a different drive needs a copy; other errors (in use, denied)
         // would leave a second copy behind.
