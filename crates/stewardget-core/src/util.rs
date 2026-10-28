@@ -493,10 +493,28 @@ fn command_args(command: &str, path: &Path, url: &str) -> Vec<String> {
         name.insert_str(0, "./");
     }
     let full = path.display().to_string();
-    split_command(command)
-        .into_iter()
-        .map(|a| a.replace("{path}", &full).replace("{dir}", &dir).replace("{name}", &name).replace("{url}", url))
-        .collect()
+    let values = [("{path}", full.as_str()), ("{dir}", dir.as_str()), ("{name}", name.as_str()), ("{url}", url)];
+    split_command(command).into_iter().map(|a| substitute(&a, &values)).collect()
+}
+
+/// Replaces placeholders in one pass: a value that itself contains `{url}` (a
+/// server can name a file that) is not expanded again.
+fn substitute(text: &str, values: &[(&str, &str)]) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    'outer: while !rest.is_empty() {
+        for (key, value) in values {
+            if let Some(after) = rest.strip_prefix(key) {
+                out.push_str(value);
+                rest = after;
+                continue 'outer;
+            }
+        }
+        let c = rest.chars().next().expect("not empty");
+        out.push(c);
+        rest = &rest[c.len_utf8()..];
+    }
+    out
 }
 
 #[cfg(test)]
@@ -537,6 +555,8 @@ mod tests {
         let args = command_args("7z x {path} -o{dir}/out", path, "https://x/a");
         assert_eq!(args, ["7z", "x", "/dl/a & rm -rf ~.zip", "-o/dl/out"], "a file name stays one argument");
         assert_eq!(command_args("tool {name}", Path::new("/dl/-rf"), "u"), ["tool", "./-rf"]);
+        // A name containing a placeholder is not expanded again.
+        assert_eq!(command_args("tool {name} {url}", Path::new("/dl/{url}.zip"), "u"), ["tool", "{url}.zip", "u"]);
     }
 
     #[test]

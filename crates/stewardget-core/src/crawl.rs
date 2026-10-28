@@ -85,14 +85,17 @@ pub(crate) async fn grab(
             result.blocked_by_robots += 1;
             continue;
         }
-        let Some(html) = fetch_page(client, &page).await else {
+        let Some((html, landed)) = fetch_page(client, &page).await else {
             if result.pages == 0 && level == 0 {
                 return Err(Error::Network(format!("could not read {page}")));
             }
             continue;
         };
         result.pages += 1;
-        for link in links(&html, &page) {
+        // Relative links belong to where the page really is (after redirects,
+        // or wherever its `<base href>` points), not to the address asked for.
+        let base = base_href(&html, &landed).unwrap_or(landed);
+        for link in links(&html, &base) {
             if is_file(&link, options, config) {
                 if result.files.len() >= MAX_FILES {
                     result.truncated = true;
@@ -109,9 +112,34 @@ pub(crate) async fn grab(
                 queue.push_back((link, level + 1));
             }
         }
+        if result.files.len() >= MAX_FILES {
+            break; // more pages can't add anything
+        }
         tokio::time::sleep(PAUSE).await;
     }
     Ok(result)
+}
+
+/// The `<base href="…">` of a page, which relative links are resolved against.
+fn base_href(html: &str, page: &Url) -> Option<Url> {
+    let lower = html.to_ascii_lowercase();
+    let at = lower.find("<base")?;
+    let end = at + lower[at..].find('>')?;
+    let tag = &html[at..end];
+    links(tag, page).into_iter().next()
+}
+
+/// Reads a body up to `limit` bytes.
+async fn read_capped(mut resp: reqwest::Response, limit: usize) -> Vec<u8> {
+    let mut body = Vec::new();
+    while let Ok(Some(chunk)) = resp.chunk().await {
+        body.extend_from_slice(&chunk);
+        if body.len() >= limit {
+            body.truncate(limit);
+            break;
+        }
+    }
+    body
 }
 
 fn page_key(url: &Url) -> String {
@@ -120,7 +148,8 @@ fn page_key(url: &Url) -> String {
     u.to_string()
 }
 
-async fn fetch_page(client: &Client, url: &Url) -> Option<String> {
+/// The page's HTML and the address it was finally served from.
+async fn fetch_page(client: &Client, url: &Url) -> Option<(String, Url)> {
     let resp = client.get(url.clone()).timeout(Duration::from_secs(20)).send().await.ok()?;
     if !resp.status().is_success() {
         return None;
@@ -130,15 +159,9 @@ async fn fetch_page(client: &Client, url: &Url) -> Option<String> {
     {
         return None;
     }
-    let mut body = Vec::new();
-    let mut resp = resp;
-    while let Ok(Some(chunk)) = resp.chunk().await {
-        body.extend_from_slice(&chunk);
-        if body.len() >= MAX_BODY {
-            break;
-        }
-    }
-    Some(String::from_utf8_lossy(&body).into_owned())
+    let landed = resp.url().clone();
+    let body = read_capped(resp, MAX_BODY).await;
+    Some((String::from_utf8_lossy(&body).into_owned(), landed))
 }
 
 /// The `Disallow` prefixes that apply to everyone (`User-agent: *`).
@@ -148,7 +171,7 @@ async fn fetch_robots(client: &Client, page: &Url) -> Vec<String> {
     if !resp.status().is_success() {
         return Vec::new();
     }
-    parse_robots(&resp.text().await.unwrap_or_default())
+    parse_robots(&String::from_utf8_lossy(&read_capped(resp, 512 * 1024).await))
 }
 
 fn parse_robots(text: &str) -> Vec<String> {
@@ -259,6 +282,15 @@ fn looks_like_page(url: &Url) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn base_href_sets_where_relative_links_point() {
+        let page = Url::parse("https://example.com/a/page.html").unwrap();
+        let html = r#"<html><head><BASE HREF="https://cdn.example.com/files/"></head><a href="x.zip">x</a>"#;
+        let base = base_href(html, &page).unwrap();
+        assert_eq!(links(html, &base).last().unwrap().as_str(), "https://cdn.example.com/files/x.zip");
+        assert!(base_href("<a href='x.zip'>", &page).is_none());
+    }
 
     fn url(s: &str) -> Url {
         Url::parse(s).unwrap()

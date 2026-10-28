@@ -131,16 +131,24 @@ impl CaptureWindow {
         self.check.as_ref().and_then(|c| c.lock().unwrap().clone())
     }
 
-    /// The name a single download will get: typed, else detected, else the browser's.
+    /// The name a single download will get, as shown: the known one, else a
+    /// placeholder from the link.
     fn effective_name(&self) -> String {
+        self.chosen_name().unwrap_or_else(|| self.items[0].name.clone())
+    }
+
+    /// A real name for a single download: typed, the browser's, or the
+    /// server's. `None` while the server hasn't answered yet; the download
+    /// then finds its name itself instead of keeping a guess from the link.
+    fn chosen_name(&self) -> Option<String> {
         let typed = self.name.trim();
         if !typed.is_empty() {
-            return typed.to_owned();
+            return Some(typed.to_owned());
         }
         match (&self.items[0].new.options.file_name, self.checked()) {
-            (Some(name), _) => name.clone(),
-            (None, Some(Ok(info))) => info.file_name,
-            (None, _) => self.items[0].name.clone(),
+            (Some(name), _) => Some(name.clone()),
+            (None, Some(Ok(info))) => Some(info.file_name),
+            (None, _) => None,
         }
     }
 
@@ -505,7 +513,7 @@ impl StewardGetApp {
             return;
         }
         let single = w.single();
-        let name = single.then(|| w.effective_name());
+        let name = single.then(|| w.chosen_name()).flatten();
         let mut ids = Vec::new();
         for item in w.items.iter().filter(|i| i.selected) {
             let mut new = item.new.clone();
@@ -514,7 +522,9 @@ impl StewardGetApp {
             }
             if w.dir_chosen {
                 new.options.directory = Some(dir.clone());
-            } else if single {
+            } else if single && name.is_some() {
+                // (Without a name yet, the folder shown is only a guess: the
+                // download picks its category folder once it knows the name.)
                 // Keep the category folder shown in the window, even if settings change meanwhile.
                 new.options.directory = new.options.directory.or_else(|| Some(dir.clone()));
             }
@@ -541,6 +551,13 @@ impl StewardGetApp {
             let text = if later { format!("Added {what} to {queue}") } else { format!("Started {what}") };
             let accent = self.palette.accent2;
             self.toast(text, accent);
+            // Open its progress window now, rather than leave it to the next
+            // snapshot, which skips it when other downloads appear alongside.
+            if !later && self.cfg.progress_window && n <= crate::app::PROGRESS_WINDOWS_AT_ONCE {
+                for &id in &ids {
+                    self.open_progress(id);
+                }
+            }
             if self.page == Page::Downloads {
                 self.selection = ids.into_iter().collect();
             }

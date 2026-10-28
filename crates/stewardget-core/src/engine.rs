@@ -413,11 +413,19 @@ impl Engine {
     pub fn capture_request(&self, capture: Capture) -> Result<NewDownload, Error> {
         let url = parse_url(&capture.url)?;
         let mut options = DownloadOptions {
-            file_name: hinted_name(&capture, &url),
+            // Only a name the browser really chose is fixed here; otherwise the
+            // server's name (found when the download starts) is used.
+            file_name: browser_name(&capture, &url),
             directory: capture.directory,
             headers: capture.headers,
             referrer: capture.referrer,
             user_agent: capture.user_agent,
+            fallback_url: capture
+                .fallback_url
+                .as_deref()
+                .and_then(|f| parse_url(f).ok())
+                .filter(|f| *f != url)
+                .map(|f| f.to_string()),
             ..Default::default()
         };
         merge_cookie(&mut options.headers, capture.cookies.as_deref());
@@ -505,9 +513,23 @@ impl Engine {
         let url = parse_url(url)?;
         let client = self.inner.client.read().unwrap().clone();
         let headers = task::request_headers(options);
-        let mut probe = tokio::time::timeout(Duration::from_secs(20), crate::probe::probe(&client, &url, &headers))
-            .await
-            .map_err(|_| Error::Timeout)??;
+        let look = |url: Url| {
+            let (client, headers) = (client.clone(), headers.clone());
+            async move {
+                tokio::time::timeout(Duration::from_secs(20), crate::probe::probe(&client, &url, &headers))
+                    .await
+                    .map_err(|_| Error::Timeout)?
+            }
+        };
+        // Like the download itself: the browser's final address when the link is used up.
+        let fallback = options.fallback_url.as_deref().and_then(|u| Url::parse(u).ok()).filter(|u| *u != url);
+        let mut probe = match look(url.clone()).await {
+            Err(e @ Error::Http(400..=499)) => match fallback {
+                Some(f) => look(f).await.map_err(|_| e)?,
+                None => return Err(e),
+            },
+            other => other?,
+        };
         if crate::hls::is_playlist(&url, &probe) {
             let ext =
                 tokio::time::timeout(Duration::from_secs(20), crate::hls::inspect(&client, &headers, &probe.final_url))
@@ -554,6 +576,8 @@ impl Engine {
         self.inner.with_item(id, |item, _| {
             options.file_name = item.rec.options.file_name.clone();
             options.directory = item.rec.options.directory.clone();
+            // Not shown in any dialog: kept as the browser gave it.
+            options.fallback_url = item.rec.options.fallback_url.clone();
             let reconnect = options.headers != item.rec.options.headers
                 || options.referrer != item.rec.options.referrer
                 || options.user_agent != item.rec.options.user_agent
@@ -1204,13 +1228,28 @@ impl Inner {
                         after_command = Some((command.clone(), item.rec.path.clone(), item.rec.url.clone()));
                     }
                 }
-                (Outcome::Cancelled, _) if shutting_down => item.rec.status = Status::Queued,
+                // Interrupted by quitting: picked up again at the next start, unless
+                // the user had paused it just before.
+                (Outcome::Cancelled, _) if shutting_down && item.rec.status != Status::Paused => {
+                    item.rec.status = Status::Queued;
+                }
                 (Outcome::Cancelled, AfterStop::Restart) => {
                     reset_for_restart(item);
                     self.set_status(item, Status::Queued);
                 }
                 (Outcome::Cancelled, AfterStop::Requeue) => self.set_status(item, Status::Queued),
                 (Outcome::Cancelled, AfterStop::Pause) => self.set_status(item, Status::Paused),
+                // The task failed just as the user (or a fresh link) stopped it:
+                // what they asked for wins over an automatic retry or "Failed".
+                (Outcome::Failed(_), _) if shutting_down && item.rec.status != Status::Paused => {
+                    item.rec.status = Status::Queued;
+                }
+                (Outcome::Failed(_), AfterStop::Restart) => {
+                    reset_for_restart(item);
+                    self.set_status(item, Status::Queued);
+                }
+                (Outcome::Failed(_), AfterStop::Requeue) => self.set_status(item, Status::Queued),
+                (Outcome::Failed(_), AfterStop::Pause) if item.rec.status == Status::Paused => {}
                 (Outcome::Failed(e), _)
                     if e.is_retryable() && item.auto_retries < config.auto_retry && !item.rec.awaiting_link =>
                 {
@@ -1545,15 +1584,25 @@ fn valid_queue(config: &Config, queue: QueueId) -> QueueId {
     config.queue(queue).id
 }
 
-/// File name the browser suggested, else the last URL segment.
+/// File name the browser suggested, else the last URL segment. Only for
+/// matching a capture against a download that waits for a fresh link.
 fn hinted_name(capture: &Capture, url: &Url) -> Option<String> {
-    capture
+    browser_name(capture, url).or_else(|| filename::from_url(url).map(|n| filename::sanitize(&n)))
+}
+
+/// The name the browser chose for a capture, when it says more than the
+/// link does. A name that is just the URL's last segment (often an id such as
+/// `5a26b454-bf1a-…` on signed storage links) is not used as the file name:
+/// it would hide the real name the server sends in `Content-Disposition`.
+fn browser_name(capture: &Capture, url: &Url) -> Option<String> {
+    let name = capture
         .file_name
         .as_deref()
-        .map(|n| n.rsplit(['/', '\\']).next().unwrap_or(n).to_owned())
-        .filter(|n| !n.trim().is_empty())
-        .or_else(|| filename::from_url(url))
-        .map(|n| filename::sanitize(&n))
+        .map(|n| n.rsplit(['/', '\\']).next().unwrap_or(n).trim().to_owned())
+        .filter(|n| !n.is_empty())?;
+    let from_link = filename::from_url(url).map(|n| filename::sanitize(&n));
+    let name = filename::sanitize(&name);
+    (from_link.as_deref() != Some(name.as_str())).then_some(name)
 }
 
 /// Same file name, ignoring case and a ` (n)` de-duplication suffix.

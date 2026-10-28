@@ -190,6 +190,7 @@ impl AddDialog {
             checksum,
             referrer: Some(self.referrer.trim().to_owned()).filter(|r| !r.is_empty()),
             user_agent: None,
+            fallback_url: None,
         })
     }
 

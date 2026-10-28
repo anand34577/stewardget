@@ -200,7 +200,7 @@ impl From<crate::DownloadView> for Summary {
 #[serde(untagged)]
 enum CaptureBody {
     Many { items: Vec<Capture> },
-    One(Capture),
+    One(Box<Capture>),
 }
 
 async fn handle(mut stream: TcpStream, inner: Weak<Inner>) {
@@ -294,7 +294,7 @@ async fn handle(mut stream: TcpStream, inner: Weak<Inner>) {
         ("POST", "/api/v1/downloads") => {
             let captures = match serde_json::from_slice::<CaptureBody>(&req.body) {
                 Ok(CaptureBody::Many { items }) => items,
-                Ok(CaptureBody::One(c)) => vec![c],
+                Ok(CaptureBody::One(c)) => vec![*c],
                 Err(e) => return respond(&mut stream, 400, &Message { error: &e.to_string() }).await,
             };
             #[derive(Serialize)]

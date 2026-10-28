@@ -72,7 +72,13 @@ struct StreamMeta {
 }
 
 pub(crate) async fn run(job: &Job, headers: &HeaderMap, probe: Probe) -> Result<Outcome, Error> {
-    let media = load(&job.client, headers, &probe.final_url).await?;
+    // A server that stalls mid-playlist must neither hang the download nor ignore Pause.
+    let timeout = Duration::from_secs(job.config.read_timeout_secs.max(5) * 2);
+    let media = tokio::select! {
+        biased;
+        _ = job.cancel.cancelled() => return Err(Error::Cancelled),
+        m = tokio::time::timeout(timeout, load(&job.client, headers, &probe.final_url)) => m.map_err(|_| Error::Timeout)??,
+    };
     if media.pieces.is_empty() {
         return Err(Error::Unsupported("the stream's playlist lists no pieces".into()));
     }
@@ -89,7 +95,12 @@ pub(crate) async fn run(job: &Job, headers: &HeaderMap, probe: Probe) -> Result<
     let previous = std::fs::read(&meta)
         .ok()
         .and_then(|b| serde_json::from_slice::<StreamMeta>(&b).ok())
-        .filter(|m| m.version == META_VERSION && m.url == job.url.as_str() && m.pieces == media.pieces.len())
+        // A refreshed link (new token in the URL) continues the same stream.
+        .filter(|m| {
+            m.version == META_VERSION
+                && (m.url == job.url.as_str() || job.relaxed_resume)
+                && m.pieces == media.pieces.len()
+        })
         .filter(|m| std::fs::metadata(&part).is_ok_and(|f| f.len() >= m.bytes));
     let file = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&part)?;
     let (mut done, mut bytes) = previous.map_or((0, 0), |m| (m.done, m.bytes));
@@ -191,9 +202,18 @@ async fn fetch_playlist(client: &reqwest::Client, headers: &HeaderMap, url: &Url
         return Err(crate::probe::http_error(&resp));
     }
     let final_url = resp.url().clone();
-    let body = resp.bytes().await?;
-    if body.len() > MAX_PLAYLIST {
-        return Err(Error::Unsupported("the stream's playlist is too large".into()));
+    let too_large = || Error::Unsupported("the stream's playlist is too large".into());
+    if resp.content_length().is_some_and(|n| n > MAX_PLAYLIST as u64) {
+        return Err(too_large());
+    }
+    // Checked while reading: a mislabelled link to a big file must not end up in memory.
+    let mut body = Vec::new();
+    let mut stream = resp.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        body.extend_from_slice(&chunk?);
+        if body.len() > MAX_PLAYLIST {
+            return Err(too_large());
+        }
     }
     let text = String::from_utf8_lossy(&body).into_owned();
     if !text.trim_start().starts_with("#EXTM3U") {
@@ -202,18 +222,30 @@ async fn fetch_playlist(client: &reqwest::Client, headers: &HeaderMap, url: &Url
     Ok((final_url, text))
 }
 
-/// In a master playlist, the variant with the highest bandwidth.
+/// In a master playlist, the variant with the highest bandwidth. Variants
+/// whose sound is a separate track (`#EXT-X-MEDIA:TYPE=AUDIO` with its own
+/// URI) come second: StewardGet saves one track, and that video would be silent.
 fn best_variant(text: &str, base: &Url) -> Option<Url> {
-    let mut best: Option<(u64, Url)> = None;
+    let separate_audio: Vec<String> = text
+        .lines()
+        .filter_map(|l| l.trim().strip_prefix("#EXT-X-MEDIA:"))
+        .filter(|a| {
+            attribute(a, "TYPE").is_some_and(|t| t.eq_ignore_ascii_case("AUDIO")) && attribute(a, "URI").is_some()
+        })
+        .filter_map(|a| attribute(a, "GROUP-ID"))
+        .collect();
+    let mut best: Option<((bool, u64), Url)> = None;
     let mut lines = text.lines().map(str::trim);
     while let Some(line) = lines.next() {
         let Some(attrs) = line.strip_prefix("#EXT-X-STREAM-INF:") else { continue };
         let bandwidth = attribute(attrs, "BANDWIDTH").and_then(|b| b.parse().ok()).unwrap_or(0);
+        let muxed = attribute(attrs, "AUDIO").is_none_or(|g| !separate_audio.contains(&g));
+        let rank = (muxed, bandwidth);
         let Some(uri) = lines.by_ref().find(|l| !l.is_empty() && !l.starts_with('#')) else { break };
         if let Ok(url) = base.join(uri)
-            && best.as_ref().is_none_or(|(b, _)| bandwidth > *b)
+            && best.as_ref().is_none_or(|(r, _)| rank > *r)
         {
-            best = Some((bandwidth, url));
+            best = Some((rank, url));
         }
     }
     best.map(|(_, url)| url)
@@ -385,6 +417,8 @@ impl Fetcher<'_> {
         if !resp.status().is_success() {
             return Err(crate::probe::http_error(&resp));
         }
+        // A server that ignores `Range` sends the whole file: keep only the piece.
+        let whole = range.is_some() && resp.status() != reqwest::StatusCode::PARTIAL_CONTENT;
         let mut stream = resp.bytes_stream();
         let mut out = Vec::new();
         loop {
@@ -396,11 +430,31 @@ impl Fetcher<'_> {
             let Some(chunk) = next else { break };
             let chunk = chunk?;
             let n = chunk.len();
-            self.job.shared.limiter.acquire(n).await;
-            self.job.queue_limiter.acquire(n).await;
-            self.job.global_limiter.acquire(n).await;
+            // Speed limits may make this wait a while; pausing must not.
+            tokio::select! {
+                biased;
+                _ = self.job.cancel.cancelled() => return Err(Error::Cancelled),
+                _ = async {
+                    self.job.shared.limiter.acquire(n).await;
+                    self.job.queue_limiter.acquire(n).await;
+                    self.job.global_limiter.acquire(n).await;
+                } => {}
+            }
             self.job.shared.transferred.fetch_add(n as u64, Ordering::Relaxed);
             out.extend_from_slice(&chunk);
+            if let Some((offset, len)) = range.filter(|_| whole)
+                && out.len() as u64 >= offset + len
+            {
+                break; // the rest of the file isn't needed
+            }
+        }
+        if let Some((offset, len)) = range.filter(|_| whole) {
+            let (start, end) = (offset as usize, (offset + len) as usize);
+            if out.len() < end {
+                return Err(Error::Network("a stream piece arrived incomplete".into()));
+            }
+            out.truncate(end);
+            out.drain(..start);
         }
         Ok(out)
     }
@@ -427,6 +481,15 @@ mod tests {
         let master = "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=800000,RESOLUTION=640x360,CODECS=\"avc1.4d401e,mp4a.40.2\"\nlow/index.m3u8\n#EXT-X-STREAM-INF:BANDWIDTH=5000000,RESOLUTION=1920x1080\nhigh/index.m3u8\n#EXT-X-STREAM-INF:BANDWIDTH=2500000\nmid/index.m3u8\n";
         assert_eq!(best_variant(master, &base()).unwrap().as_str(), "https://cdn.example.com/v/high/index.m3u8");
         assert!(best_variant("#EXTM3U\n#EXTINF:4,\na.ts\n#EXT-X-ENDLIST", &base()).is_none());
+    }
+
+    #[test]
+    fn prefers_variants_with_their_sound_inside() {
+        let master = "#EXTM3U\n#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"aud\",NAME=\"en\",URI=\"audio/en.m3u8\"\n#EXT-X-STREAM-INF:BANDWIDTH=5000000,AUDIO=\"aud\"\nvideo-only.m3u8\n#EXT-X-STREAM-INF:BANDWIDTH=2000000\nmuxed.m3u8\n";
+        assert_eq!(best_variant(master, &base()).unwrap().as_str(), "https://cdn.example.com/v/muxed.m3u8");
+        // Only separate-audio variants: still the best of them.
+        let master = "#EXTM3U\n#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"aud\",URI=\"a.m3u8\"\n#EXT-X-STREAM-INF:BANDWIDTH=1,AUDIO=\"aud\"\nlow.m3u8\n#EXT-X-STREAM-INF:BANDWIDTH=9,AUDIO=\"aud\"\nhigh.m3u8\n";
+        assert_eq!(best_variant(master, &base()).unwrap().as_str(), "https://cdn.example.com/v/high.m3u8");
     }
 
     #[test]

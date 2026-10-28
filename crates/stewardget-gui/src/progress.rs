@@ -482,32 +482,42 @@ fn connection_bars(ui: &mut Ui, p: &Palette, d: &DownloadView) {
 
 /// One line per part: number, what it is doing, how far it got.
 fn parts_table(ui: &mut Ui, p: &Palette, d: &DownloadView) {
+    // A grid packs its columns to their content, which left the table in the
+    // left part of the window; spread the four columns over the full width.
+    const GAP: f32 = 18.0;
+    let scrollbar = ui.spacing().scroll.bar_width + ui.spacing().scroll.bar_outer_margin;
+    let column = ((ui.available_width() - scrollbar - 3.0 * GAP) / 4.0).max(40.0);
     egui::ScrollArea::vertical().id_salt(("parts", d.id)).auto_shrink([false, true]).max_height(160.0).show(ui, |ui| {
-        egui::Grid::new(("parts-grid", d.id)).num_columns(4).striped(true).spacing([18.0, 4.0]).show(ui, |ui| {
-            for title in ["N.", "Downloaded", "Part size", "Info"] {
-                ui.label(RichText::new(title).size(11.5).color(p.text_dim));
-            }
-            ui.end_row();
-            for (i, s) in d.segments.iter().enumerate() {
-                let len = s.end.saturating_sub(s.start);
-                let done = s.done.min(len);
-                let (state, color) = if done >= len {
-                    ("Done", p.green)
-                } else if s.active && d.status == Status::Downloading {
-                    ("Receiving data…", p.accent2)
-                } else if s.active {
-                    ("Connecting…", p.text_dim)
-                } else if d.status.is_active() {
-                    ("Waiting", p.text_dim)
-                } else {
-                    ("Stopped", p.text_dim)
-                };
-                ui.label(RichText::new(format!("{}", i + 1)).color(p.text_dim));
-                ui.label(format_bytes(done));
-                ui.label(if len == u64::MAX { "—".into() } else { format_bytes(len) });
-                ui.label(RichText::new(state).color(color));
+        egui::Grid::new(("parts-grid", d.id))
+            .num_columns(4)
+            .striped(true)
+            .min_col_width(column)
+            .spacing([GAP, 4.0])
+            .show(ui, |ui| {
+                for title in ["N.", "Downloaded", "Part size", "Info"] {
+                    ui.label(RichText::new(title).size(11.5).color(p.text_dim));
+                }
                 ui.end_row();
-            }
-        });
+                for (i, s) in d.segments.iter().enumerate() {
+                    let len = s.end.saturating_sub(s.start);
+                    let done = s.done.min(len);
+                    let (state, color) = if done >= len {
+                        ("Done", p.green)
+                    } else if s.active && d.status == Status::Downloading {
+                        ("Receiving data…", p.accent2)
+                    } else if s.active {
+                        ("Connecting…", p.text_dim)
+                    } else if d.status.is_active() {
+                        ("Waiting", p.text_dim)
+                    } else {
+                        ("Stopped", p.text_dim)
+                    };
+                    ui.label(RichText::new(format!("{}", i + 1)).color(p.text_dim));
+                    ui.label(format_bytes(done));
+                    ui.label(if len == u64::MAX { "—".into() } else { format_bytes(len) });
+                    ui.label(RichText::new(state).color(color));
+                    ui.end_row();
+                }
+            });
     });
 }
