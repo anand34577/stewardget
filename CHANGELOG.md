@@ -4,7 +4,7 @@ All notable changes to StewardGet are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions follow
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.7.4] - 2026-10-28
 
 ### Fixed
 - Chromium browsers no longer show their own Save As dialog or download
@@ -517,6 +517,9 @@ The first public release.
 - `stewardget get`: one-off downloads with progress bars.
 - `stewardget add`: sends links to the running app.
 
+[0.7.4]: https://github.com/anand34577/stewardget/releases/tag/v0.7.4
+[0.7.3]: https://github.com/anand34577/stewardget/releases/tag/v0.7.3
+[0.7.2]: https://github.com/anand34577/stewardget/releases/tag/v0.7.2
 [0.7.1]: https://github.com/anand34577/stewardget/releases/tag/v0.7.1
 [0.7.0]: https://github.com/anand34577/stewardget/releases/tag/v0.7.0
 [0.6.0]: https://github.com/anand34577/stewardget/releases/tag/v0.6.0
