@@ -152,7 +152,7 @@ impl StewardGetApp {
                 });
                 ui.scope_builder(egui::UiBuilder::new().max_rect(body), |ui| {
                     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                        ui.set_max_width(880.0_f32.min(body.width()));
+                        ui.set_max_width(1400.0_f32.min(body.width()));
                         self.settings_tab_body(ui, &mut draft);
                     });
                 });
@@ -773,7 +773,7 @@ fn tab_button(ui: &mut Ui, icon: Icon, label: &str, selected: bool, p: &Palette,
 /// A setting: title and help on the left, the control on the right.
 pub(crate) fn row(ui: &mut Ui, p: &Palette, label: &str, help: &str, add: impl FnOnce(&mut Ui)) {
     let width = ui.available_width();
-    let label_w = (width * 0.42).clamp(170.0, 320.0);
+    let label_w = (width * 0.5).clamp(180.0, 520.0);
     // Dividers go between rows only, never after the last one in a card.
     if ui.min_rect().height() > 4.0 {
         divider(ui, p, width);
@@ -787,8 +787,18 @@ pub(crate) fn row(ui: &mut Ui, p: &Palette, label: &str, help: &str, add: impl F
                 ui.add(egui::Label::new(RichText::new(help).size(12.0).color(p.text_dim)).wrap());
             }
         });
-        ui.add_space(6.0);
-        add(ui);
+        // Controls sit at the right edge of the card and keep their order: the
+        // width they took last frame says how much room to leave on the left.
+        let key = egui::Id::unique(("settings-row-width", label));
+        let known: Option<f32> = ui.data(|d| d.get_temp(key));
+        if let Some(w) = known {
+            ui.add_space((ui.available_width() - w).max(0.0));
+        }
+        let used = ui.horizontal(add).response.rect.width();
+        if known.is_none_or(|w| (w - used).abs() > 0.5) {
+            ui.data_mut(|d| d.insert_temp(key, used));
+            ui.ctx().request_repaint();
+        }
     });
 }
 
