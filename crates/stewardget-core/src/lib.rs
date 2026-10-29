@@ -72,7 +72,7 @@ pub use config::{
 pub use crawl::{GrabOptions, GrabResult};
 pub use engine::{Engine, EngineOptions};
 pub use error::Error;
-pub use history::{History, HistoryEntry, HostSummary, host_of};
+pub use history::{History, HistoryEntry, HostSummary, host_of, quietest_in};
 pub use insight::{Fix, Insight, InsightContext, Kind as InsightKind, Tone as InsightTone, explain as explain_speed};
 pub use model::{
     ApiState, Capture, CaptureAction, DownloadId, DownloadOptions, DownloadView, EngineSnapshot, Event, ExtensionInfo,

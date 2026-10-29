@@ -130,6 +130,14 @@ impl History {
         hours
     }
 
+    /// The `len` consecutive hours (wrapping past midnight) in which the
+    /// fewest downloads finished, as `(first hour, downloads inside it)`. The
+    /// hours you are not using the connection are the best time for big
+    /// transfers. `None` until there is enough history to say anything.
+    pub fn quietest_window(&self, utc_offset_secs: i64, len: usize) -> Option<(u8, u32)> {
+        quietest_in(&self.by_hour(utc_offset_secs), len)
+    }
+
     /// Hosts ranked by completed bytes: `(host, downloads, bytes, mean speed)`.
     pub fn top_hosts(&self, limit: usize) -> Vec<HostSummary> {
         let mut map: std::collections::HashMap<&str, HostSummary> = std::collections::HashMap::new();
@@ -146,6 +154,17 @@ impl History {
         rows.truncate(limit);
         rows
     }
+}
+
+/// [`History::quietest_window`] for an hour-by-hour count.
+pub fn quietest_in(hours: &[u32; 24], len: usize) -> Option<(u8, u32)> {
+    if len == 0 || len >= 24 || hours.iter().sum::<u32>() < 15 {
+        return None;
+    }
+    (0..24)
+        .map(|start| (start, (0..len).map(|i| hours[(start + i) % 24]).sum::<u32>()))
+        .min_by_key(|&(start, n)| (n, start))
+        .map(|(start, n)| (start as u8, n))
 }
 
 /// What the history knows about one host.
@@ -234,6 +253,24 @@ mod tests {
         assert!(e.matches("WORK pdf"));
         assert!(!e.matches("report holiday"));
         assert!(e.matches("   "));
+    }
+
+    #[test]
+    fn the_quietest_window_wraps_past_midnight() {
+        let mut h = History::default();
+        // 20 downloads at 12:00 and 20 at 18:00: the night is free.
+        for id in 0..20 {
+            let mut a = entry(id, "a", "x.com", 1, 1);
+            a.finished_at = 3600 * 12;
+            h.record(a);
+            let mut b = entry(100 + id, "b", "x.com", 1, 1);
+            b.finished_at = 3600 * 18;
+            h.record(b);
+        }
+        assert_eq!(h.quietest_window(0, 5), Some((0, 0)));
+        // Busy hours inside the window count: 10:00-14:00 holds the noon downloads.
+        assert!(h.quietest_window(0, 23).unwrap().1 > 0);
+        assert!(History::default().quietest_window(0, 5).is_none());
     }
 
     #[test]

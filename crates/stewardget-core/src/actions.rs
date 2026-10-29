@@ -20,8 +20,14 @@ use crate::Category;
 pub enum Action {
     /// Unpack a `.zip`, `.tar`, `.tar.gz` or `.tgz` next to the archive.
     Extract { delete_archive: bool },
-    /// Move the file into a folder (created when missing).
+    /// Move the file into a folder (created when missing). The folder may use
+    /// `{category}`, `{year}`, `{month}`, `{day}` and `{host}`, so one rule can
+    /// sort everything: `D:\Library\{category}\{year}-{month}`.
     MoveTo { dir: PathBuf },
+    /// Rename the file. The template may use `{name}` (without extension),
+    /// `{ext}`, `{host}`, `{year}`, `{month}` and `{day}`; the extension is kept
+    /// when the template doesn't end in one.
+    Rename { template: String },
     /// Scan with the system's antivirus (Microsoft Defender, or ClamAV).
     Scan,
     /// Run a program; `{path}`, `{dir}`, `{name}` and `{url}` are replaced.
@@ -34,6 +40,7 @@ impl Action {
     pub fn label(&self) -> &'static str {
         match self {
             Action::Extract { .. } => "Unpack",
+            Action::Rename { .. } => "Rename",
             Action::MoveTo { .. } => "Move",
             Action::Scan => "Scan for malware",
             Action::Command { .. } => "Run program",
@@ -146,7 +153,14 @@ pub fn run_rules(rules: &[Rule], path: &Path, url: &str, category: Category, siz
                 }
                 format!("Unpacked {n} file{} into {}", if n == 1 { "" } else { "s" }, dir.display())
             }),
-            Action::MoveTo { dir } => move_to(&current, dir).map(|moved| {
+            Action::Rename { template } => rename(&current, template, &host).map(|renamed| {
+                let msg =
+                    format!("Renamed to {}", renamed.file_name().map(|n| n.to_string_lossy()).unwrap_or_default());
+                report.new_path = Some(renamed.clone());
+                current = renamed;
+                msg
+            }),
+            Action::MoveTo { dir } => move_to(&current, &expand_dir(dir, category, &host)).map(|moved| {
                 let msg = format!("Moved to {}", moved.display());
                 report.new_path = Some(moved.clone());
                 current = moved;
@@ -273,6 +287,74 @@ fn untar(archive: &Path, dest: &Path, plain: bool) -> io::Result<usize> {
         entry.unpack_in(dest)?;
     }
     Ok(files)
+}
+
+/// Fills in `{category}`, `{year}`, `{month}`, `{day}` and `{host}` in a folder.
+fn expand_dir(dir: &Path, category: Category, host: &str) -> PathBuf {
+    let text = dir.to_string_lossy();
+    if !text.contains('{') {
+        return dir.to_path_buf();
+    }
+    PathBuf::from(fill(&text, &[("category", category.label()), ("host", host)]))
+}
+
+/// Replaces `{key}` placeholders; the date ones come from the clock. Values
+/// are made safe as a single path part so a host or name can't climb out.
+fn fill(template: &str, values: &[(&str, &str)]) -> String {
+    use chrono::Datelike;
+    let now = chrono::Local::now();
+    let (y, m, d) = (now.year().to_string(), format!("{:02}", now.month()), format!("{:02}", now.day()));
+    let mut out = template.to_owned();
+    let all = values.iter().copied().chain([("year", y.as_str()), ("month", m.as_str()), ("day", d.as_str())]);
+    for (key, value) in all {
+        let safe: String =
+            value.chars().filter(|c| !matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|')).collect();
+        out = out.replace(&format!("{{{key}}}"), safe.trim_matches('.'));
+    }
+    out
+}
+
+fn rename(path: &Path, template: &str, host: &str) -> io::Result<PathBuf> {
+    let template = template.trim();
+    if template.is_empty() {
+        return Err(io::Error::other("the new name is empty"));
+    }
+    let name = path.file_name().ok_or_else(|| io::Error::other("no file name"))?.to_string_lossy().into_owned();
+    let (stem, ext) = match name.rsplit_once('.') {
+        Some((s, e)) if !s.is_empty() => (s.to_owned(), e.to_owned()),
+        _ => (name.clone(), String::new()),
+    };
+    let mut new = fill(template, &[("name", &stem), ("ext", &ext), ("host", host)]);
+    new = new.chars().filter(|c| !matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|')).collect();
+    // Keep the extension unless the template brings its own.
+    if !ext.is_empty()
+        && !template.contains("{ext}")
+        && !new.to_lowercase().ends_with(&format!(".{}", ext.to_lowercase()))
+    {
+        new = format!("{new}.{ext}");
+    }
+    let new = new.trim().to_owned();
+    if new.is_empty() || new == name {
+        return Ok(path.to_path_buf());
+    }
+    let dir = path.parent().unwrap_or(Path::new("."));
+    let target = unique(dir, &new);
+    fs::rename(path, &target)?;
+    Ok(target)
+}
+
+fn unique(dir: &Path, name: &str) -> PathBuf {
+    let mut target = dir.join(name);
+    let (stem, ext) = match name.rsplit_once('.') {
+        Some((s, e)) if !s.is_empty() => (s.to_owned(), format!(".{e}")),
+        _ => (name.to_owned(), String::new()),
+    };
+    let mut n = 1;
+    while target.exists() {
+        n += 1;
+        target = dir.join(format!("{stem} ({n}){ext}"));
+    }
+    target
 }
 
 fn move_to(path: &Path, dir: &Path) -> io::Result<PathBuf> {
@@ -453,5 +535,30 @@ mod tests {
         let report = run_rules(&[rule], &file, "https://x.test/x.rar", Category::Archive, 1);
         assert!(!report.outcomes[0].ok);
         assert_eq!(fs::read_dir(&dir).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn folders_and_names_can_use_placeholders_safely() {
+        let dir = temp("tpl");
+        let file = dir.join("Report.PDF");
+        fs::write(&file, b"x").unwrap();
+        let rules = vec![
+            Rule { action: Action::Rename { template: "{host}-{name}".into() }, ..Default::default() },
+            Rule { action: Action::MoveTo { dir: dir.join("{category}").join("{year}") }, ..Default::default() },
+        ];
+        let report = run_rules(&rules, &file, "https://Files.Example.com/Report.PDF", Category::Document, 1);
+        assert!(report.outcomes.iter().all(|o| o.ok), "{:?}", report.outcomes);
+        let year = chrono::Local::now().format("%Y").to_string();
+        assert_eq!(
+            report.new_path,
+            Some(dir.join(Category::Document.label()).join(year).join("files.example.com-Report.PDF"))
+        );
+        assert!(report.new_path.unwrap().exists());
+    }
+
+    #[test]
+    fn placeholder_values_cannot_climb_out_of_the_folder() {
+        assert_eq!(fill("{host}", &[("host", "../../etc")]), "etc");
+        assert_eq!(fill("{name}", &[("name", "a/b\\c")]), "abc");
     }
 }

@@ -275,6 +275,7 @@ impl StewardGetApp {
                 .size(12.0)
                 .color(p.text_dim),
             );
+            self.overnight_suggestion(ui, &hours);
             if !hosts.is_empty() {
                 ui.add_space(5.0);
                 widgets::caption(ui, "FASTEST SOURCES", &p);
@@ -288,6 +289,55 @@ impl StewardGetApp {
                     });
                     widgets::share_bar(ui, (h.average_speed() / max) as f32, p.accent2, &p);
                     ui.add_space(2.0);
+                }
+            }
+        });
+    }
+}
+
+impl StewardGetApp {
+    /// Offers a queue that runs in the hours the connection is least used.
+    fn overnight_suggestion(&mut self, ui: &mut Ui, hours: &[u32; 24]) {
+        let p = self.palette;
+        let config = self.engine.config();
+        if config.queues.iter().any(|q| q.schedule.enabled) {
+            return;
+        }
+        let Some((start, _)) = stewardget_core::quietest_in(hours, 5) else { return };
+        let end = (start + 5) % 24;
+        ui.add_space(6.0);
+        ui.horizontal_wrapped(|ui| {
+            widgets::icon(ui, Icon::Clock, 15.0, p.accent2);
+            ui.label(
+                RichText::new(format!(
+                    "Your quietest hours are {start:02}:00 to {end:02}:00. Put big downloads in a queue that runs then."
+                ))
+                .size(12.0)
+                .color(p.text_dim),
+            );
+            if widgets::button(ui, ButtonKind::Tool, Some(Icon::Plus), "Create that queue", true, &p).clicked() {
+                let mut next = config.clone();
+                let id = next.queues.iter().map(|q| q.id).max().unwrap_or(0) + 1;
+                next.queues.push(stewardget_core::Queue {
+                    id,
+                    name: "Quiet hours".into(),
+                    schedule: stewardget_core::Schedule {
+                        enabled: true,
+                        start_minute: u16::from(start) * 60,
+                        stop_minute: Some(u16::from(end) * 60),
+                        days: [true; 7],
+                    },
+                    ..Default::default()
+                });
+                let green = p.green;
+                match self.engine.update_config(next) {
+                    Ok(()) => {
+                        self.toast("Queue “Quiet hours” created. Add downloads to it from the Add window.", green)
+                    }
+                    Err(e) => {
+                        let red = p.red;
+                        self.toast(e.to_string(), red);
+                    }
                 }
             }
         });

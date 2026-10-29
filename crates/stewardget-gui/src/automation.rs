@@ -193,7 +193,25 @@ impl StewardGetApp {
             }
             ui.horizontal_wrapped(|ui| {
                 ui.label(RichText::new("Add a step:").color(p.text_dim));
-                let presets: [(&str, PostRule); 4] = [
+                let presets: [(&str, PostRule); 6] = [
+                    (
+                        "Sort by kind and month",
+                        PostRule {
+                            name: "Sort".into(),
+                            action: PostAction::MoveTo {
+                                dir: draft.download_dir.join("{category}").join("{year}-{month}"),
+                            },
+                            ..Default::default()
+                        },
+                    ),
+                    (
+                        "Rename",
+                        PostRule {
+                            name: "Rename".into(),
+                            action: PostAction::Rename { template: "{name} ({host})".into() },
+                            ..Default::default()
+                        },
+                    ),
                     (
                         "Scan for malware",
                         PostRule { name: "Scan".into(), action: PostAction::Scan, ..Default::default() },
@@ -242,12 +260,13 @@ fn kind(a: &PostAction) -> usize {
         PostAction::MoveTo { .. } => 2,
         PostAction::Command { .. } => 3,
         PostAction::Tag { .. } => 4,
+        PostAction::Rename { .. } => 5,
     }
 }
 
 fn action_picker(ui: &mut Ui, i: usize, action: &mut PostAction) {
     let current = kind(action);
-    let names = ["Scan for malware", "Unpack", "Move to folder", "Run program", "Tag"];
+    let names = ["Scan for malware", "Unpack", "Move to folder", "Run program", "Tag", "Rename"];
     let mut chosen = current;
     egui::ComboBox::from_id_salt(("post-kind", i)).width(140.0).selected_text(names[current]).show_ui(ui, |ui| {
         for (k, name) in names.iter().enumerate() {
@@ -260,7 +279,8 @@ fn action_picker(ui: &mut Ui, i: usize, action: &mut PostAction) {
             1 => PostAction::Extract { delete_archive: false },
             2 => PostAction::MoveTo { dir: Default::default() },
             3 => PostAction::Command { command: String::new() },
-            _ => PostAction::Tag { tag: String::new() },
+            4 => PostAction::Tag { tag: String::new() },
+            _ => PostAction::Rename { template: "{name}".into() },
         };
     }
 }
@@ -290,6 +310,19 @@ fn action_params(ui: &mut Ui, p: &crate::theme::Palette, rule: &mut PostRule) {
                 }
             });
             *dir = text.into();
+            ui.label(
+                RichText::new("Folder names can use {category} {year} {month} {day} {host}.")
+                    .size(12.0)
+                    .color(p.text_dim),
+            );
+        }
+        PostAction::Rename { template } => {
+            ui.add(widgets::input(template).hint_text("{host}-{name}").desired_width(260.0));
+            ui.label(
+                RichText::new("{name} {ext} {host} {year} {month} {day}. The extension is kept.")
+                    .size(12.0)
+                    .color(p.text_dim),
+            );
         }
         PostAction::Command { command } => {
             ui.add(

@@ -57,6 +57,10 @@ enum Command {
     Stats,
     /// Show where settings live and what they are.
     Config,
+    /// Run StewardGet without a window: downloads, queues, schedules, the browser
+    /// API and MCP keep working. Stop it with Ctrl+C. Use `stewardget list`,
+    /// `add`, `pause`… from another terminal, or open the desktop app later.
+    Serve,
     /// List the network adapters that can be combined with `get --bind`.
     Links,
     /// Pause a download in the running app (`all` for every download).
@@ -210,6 +214,7 @@ fn main() -> ExitCode {
         }
         Command::Stats => stats().map(|()| ExitCode::SUCCESS),
         Command::Config => config().map(|()| ExitCode::SUCCESS),
+        Command::Serve => runtime().and_then(|rt| rt.block_on(serve())).map(|()| ExitCode::SUCCESS),
         Command::Links => {
             let found = stewardget_core::adapters();
             if found.is_empty() {
@@ -226,6 +231,43 @@ fn main() -> ExitCode {
         eprintln!("\x1b[31merror:\x1b[0m {e:#}");
         ExitCode::FAILURE
     })
+}
+
+/// Runs the engine until Ctrl+C, so a server or NAS can download on its own.
+async fn serve() -> anyhow::Result<()> {
+    let engine = stewardget_core::Engine::start(EngineOptions::persistent())?;
+    let config = engine.config();
+    println!(
+        "StewardGet is running without a window. Data folder: {}",
+        engine.data_dir().map_or("-".into(), |d| d.display().to_string())
+    );
+    if config.api_enabled {
+        println!("Local API on http://127.0.0.1:{}", config.api_port);
+    }
+    println!("Press Ctrl+C to stop; unfinished downloads continue next time.");
+    let mut last = String::new();
+    let mut tick = tokio::time::interval(std::time::Duration::from_secs(30));
+    loop {
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => break,
+            _ = tick.tick() => {
+                let s = engine.snapshot();
+                let line = format!(
+                    "{} active, {} waiting, {} done, {}",
+                    s.count(|st| st.is_active()),
+                    s.count(|st| st == stewardget_core::Status::Queued),
+                    s.stats.completed,
+                    stewardget_core::util::format_speed(s.speed)
+                );
+                if line != last {
+                    println!("{line}");
+                    last = line;
+                }
+            }
+        }
+    }
+    engine.shutdown().await;
+    Ok(())
 }
 
 fn runtime() -> anyhow::Result<tokio::runtime::Runtime> {

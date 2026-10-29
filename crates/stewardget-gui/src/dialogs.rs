@@ -269,6 +269,27 @@ impl StewardGetApp {
         let mut show_existing = None;
         let width = (ctx.content_rect().width() - 80.0).clamp(380.0, 640.0);
 
+        // Something finished earlier that looks like this: same link, or the
+        // same file name and size once the server has been asked.
+        self.history.refresh(&self.engine);
+        let earlier = if existing.is_empty() && links.len() == 1 {
+            let (name, size) = match dialog.checked() {
+                Some(Ok(info)) => (Some(info.file_name), info.size),
+                _ => (None, None),
+            };
+            self.history
+                .entries()
+                .iter()
+                .find(|e| {
+                    e.status == stewardget_core::Status::Completed
+                        && (e.url == links[0]
+                            || (size.is_some() && e.size == size && name.as_deref() == Some(e.file_name.as_str())))
+                })
+                .cloned()
+        } else {
+            None
+        };
+
         let modal = modal("stewardget-add", &p).show(ctx, |ui| {
             ui.set_width(width);
             title(ui, &p, Icon::Download, "Add downloads");
@@ -324,6 +345,30 @@ impl StewardGetApp {
                             show_existing = Some(existing[0].id);
                         }
                     });
+                });
+            }
+
+            if let Some(e) = &earlier {
+                ui.add_space(5.0);
+                callout(ui, &p, p.accent2, Icon::Info, |ui| {
+                    let still_there = e.path.exists();
+                    let when = stewardget_core::util::format_relative(e.finished_at, stewardget_core::util::now_unix());
+                    let text = if still_there {
+                        format!(
+                            "You already downloaded “{}” {when}, and it is still in {}.",
+                            e.file_name,
+                            e.path.parent().map(|d| d.display().to_string()).unwrap_or_default()
+                        )
+                    } else {
+                        format!("You downloaded “{}” {when}, but the file has been moved or deleted.", e.file_name)
+                    };
+                    ui.add(egui::Label::new(RichText::new(text).color(p.text)).wrap());
+                    if still_there
+                        && widgets::button(ui, ButtonKind::Tool, Some(Icon::FolderOpen), "Show the file", true, &p)
+                            .clicked()
+                    {
+                        let _ = stewardget_core::util::reveal_in_file_manager(&e.path);
+                    }
                 });
             }
 
