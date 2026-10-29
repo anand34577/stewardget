@@ -968,6 +968,7 @@ fn random_token() -> String {
 impl StewardGetApp {
     /// MCP server for AI assistants, and a pointer to the command line.
     fn integrations_tab(&mut self, ui: &mut Ui, draft: &mut Config) {
+        self.media_tools_section(ui, draft);
         let p = self.palette;
         if draft.mcp_enabled && draft.mcp_token.is_none() {
             draft.mcp_token = Some(random_token());

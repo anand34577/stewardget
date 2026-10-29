@@ -45,11 +45,13 @@ mod error;
 pub mod extension;
 mod filename;
 mod fsio;
+mod ftp;
 mod history;
 mod hls;
 mod insight;
 mod limiter;
 pub mod mcp;
+mod media;
 mod model;
 mod net;
 mod probe;
@@ -74,6 +76,7 @@ pub use engine::{Engine, EngineOptions};
 pub use error::Error;
 pub use history::{History, HistoryEntry, HostSummary, host_of, quietest_in};
 pub use insight::{Fix, Insight, InsightContext, Kind as InsightKind, Tone as InsightTone, explain as explain_speed};
+pub use media::{MediaInfo, MediaOption, MediaPart, Mux, Stream as MuxStream, find_tool, merge as merge_media};
 pub use model::{
     ApiState, Capture, CaptureAction, DownloadId, DownloadOptions, DownloadView, EngineSnapshot, Event, ExtensionInfo,
     LinkInfo, NewDownload, SegmentView, Status,

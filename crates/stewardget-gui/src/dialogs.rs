@@ -194,6 +194,7 @@ impl AddDialog {
             user_agent: None,
             fallback_url: None,
             mirrors: stewardget_core::util::split_links(&self.mirrors),
+            mux: None,
         })
     }
 
@@ -260,6 +261,8 @@ impl StewardGetApp {
         let Some(mut dialog) = self.add.take() else { return };
         let p = self.palette;
         let (links, expanded) = dialog.links();
+        // Magnet links are for a torrent client; StewardGet hands them over.
+        let (magnets, links): (Vec<String>, Vec<String>) = links.into_iter().partition(|l| l.starts_with("magnet:"));
         self.run_link_check(&mut dialog, (links.len() == 1).then(|| &links[0]));
         let wanted: std::collections::HashSet<&str> = links.iter().map(String::as_str).collect();
         let existing: Vec<DownloadView> =
@@ -314,6 +317,31 @@ impl StewardGetApp {
                     text.push_str(&format!(" — limited to {MAX_LINKS}"));
                 }
                 ui.label(RichText::new(text).size(12.0).color(p.text_dim));
+            }
+
+            if !magnets.is_empty() {
+                ui.add_space(5.0);
+                callout(ui, &p, p.accent2, Icon::Info, |ui| {
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(format!(
+                                "{} magnet link{}: torrents are downloaded by a BitTorrent client, which StewardGet does not include. Your default torrent app can take {}.",
+                                magnets.len(),
+                                if magnets.len() == 1 { "" } else { "s" },
+                                if magnets.len() == 1 { "it" } else { "them" }
+                            ))
+                            .color(p.text),
+                        )
+                        .wrap(),
+                    );
+                    if widgets::button(ui, ButtonKind::Tool, Some(Icon::External), "Open in torrent app", true, &p)
+                        .clicked()
+                    {
+                        for m in &magnets {
+                            let _ = stewardget_core::util::open_url(m);
+                        }
+                    }
+                });
             }
 
             // Link info, as reported by the server.

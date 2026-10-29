@@ -110,6 +110,38 @@ impl StewardGetApp {
         });
     }
 
+    /// Where yt-dlp and ffmpeg are, and whether they were found.
+    pub fn media_tools_section(&mut self, ui: &mut Ui, draft: &mut Config) {
+        let p = self.palette;
+        let (ytdlp, ffmpeg) = self.engine.media_tools();
+        section(ui, &p, "Video and audio tools", |ui| {
+            for (name, found, path, help) in [
+                (
+                    "yt-dlp",
+                    ytdlp,
+                    &mut draft.ytdlp_path,
+                    "Finds the video and audio files behind a page (Tools › Video or audio from a page). StewardGet doesn't include it.",
+                ),
+                (
+                    "ffmpeg",
+                    ffmpeg,
+                    &mut draft.ffmpeg_path,
+                    "Joins separate picture and sound files into one video, without re-encoding.",
+                ),
+            ] {
+                row(ui, &p, name, help, |ui| {
+                    match &found {
+                        Some(f) => widgets::pill(ui, &format!("found: {}", f.display()), p.green),
+                        None => widgets::pill(ui, "not found", p.yellow),
+                    };
+                    let mut text = path.as_ref().map(|d| d.display().to_string()).unwrap_or_default();
+                    ui.add(widgets::input(&mut text).hint_text("location (optional)").desired_width(220.0));
+                    *path = Some(std::path::PathBuf::from(text.trim())).filter(|d| !d.as_os_str().is_empty());
+                });
+            }
+        });
+    }
+
     /// Rules that run on each finished file.
     pub fn actions_section(&mut self, ui: &mut Ui, draft: &mut Config) {
         let p = self.palette;

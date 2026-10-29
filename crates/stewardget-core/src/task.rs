@@ -18,7 +18,7 @@ use crate::limiter::RateLimiter;
 use crate::net::{LaneStat, Link, LinkPool};
 use crate::probe::{self, Probe};
 use crate::segment::{SegmentTable, UNBOUNDED};
-use crate::{Config, DownloadOptions, Error, ExistingFile, Status, filename, fsio, util};
+use crate::{Config, DownloadOptions, Error, ExistingFile, Status, filename, fsio, ftp, util};
 
 /// Bytes buffered per connection before a positional write.
 const WRITE_BUFFER: usize = 512 * 1024;
@@ -650,40 +650,17 @@ async fn fetch_segment(ctx: &WorkerCtx, idx: usize, lane: &Lane, url: &Url) -> R
         return Ok(());
     }
 
-    let mut req = lane.link.client.get(url.clone()).headers(ctx.headers_for(url));
-    if ctx.ranged {
-        req = req.header(header::RANGE, format!("bytes={offset}-{}", end - 1));
-        if let Some(etag) = &ctx.etag {
-            req = req.header(header::IF_RANGE, etag);
-        }
-    }
-    let resp = tokio::select! {
-        biased;
-        _ = ctx.stop.cancelled() => return Err(Error::Cancelled),
-        r = tokio::time::timeout(ctx.header_timeout, req.send()) => r.map_err(|_| Error::Timeout)??,
-    };
-    let status = resp.status();
-    if ctx.ranged {
-        match status {
-            StatusCode::PARTIAL_CONTENT => {
-                let start = resp
-                    .headers()
-                    .get(header::CONTENT_RANGE)
-                    .and_then(|v| v.to_str().ok())
-                    .and_then(probe::parse_content_range_start);
-                if start != Some(offset) {
-                    return Err(Error::RangeIgnored);
-                }
+    let mut stream: ftp::ByteStream = if url.scheme() == "ftp" {
+        tokio::select! {
+            biased;
+            _ = ctx.stop.cancelled() => return Err(Error::Cancelled),
+            r = tokio::time::timeout(ctx.header_timeout, ftp::open(url, offset, lane.link.address)) => {
+                r.map_err(|_| Error::Timeout)??
             }
-            StatusCode::OK if ctx.etag.is_some() => return Err(Error::RemoteChanged),
-            StatusCode::OK => return Err(Error::RangeIgnored),
-            _ => return Err(probe::http_error(&resp)),
         }
-    } else if !status.is_success() {
-        return Err(probe::http_error(&resp));
-    }
-
-    let mut stream = resp.bytes_stream();
+    } else {
+        open_http(ctx, lane, url, offset, end).await?
+    };
     let mut buf = Vec::with_capacity(WRITE_BUFFER);
     let mut buf_offset = offset;
     let result = loop {
@@ -695,7 +672,7 @@ async fn fetch_segment(ctx: &WorkerCtx, idx: usize, lane: &Lane, url: &Url) -> R
         let chunk = match next {
             Err(_) => break Err(Error::Timeout),
             Ok(None) => break Ok(false),
-            Ok(Some(Err(e))) => break Err(e.into()),
+            Ok(Some(Err(e))) => break Err(e),
             Ok(Some(Ok(chunk))) => chunk,
         };
         // Speed limits may make this wait a while; pausing must not.
@@ -753,6 +730,44 @@ async fn fetch_segment(ctx: &WorkerCtx, idx: usize, lane: &Lane, url: &Url) -> R
         Ok(false) => Err(Error::Network("connection closed early".into())),
         Err(e) => Err(e),
     }
+}
+
+/// Sends the ranged request for a segment and checks the answer.
+async fn open_http(ctx: &WorkerCtx, lane: &Lane, url: &Url, offset: u64, end: u64) -> Result<ftp::ByteStream, Error> {
+    let mut req = lane.link.client.get(url.clone()).headers(ctx.headers_for(url));
+    if ctx.ranged {
+        req = req.header(header::RANGE, format!("bytes={offset}-{}", end - 1));
+        if let Some(etag) = &ctx.etag {
+            req = req.header(header::IF_RANGE, etag);
+        }
+    }
+    let resp = tokio::select! {
+        biased;
+        _ = ctx.stop.cancelled() => return Err(Error::Cancelled),
+        r = tokio::time::timeout(ctx.header_timeout, req.send()) => r.map_err(|_| Error::Timeout)??,
+    };
+    let status = resp.status();
+    if ctx.ranged {
+        match status {
+            StatusCode::PARTIAL_CONTENT => {
+                let start = resp
+                    .headers()
+                    .get(header::CONTENT_RANGE)
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(probe::parse_content_range_start);
+                if start != Some(offset) {
+                    return Err(Error::RangeIgnored);
+                }
+            }
+            StatusCode::OK if ctx.etag.is_some() => return Err(Error::RemoteChanged),
+            StatusCode::OK => return Err(Error::RangeIgnored),
+            _ => return Err(probe::http_error(&resp)),
+        }
+    } else if !status.is_success() {
+        return Err(probe::http_error(&resp));
+    }
+
+    Ok(Box::pin(resp.bytes_stream().map(|r| r.map_err(Error::from))))
 }
 
 async fn flush(ctx: &WorkerCtx, idx: usize, offset: u64, buf: Vec<u8>) -> Result<Vec<u8>, Error> {

@@ -316,6 +316,10 @@ pub struct Config {
     /// What to do with each finished file: unpack, scan, move, run a program,
     /// tag. Rules run in order, in the background.
     pub post_actions: Vec<crate::PostRule>,
+    /// Where yt-dlp is, when it isn't on `PATH`.
+    pub ytdlp_path: Option<PathBuf>,
+    /// Where ffmpeg is, when it isn't on `PATH`; used to join video and audio.
+    pub ffmpeg_path: Option<PathBuf>,
 }
 
 fn look_zero() -> u8 {
@@ -389,6 +393,8 @@ impl Default for Config {
             multi_link: false,
             interfaces: Vec::new(),
             post_actions: Vec::new(),
+            ytdlp_path: None,
+            ffmpeg_path: None,
         }
     }
 }

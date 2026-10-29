@@ -84,6 +84,9 @@ pub struct DownloadOptions {
     /// original and the mirrors; one that fails or turns out to be a different
     /// file is dropped and the others finish the download.
     pub mirrors: Vec<String>,
+    /// Set when this file is one half of a video (picture or sound) that is
+    /// joined with its other half once both have arrived.
+    pub mux: Option<crate::Mux>,
 }
 
 /// A request to add a download.

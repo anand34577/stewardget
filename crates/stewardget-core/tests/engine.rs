@@ -663,7 +663,7 @@ async fn the_desktop_app_can_ask_before_browser_downloads_start() {
     // One bad link: nothing at all is handed over.
     assert!(
         engine
-            .capture_many(vec![capture("four.zip"), Capture { url: "ftp://x/y".into(), ..Default::default() }])
+            .capture_many(vec![capture("four.zip"), Capture { url: "gopher://x/y".into(), ..Default::default() }])
             .is_err()
     );
     assert_eq!(asked.lock().unwrap().len(), 1);
@@ -1054,4 +1054,130 @@ async fn the_tuner_adds_connections_while_the_speed_keeps_improving() {
     assert!(seen.iter().max().is_some_and(|&n| n > 4), "grows beyond the start: {seen:?}");
     assert_eq!(wait_for(&engine, id, Status::Completed, 60).await, Status::Completed);
     assert_eq!(std::fs::read(&engine.download(id).unwrap().path).unwrap(), *server.data);
+}
+
+/// A minimal FTP server (passive mode, REST) holding one file.
+async fn serve_ftp(data: Arc<Vec<u8>>, logins: Arc<AtomicUsize>) -> u16 {
+    use tokio::io::AsyncBufReadExt;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        loop {
+            let Ok((sock, _)) = listener.accept().await else { return };
+            let (data, logins) = (Arc::clone(&data), Arc::clone(&logins));
+            tokio::spawn(async move {
+                let mut io = tokio::io::BufReader::new(sock);
+                let (mut pasv, mut rest): (Option<TcpListener>, usize) = (None, 0);
+                io.get_mut().write_all(b"220 ready\r\n").await.unwrap();
+                loop {
+                    let mut line = String::new();
+                    if io.read_line(&mut line).await.unwrap_or(0) == 0 {
+                        return;
+                    }
+                    let (cmd, arg) = line.trim().split_once(' ').unwrap_or((line.trim(), ""));
+                    let out = match cmd {
+                        "USER" => "331 pass\r\n".to_owned(),
+                        "PASS" => {
+                            logins.fetch_add(1, Ordering::SeqCst);
+                            "230 ok\r\n".to_owned()
+                        }
+                        "TYPE" => "200 ok\r\n".to_owned(),
+                        "SIZE" => format!("213 {}\r\n", data.len()),
+                        "MDTM" => "213 20250101000000\r\n".to_owned(),
+                        "REST" => {
+                            rest = arg.parse().unwrap_or(0);
+                            "350 ok\r\n".to_owned()
+                        }
+                        "PASV" => {
+                            let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
+                            let p = l.local_addr().unwrap().port();
+                            pasv = Some(l);
+                            format!("227 Entering Passive Mode (127,0,0,1,{},{})\r\n", p / 256, p % 256)
+                        }
+                        "RETR" => {
+                            io.get_mut().write_all(b"150 go\r\n").await.unwrap();
+                            let (mut d, _) = pasv.take().unwrap().accept().await.unwrap();
+                            for chunk in data[rest.min(data.len())..].chunks(64 * 1024) {
+                                if d.write_all(chunk).await.is_err() {
+                                    break;
+                                }
+                            }
+                            drop(d);
+                            "226 done\r\n".to_owned()
+                        }
+                        "QUIT" => return,
+                        _ => "500 ?\r\n".to_owned(),
+                    };
+                    if io.get_mut().write_all(out.as_bytes()).await.is_err() {
+                        return;
+                    }
+                }
+            });
+        }
+    });
+    port
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn ftp_links_download_in_parallel_segments() {
+    let data = Arc::new(payload(6 * 1024 * 1024 + 11));
+    let logins = Arc::new(AtomicUsize::new(0));
+    let port = serve_ftp(Arc::clone(&data), Arc::clone(&logins)).await;
+    let dir = temp_dir("ftp");
+    let engine = Engine::start(EngineOptions::in_memory().with_config(config(&dir))).unwrap();
+    let id = engine.add(NewDownload::new(format!("ftp://127.0.0.1:{port}/pub/archive%20one.bin"))).unwrap();
+    assert_eq!(wait_for(&engine, id, Status::Completed, 60).await, Status::Completed);
+    let view = engine.download(id).unwrap();
+    assert_eq!(view.file_name, "archive one.bin");
+    assert_eq!(std::fs::read(&view.path).unwrap(), *data);
+    assert!(logins.load(Ordering::SeqCst) > 2, "several connections should have logged in");
+    assert!(view.resumable);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn video_and_audio_halves_are_downloaded_and_a_failed_join_keeps_both_files() {
+    use stewardget_core::{MediaInfo, MediaOption, MediaPart, MuxStream};
+    let video = serve(2 * 1024 * 1024, ServerOpts { ranges: true, ..Default::default() }).await;
+    let audio = serve(1024 * 1024 + 7, ServerOpts { ranges: true, ..Default::default() }).await;
+    let part = |url: &str, ext: &str, stream| MediaPart {
+        url: url.to_owned(),
+        headers: vec![("Accept-Encoding".into(), "gzip".into())],
+        ext: ext.to_owned(),
+        stream: Some(stream),
+        size: None,
+    };
+    let info = MediaInfo {
+        title: "Demo clip".into(),
+        source: "test",
+        options: vec![MediaOption {
+            label: "1080p".into(),
+            parts: vec![part(&video.url, "mp4", MuxStream::Video), part(&audio.url, "m4a", MuxStream::Audio)],
+            height: 1080,
+        }],
+    };
+    let dir = temp_dir("mux");
+    let engine = Engine::start(EngineOptions::in_memory().with_config(config(&dir))).unwrap();
+    let ids = match engine.add_media(&info, 0, None, None) {
+        Ok(ids) => ids,
+        Err(e) => {
+            // No ffmpeg on this machine: the choice must be refused with a clear reason.
+            assert!(e.to_string().contains("ffmpeg"), "{e}");
+            return;
+        }
+    };
+    assert_eq!(ids.len(), 2);
+    for id in &ids {
+        assert_eq!(wait_for(&engine, *id, Status::Completed, 30).await, Status::Completed);
+    }
+    // The payload isn't real media, so ffmpeg refuses; both files must survive with a note.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    loop {
+        let notes: Vec<String> = engine.history().iter().flat_map(|e| e.notes.clone()).collect();
+        if notes.iter().any(|n| n.contains("Could not join")) {
+            break;
+        }
+        assert!(tokio::time::Instant::now() < deadline, "no note about the failed join: {notes:?}");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(dir.join("Demo clip.video.mp4").exists() && dir.join("Demo clip.audio.m4a").exists());
 }

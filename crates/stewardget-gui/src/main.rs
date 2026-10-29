@@ -14,6 +14,7 @@ mod history;
 mod icons;
 mod insight;
 mod lanes;
+mod media;
 mod menubar;
 mod notify;
 mod overview;

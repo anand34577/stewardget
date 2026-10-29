@@ -166,6 +166,7 @@ pub struct StewardGetApp {
     pub category_dialog: Option<crate::categories::CategoryDialog>,
     /// The "find files on a web page" window.
     pub grab_dialog: Option<crate::grab::GrabDialog>,
+    pub media_dialog: Option<crate::media::MediaDialog>,
     /// Queue whose deletion is being confirmed.
     pub delete_queue: Option<QueueId>,
     /// "Keep running?" prompt after the close button; holds "remember my choice".
@@ -308,6 +309,7 @@ impl StewardGetApp {
             queue_dialog: None,
             category_dialog: None,
             grab_dialog: None,
+            media_dialog: None,
             delete_queue: None,
             close_prompt: None,
             quitting: false,
@@ -485,7 +487,7 @@ impl StewardGetApp {
             links.extend(
                 stewardget_core::util::split_links(&text)
                     .into_iter()
-                    .filter(|t| t.starts_with("http://") || t.starts_with("https://")),
+                    .filter(|t| ["http://", "https://", "ftp://", "magnet:"].iter().any(|s| t.starts_with(s))),
             );
         }
         if links.is_empty() {
@@ -1866,6 +1868,7 @@ impl eframe::App for StewardGetApp {
         self.queue_dialog(&ctx);
         self.category_dialog(&ctx);
         self.grab_dialog(&ctx);
+        self.media_dialog(&ctx);
         self.delete_queue_dialog(&ctx);
         self.close_prompt(&ctx);
         self.capture_window(&ctx);

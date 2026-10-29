@@ -6,6 +6,19 @@ All notable changes to StewardGet are listed here. The format follows
 
 ## [Unreleased]
 
+### Added (more sources and smarter automation)
+- **FTP**: `ftp://` links download in parallel, resumable segments like HTTP ones (passive mode, `REST`). Plain FTP is not encrypted; SFTP and FTPS are not supported.
+- **Video and audio from a page**: File › Video or audio from a page asks yt-dlp (if installed) what a page offers and downloads the direct files with StewardGet's own engine. Separate picture and sound files are joined without re-encoding by ffmpeg (if installed); if joining fails, both files are kept. DASH manifests (`.mpd`) made of single files are read directly; segmented manifests are not supported.
+- **Magnet links** are recognised and handed to your default torrent app. StewardGet has no BitTorrent engine of its own.
+- **Steps for finished files** gained Rename and folder/name templates (`{category}`, `{year}`, `{month}`, `{day}`, `{host}`, `{name}`, `{ext}`).
+- **Already downloaded?** The Add window says when the same link, or a file with the same name and size, finished earlier.
+- **Quiet hours**: the Overview suggests the least-used hours and creates a scheduled queue for them.
+- **MCP**: `search_history`, `history_summary`, `tag_download`, `add_downloads` and `grab_page` tools.
+- **Headless mode**: `stewardget serve` runs downloads, queues, schedules, the browser API and MCP without a window.
+
+### Fixed
+- Settings controls are aligned to the right edge and the page uses the full width.
+
 ### Added (speed and automation)
 - **Mirrors**: give a file several links; connections are spread over all of them. A mirror must answer a range request with the same size, and one that fails or serves something else is dropped without stopping the download. `stewardget get --mirror`.
 - **Several networks at once**: bind connections to Wi-Fi, Ethernet or a phone's hotspot together, with a switch and a speed cap per adapter and live speed per link on the Overview. `stewardget get --bind`, `stewardget links`.

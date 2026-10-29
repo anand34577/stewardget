@@ -54,6 +54,11 @@ impl StewardGetApp {
             self.grab_dialog = Some(crate::grab::GrabDialog::new(None));
             ui.close();
         }
+        if menu_item(ui, &p, Icon::Video, "Video or audio from a page…", true) {
+            let dir = self.engine.config().download_dir.display().to_string();
+            self.media_dialog = Some(crate::media::MediaDialog::new(None, dir));
+            ui.close();
+        }
         ui.separator();
         if menu_item(ui, &p, Icon::Import, "Import links…  Ctrl+O", true) {
             self.import_links();

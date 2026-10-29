@@ -1,7 +1,7 @@
 //! The engine: owns the queue, schedules downloads, samples speeds and
 //! persists state. Cheap to clone; every method is non-blocking.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, RwLock};
@@ -123,6 +123,8 @@ pub(crate) struct Inner {
     links: RwLock<Arc<LinkPool>>,
     /// Live numbers per link, by position in `links`.
     link_stats: Mutex<Vec<LinkStat>>,
+    /// Video/audio groups being joined right now.
+    muxing: Mutex<HashSet<String>>,
     global_limiter: Arc<RateLimiter>,
     /// Bandwidth shared by each queue's downloads ([`crate::Queue::speed_limit`]).
     queue_limiters: Mutex<HashMap<QueueId, Arc<RateLimiter>>>,
@@ -390,6 +392,7 @@ impl Engine {
             client: RwLock::new(build_client(&config)?),
             links: RwLock::new(Arc::new(build_pool(&config, &build_client(&config)?))),
             link_stats: Mutex::new(Vec::new()),
+            muxing: Mutex::new(HashSet::new()),
             global_limiter: Arc::new(RateLimiter::new(config.speed_limit)),
             queue_limiters: Mutex::new(HashMap::new()),
             scheduled_limit: AtomicBool::new(false),
@@ -1044,6 +1047,74 @@ impl Engine {
             .collect()
     }
 
+    /// Asks yt-dlp (or reads a DASH manifest) for what a page offers.
+    pub async fn inspect_media(&self, url: &str) -> Result<crate::MediaInfo, Error> {
+        let config = self.config();
+        let client = self.inner.client.read().unwrap().clone();
+        let ytdlp = crate::find_tool(config.ytdlp_path.as_deref(), "yt-dlp");
+        crate::media::inspect(&client, ytdlp.as_deref(), url.trim()).await
+    }
+
+    /// Where yt-dlp and ffmpeg were found, if anywhere.
+    pub fn media_tools(&self) -> (Option<PathBuf>, Option<PathBuf>) {
+        let config = self.config();
+        (
+            crate::find_tool(config.ytdlp_path.as_deref(), "yt-dlp"),
+            crate::find_tool(config.ffmpeg_path.as_deref(), "ffmpeg"),
+        )
+    }
+
+    /// Downloads one of the choices from [`Engine::inspect_media`]. A choice
+    /// with separate picture and sound becomes two downloads that are joined
+    /// when both are done.
+    pub fn add_media(
+        &self,
+        info: &crate::MediaInfo,
+        index: usize,
+        directory: Option<PathBuf>,
+        queue: Option<QueueId>,
+    ) -> Result<Vec<DownloadId>, Error> {
+        let option = info.options.get(index).ok_or(Error::NotFound)?;
+        if option.needs_merge() && self.media_tools().1.is_none() {
+            return Err(Error::Unsupported(
+                "joining video and audio needs ffmpeg, which isn't installed (for example `winget install ffmpeg`). Pick a choice with picture and sound in one file, or audio only".into(),
+            ));
+        }
+        let title = filename::sanitize(&info.title);
+        let group = util::random_token();
+        let out_ext = match option.parts.as_slice() {
+            [v, a] if v.ext == "mp4" && matches!(a.ext.as_str(), "m4a" | "mp4") => "mp4",
+            _ => "mkv",
+        };
+        let mut ids = Vec::new();
+        for part in &option.parts {
+            let (file_name, mux) = match part.stream {
+                Some(stream) => {
+                    let tag = if stream == crate::MuxStream::Video { "video" } else { "audio" };
+                    (
+                        format!("{title}.{tag}.{}", part.ext),
+                        Some(crate::Mux { group: group.clone(), stream, output: format!("{title}.{out_ext}") }),
+                    )
+                }
+                None => (format!("{title}.{}", part.ext), None),
+            };
+            let headers = part
+                .headers
+                .iter()
+                .filter(|(k, _)| !matches!(k.to_ascii_lowercase().as_str(), "accept-encoding" | "range" | "host"))
+                .cloned()
+                .collect();
+            let mut new = NewDownload::new(part.url.clone());
+            new.queue = queue;
+            new.options.file_name = Some(file_name);
+            new.options.directory = directory.clone();
+            new.options.headers = headers;
+            new.options.mux = mux;
+            ids.push(self.add(new)?);
+        }
+        Ok(ids)
+    }
+
     pub fn snapshot(&self) -> EngineSnapshot {
         let config = self.config();
         let st = self.inner.lock();
@@ -1346,6 +1417,7 @@ impl Inner {
 
     fn finish(self: &Arc<Self>, id: DownloadId, outcome: Outcome) {
         let config = self.config();
+        let mut mux_group = None;
         {
             let mut st = self.lock();
             let Some(pos) = st.items.iter().position(|i| i.rec.id == id) else { return };
@@ -1389,6 +1461,7 @@ impl Inner {
                     item.segments.clear();
                     self.set_status(item, Status::Completed);
                     completed = true;
+                    mux_group = item.rec.options.mux.as_ref().map(|m| m.group.clone());
                     if config.on_complete_command.is_some() || config.post_actions.iter().any(|r| r.enabled) {
                         after_command = Some((
                             config.on_complete_command.clone(),
@@ -1471,6 +1544,95 @@ impl Inner {
             }
         }
         self.schedule();
+        self.persist(false);
+        // After the state lock is released: joining looks at every download.
+        if let Some(group) = mux_group {
+            self.try_mux(group);
+        }
+    }
+
+    /// Once both halves of a video have arrived, joins them with ffmpeg.
+    fn try_mux(self: &Arc<Self>, group: String) {
+        let (video, audio, output) = {
+            let st = self.lock();
+            let parts: Vec<&Item> =
+                st.items.iter().filter(|i| i.rec.options.mux.as_ref().is_some_and(|m| m.group == group)).collect();
+            if parts.len() != 2 || parts.iter().any(|i| i.rec.status != Status::Completed) {
+                return;
+            }
+            let pick =
+                |s: crate::MuxStream| parts.iter().find(|i| i.rec.options.mux.as_ref().is_some_and(|m| m.stream == s));
+            let (Some(v), Some(a)) = (pick(crate::MuxStream::Video), pick(crate::MuxStream::Audio)) else { return };
+            let output = v.rec.options.mux.as_ref().map(|m| m.output.clone()).unwrap_or_default();
+            ((v.rec.id, v.rec.path.clone()), (a.rec.id, a.rec.path.clone()), output)
+        };
+        if !self.muxing.lock().unwrap().insert(group.clone()) {
+            return;
+        }
+        let ffmpeg = crate::find_tool(self.config().ffmpeg_path.as_deref(), "ffmpeg");
+        let inner = Arc::clone(self);
+        self.runtime.spawn_blocking(move || {
+            let dir = video.1.parent().map(Path::to_path_buf).unwrap_or_default();
+            let target = filename::unique_path(&dir, &filename::sanitize(&output), |p| p.exists());
+            let result = match &ffmpeg {
+                Some(ff) => crate::merge_media(ff, &video.1, &audio.1, &target).map_err(|e| e.to_string()),
+                None => Err("ffmpeg was not found; install it to join video and audio".to_owned()),
+            };
+            inner.muxing.lock().unwrap().remove(&group);
+            inner.finish_mux(video.0, audio.0, &video.1, &audio.1, &target, result);
+        });
+    }
+
+    fn finish_mux(
+        self: &Arc<Self>,
+        video_id: DownloadId,
+        audio_id: DownloadId,
+        video: &Path,
+        audio: &Path,
+        target: &Path,
+        result: Result<(), String>,
+    ) {
+        {
+            let mut st = self.lock();
+            match &result {
+                Ok(()) => {
+                    let _ = std::fs::remove_file(video);
+                    let _ = std::fs::remove_file(audio);
+                    let name = target.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                    let category = self.config().categorize(&name);
+                    if let Some(item) = st.items.iter_mut().find(|i| i.rec.id == video_id) {
+                        item.rec.path = target.to_path_buf();
+                        item.rec.file_name = name.clone();
+                        item.rec.category = category;
+                        item.rec.options.mux = None;
+                        item.rec.total = std::fs::metadata(target).ok().map(|m| m.len());
+                    }
+                    st.items.retain(|i| i.rec.id != audio_id);
+                    st.log.entries.retain(|e| e.id != audio_id);
+                    if let Some(e) = st.log.entries.iter_mut().find(|e| e.id == video_id) {
+                        e.path = target.to_path_buf();
+                        e.file_name = name;
+                        e.category = category;
+                        e.size = std::fs::metadata(target).ok().map(|m| m.len());
+                        e.notes = vec!["✓ Joined video and audio with ffmpeg".into()];
+                    }
+                }
+                Err(why) => {
+                    for id in [video_id, audio_id] {
+                        if let Some(e) = st.log.entries.iter_mut().find(|e| e.id == id) {
+                            e.notes =
+                                vec![format!("✗ Could not join video and audio: {why}. The two files were kept.")];
+                        }
+                    }
+                }
+            }
+            st.dirty = true;
+            st.log_dirty = true;
+            st.log_gen += 1;
+        }
+        if result.is_ok() {
+            self.emit(Event::Removed(audio_id));
+        }
         self.persist(false);
     }
 
@@ -1908,8 +2070,8 @@ fn parse_url(input: &str) -> Result<Url, Error> {
     });
     let url = url.map_err(|e| Error::InvalidUrl(format!("{input}: {e}")))?;
     match url.scheme() {
-        "http" | "https" if url.host().is_some() => Ok(url),
-        "http" | "https" => Err(Error::InvalidUrl(format!("{input}: missing host"))),
+        "http" | "https" | "ftp" if url.host().is_some() => Ok(url),
+        "http" | "https" | "ftp" => Err(Error::InvalidUrl(format!("{input}: missing host"))),
         other => Err(Error::InvalidUrl(format!("unsupported scheme `{other}`"))),
     }
 }
@@ -2004,7 +2166,8 @@ mod tests {
     #[test]
     fn urls() {
         assert_eq!(parse_url("example.com/a.zip").unwrap().as_str(), "https://example.com/a.zip");
-        assert!(parse_url("ftp://example.com/a").is_err());
+        assert!(parse_url("ftp://example.com/a").is_ok());
+        assert!(parse_url("gopher://example.com/a").is_err());
         assert!(parse_url("http://").is_err());
     }
 }

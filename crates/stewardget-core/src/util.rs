@@ -263,13 +263,16 @@ pub fn free_space(dir: &Path) -> Option<u64> {
 }
 
 /// Splits pasted text into links: one per line, or several on a line when
-/// each starts with `http://` or `https://`. Words after a link on the same
+/// each starts with `http://`, `https://`, `ftp://` or `magnet:`. Words after a link on the same
 /// line belong to it, so `https://x/Firefox Setup.exe` stays one link (with
 /// its spaces encoded) instead of becoming three.
 pub fn split_links(text: &str) -> Vec<String> {
     let has_scheme = |t: &str| {
         let lower = t.get(..8).unwrap_or(t).to_ascii_lowercase();
-        lower.starts_with("http://") || lower.starts_with("https://")
+        lower.starts_with("http://")
+            || lower.starts_with("https://")
+            || lower.starts_with("ftp://")
+            || lower.starts_with("magnet:")
     };
     let mut out = Vec::new();
     for line in text.lines() {
