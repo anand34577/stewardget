@@ -16,6 +16,7 @@ use url::Url;
 
 use crate::control::{ControlFile, meta_path, part_path};
 use crate::limiter::RateLimiter;
+use crate::net::{LaneView, Link, LinkPool, LinkView};
 use crate::model::{
     ApiState, Capture, CaptureAction, DownloadView, EngineSnapshot, Event, ExtensionInfo, LinkInfo, NewDownload,
     SegmentView,
@@ -118,6 +119,10 @@ pub(crate) struct Inner {
     store: Store,
     config: RwLock<Config>,
     client: RwLock<Client>,
+    /// Ways out to the network; several when adapters are bonded.
+    links: RwLock<Arc<LinkPool>>,
+    /// Live numbers per link, by position in `links`.
+    link_stats: Mutex<Vec<LinkStat>>,
     global_limiter: Arc<RateLimiter>,
     /// Bandwidth shared by each queue's downloads ([`crate::Queue::speed_limit`]).
     queue_limiters: Mutex<HashMap<QueueId, Arc<RateLimiter>>>,
@@ -146,6 +151,14 @@ pub(crate) struct Inner {
 
 type ShowHandler = Arc<dyn Fn() + Send + Sync>;
 type CaptureHandler = Arc<dyn Fn(Vec<NewDownload>) + Send + Sync>;
+
+/// Smoothed speed and history of one link.
+#[derive(Default)]
+struct LinkStat {
+    last_bytes: u64,
+    speed: f64,
+    history: VecDeque<f32>,
+}
 
 struct ApiRuntime {
     state: ApiState,
@@ -187,6 +200,9 @@ struct Item {
     retry_at: Option<Instant>,
     /// Bytes received when the user paused, shown until the task has stopped.
     frozen: Option<u64>,
+    /// Bytes each lane had carried at the last sample, and its smoothed speed.
+    lane_prev: Vec<u64>,
+    lane_speed: Vec<f64>,
 }
 
 struct Running {
@@ -218,6 +234,8 @@ impl Item {
             auto_retries: 0,
             retry_at: None,
             frozen: None,
+            lane_prev: Vec::new(),
+            lane_speed: Vec::new(),
         }
     }
 
@@ -286,7 +304,32 @@ impl Item {
                 .filter(|_| rec.status == Status::Queued)
                 .map(|t| t.saturating_duration_since(Instant::now()).as_secs_f64().ceil() as u64),
             retries: self.auto_retries,
+            lanes: self.lane_views(),
+            tuned_connections: self
+                .run
+                .as_ref()
+                .map(|r| r.shared.target_connections.load(Ordering::Relaxed))
+                .filter(|&n| n > 0),
         }
+    }
+
+    fn lane_views(&self) -> Vec<LaneView> {
+        let Some(run) = &self.run else { return Vec::new() };
+        let lanes = run.shared.lanes.lock().unwrap();
+        lanes
+            .iter()
+            .enumerate()
+            .map(|(i, l)| LaneView {
+                link: l.link.clone(),
+                host: l.host.clone(),
+                mirror: l.mirror,
+                bytes: l.bytes.load(Ordering::Relaxed),
+                speed: self.lane_speed.get(i).copied().unwrap_or(0.0),
+                workers: l.workers.load(Ordering::Relaxed),
+                failed: !l.is_alive(),
+                reason: l.reason.lock().unwrap().clone(),
+            })
+            .collect()
     }
 }
 
@@ -345,6 +388,8 @@ impl Engine {
         let inner = Arc::new(Inner {
             runtime,
             client: RwLock::new(build_client(&config)?),
+            links: RwLock::new(Arc::new(build_pool(&config, &build_client(&config)?))),
+            link_stats: Mutex::new(Vec::new()),
             global_limiter: Arc::new(RateLimiter::new(config.speed_limit)),
             queue_limiters: Mutex::new(HashMap::new()),
             scheduled_limit: AtomicBool::new(false),
@@ -918,10 +963,36 @@ impl Engine {
                 || old.insecure_tls != config.insecure_tls
                 || old.proxy != config.proxy
         };
+        let relink = {
+            let old = self.inner.config.read().unwrap();
+            rebuild
+                || old.multi_link != config.multi_link
+                || old.interfaces.iter().map(|l| (&l.address, l.enabled)).ne(config.interfaces.iter().map(|l| (&l.address, l.enabled)))
+        };
         let client = if rebuild { Some(build_client(&config)?) } else { None };
+        let pool = if relink {
+            let base = client.clone().unwrap_or_else(|| self.inner.client.read().unwrap().clone());
+            Some(build_pool(&config, &base))
+        } else {
+            None
+        };
         self.inner.store.save_config(&config)?;
         if let Some(client) = client {
             *self.inner.client.write().unwrap() = client;
+        }
+        match pool {
+            Some(pool) => {
+                *self.inner.links.write().unwrap() = Arc::new(pool);
+                self.inner.link_stats.lock().unwrap().clear();
+            }
+            None => {
+                // Only the caps changed: apply them without dropping connections.
+                for link in &self.inner.links.read().unwrap().links {
+                    if let Some(l) = config.interfaces.iter().find(|l| Some(l.address.as_str()) == link.address.map(|a| a.to_string()).as_deref()) {
+                        link.limiter.set_rate(l.limit);
+                    }
+                }
+            }
         }
         {
             // Downloads of a deleted queue join the main queue, and every
@@ -944,6 +1015,25 @@ impl Engine {
         }
         self.inner.schedule();
         Ok(())
+    }
+
+    /// The network links in use with their live speed. One entry (the default
+    /// connection) unless several adapters are bonded.
+    pub fn links(&self) -> Vec<LinkView> {
+        let pool = Arc::clone(&self.inner.links.read().unwrap());
+        let stats = self.inner.link_stats.lock().unwrap();
+        pool.links
+            .iter()
+            .enumerate()
+            .map(|(i, link)| LinkView {
+                label: link.label.clone(),
+                address: link.address.map(|a| a.to_string()),
+                speed: stats.get(i).map_or(0.0, |s| s.speed),
+                bytes: link.bytes.load(Ordering::Relaxed),
+                limit: link.limiter.rate(),
+                history: stats.get(i).map(|s| s.history.iter().copied().collect()).unwrap_or_default(),
+            })
+            .collect()
     }
 
     pub fn snapshot(&self) -> EngineSnapshot {
@@ -1225,6 +1315,7 @@ impl Inner {
             options: item.rec.options.clone(),
             config: self.config(),
             client: self.client.read().unwrap().clone(),
+            links: Arc::clone(&self.links.read().unwrap()),
             global_limiter: Arc::clone(&self.global_limiter),
             queue_limiter: self.queue_limiter(item.rec.queue),
             shared: Arc::clone(&shared),
@@ -1290,8 +1381,15 @@ impl Inner {
                     item.segments.clear();
                     self.set_status(item, Status::Completed);
                     completed = true;
-                    if let Some(command) = &config.on_complete_command {
-                        after_command = Some((command.clone(), item.rec.path.clone(), item.rec.url.clone()));
+                    if config.on_complete_command.is_some() || config.post_actions.iter().any(|r| r.enabled) {
+                        after_command = Some((
+                            config.on_complete_command.clone(),
+                            config.post_actions.clone(),
+                            item.rec.path.clone(),
+                            item.rec.url.clone(),
+                            item.rec.category,
+                            total,
+                        ));
                     }
                 }
                 // Interrupted by quitting: picked up again at the next start, unless
@@ -1350,12 +1448,54 @@ impl Inner {
                 cleanup_files(&rec, delete_file);
                 self.emit(Event::Removed(id));
             }
-            if let Some((command, path, url)) = after_command {
+            if let Some((command, rules, path, url, category, size)) = after_command {
                 // Best effort, in the background: a slow scanner mustn't hold up the queue.
-                self.runtime.spawn_blocking(move || util::run_after_download(&command, &path, &url));
+                let inner = Arc::clone(self);
+                self.runtime.spawn_blocking(move || {
+                    if let Some(command) = command {
+                        let _ = util::run_after_download(&command, &path, &url);
+                    }
+                    let report = crate::run_rules(&rules, &path, &url, category, size);
+                    if !report.outcomes.is_empty() || !report.tags.is_empty() {
+                        inner.apply_report(id, report);
+                    }
+                });
             }
         }
         self.schedule();
+        self.persist(false);
+    }
+
+    /// Records what the post-download rules did: the new place of a moved file,
+    /// tags and a line per step in the history.
+    fn apply_report(self: &Arc<Self>, id: DownloadId, report: crate::ActionReport) {
+        {
+            let mut st = self.lock();
+            let moved = report.new_path.clone();
+            if let (Some(path), Some(item)) = (&moved, st.items.iter_mut().find(|i| i.rec.id == id)) {
+                item.rec.path = path.clone();
+                item.rec.file_name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                st.dirty = true;
+            }
+            if let Some(entry) = st.log.entries.iter_mut().find(|e| e.id == id) {
+                if let Some(path) = &moved {
+                    entry.path = path.clone();
+                    entry.file_name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                }
+                for tag in report.tags {
+                    if !entry.tags.contains(&tag) {
+                        entry.tags.push(tag);
+                    }
+                }
+                entry.notes = report
+                    .outcomes
+                    .iter()
+                    .map(|o| format!("{} {}: {}", if o.ok { "✓" } else { "✗" }, o.rule, o.message))
+                    .collect();
+                st.log_dirty = true;
+                st.log_gen += 1;
+            }
+        }
         self.persist(false);
     }
 
@@ -1385,6 +1525,20 @@ impl Inner {
                     item.rec.downloaded = t.received();
                 }
             }
+            {
+                let lanes = run.shared.lanes.lock().unwrap();
+                item.lane_prev.resize(lanes.len(), 0);
+                item.lane_speed.resize(lanes.len(), 0.0);
+                for (i, lane) in lanes.iter().enumerate() {
+                    let bytes = lane.bytes.load(Ordering::Relaxed);
+                    let now_speed = bytes.saturating_sub(item.lane_prev[i]) as f64 / dt;
+                    item.lane_prev[i] = bytes;
+                    item.lane_speed[i] += SPEED_ALPHA * (now_speed - item.lane_speed[i]);
+                    if item.lane_speed[i] < 1.0 {
+                        item.lane_speed[i] = 0.0;
+                    }
+                }
+            }
             item.rec.total = run.shared.total().or(item.rec.total);
             item.rec.resumable = run.shared.resumable.load(Ordering::Relaxed);
             if item.rec.status == Status::Downloading {
@@ -1396,6 +1550,21 @@ impl Inner {
         }
         st.speed = speed_total;
         push_bounded(&mut st.history, speed_total as f32);
+        {
+            let pool = Arc::clone(&self.links.read().unwrap());
+            let mut stats = self.link_stats.lock().unwrap();
+            stats.resize_with(pool.links.len(), LinkStat::default);
+            for (link, stat) in pool.links.iter().zip(stats.iter_mut()) {
+                let bytes = link.bytes.load(Ordering::Relaxed);
+                let instant = bytes.saturating_sub(stat.last_bytes) as f64 / dt;
+                stat.last_bytes = bytes;
+                stat.speed += SPEED_ALPHA * (instant - stat.speed);
+                if stat.speed < 1.0 {
+                    stat.speed = 0.0;
+                }
+                push_bounded(&mut stat.history, stat.speed as f32);
+            }
+        }
         if delta_total > 0 || transferring {
             st.stats.record_bytes(delta_total, now);
             if transferring {
@@ -1737,7 +1906,34 @@ fn parse_url(input: &str) -> Result<Url, Error> {
     }
 }
 
+/// The links downloads use: the enabled adapters that are really present when
+/// bonding is on, otherwise the default connection.
+fn build_pool(config: &Config, base: &Client) -> LinkPool {
+    let present = crate::net::adapters();
+    let mut links: Vec<Arc<Link>> = Vec::new();
+    if config.multi_link {
+        for l in config.interfaces.iter().filter(|l| l.enabled) {
+            let Ok(addr) = l.address.parse::<std::net::IpAddr>() else { continue };
+            if !present.iter().any(|a| a.address == addr) {
+                continue; // unplugged or switched off
+            }
+            if let Ok(client) = build_client_for(config, Some(addr)) {
+                let label = if l.name.trim().is_empty() { addr.to_string() } else { l.name.clone() };
+                links.push(Arc::new(Link::new(label, Some(addr), client, l.limit)));
+            }
+        }
+    }
+    if links.is_empty() {
+        links.push(Arc::new(Link::new("Default connection", None, base.clone(), 0)));
+    }
+    LinkPool { links }
+}
+
 fn build_client(config: &Config) -> Result<Client, Error> {
+    build_client_for(config, None)
+}
+
+fn build_client_for(config: &Config, local: Option<std::net::IpAddr>) -> Result<Client, Error> {
     let mut headers = HeaderMap::new();
     // We want the bytes exactly as stored; compression would break ranges.
     headers.insert(header::ACCEPT_ENCODING, HeaderValue::from_static("identity"));
@@ -1751,6 +1947,9 @@ fn build_client(config: &Config) -> Result<Client, Error> {
         .pool_max_idle_per_host(64)
         .redirect(reqwest::redirect::Policy::limited(16))
         .tls_danger_accept_invalid_certs(config.insecure_tls);
+    if let Some(addr) = local {
+        builder = builder.local_address(addr);
+    }
     if config.http1_only {
         builder = builder.http1_only();
     }
@@ -1778,6 +1977,7 @@ fn history_entry(rec: &Record, default_connections: usize) -> HistoryEntry {
         connections: rec.options.connections.unwrap_or(default_connections),
         checksum_verified: rec.checksum_verified,
         tags: Vec::new(),
+        notes: Vec::new(),
     }
 }
 

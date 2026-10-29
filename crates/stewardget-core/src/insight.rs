@@ -312,6 +312,8 @@ mod tests {
             awaiting_link: false,
             retry_in: None,
             retries: 0,
+            lanes: Vec::new(),
+            tuned_connections: None,
         }
     }
 

@@ -80,6 +80,10 @@ pub struct DownloadOptions {
     /// stable link first (a signed redirect expires within minutes) and this
     /// one only when that link no longer works (a one-time link).
     pub fallback_url: Option<String>,
+    /// Other addresses of the same file. Connections are spread over the
+    /// original and the mirrors; one that fails or turns out to be a different
+    /// file is dropped and the others finish the download.
+    pub mirrors: Vec<String>,
 }
 
 /// A request to add a download.
@@ -192,6 +196,11 @@ pub struct DownloadView {
     pub retry_in: Option<u64>,
     /// Automatic retries used so far.
     pub retries: u32,
+    /// Where connections go: one entry per (network link, source) pair.
+    pub lanes: Vec<crate::net::LaneView>,
+    /// Connections the auto-tuner is aiming for while it ramps up; equals
+    /// the configured count once it settled.
+    pub tuned_connections: Option<usize>,
 }
 
 /// What a server says about a link, before downloading it.

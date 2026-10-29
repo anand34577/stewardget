@@ -33,6 +33,7 @@
 //! # Ok(()) }
 //! ```
 
+mod actions;
 mod api;
 mod category;
 mod checksum;
@@ -50,6 +51,7 @@ mod insight;
 mod limiter;
 pub mod mcp;
 mod model;
+mod net;
 mod probe;
 pub mod remote;
 mod segment;
@@ -58,6 +60,7 @@ mod store;
 mod task;
 pub mod util;
 
+pub use actions::{Action as PostAction, Outcome as ActionOutcome, Report as ActionReport, Rule as PostRule, run_rules};
 pub use category::{Category, CustomCategory};
 pub use checksum::{Checksum, HashAlgo, hash_file};
 pub use config::{
@@ -73,6 +76,7 @@ pub use model::{
     ApiState, Capture, CaptureAction, DownloadId, DownloadOptions, DownloadView, EngineSnapshot, Event, ExtensionInfo,
     LinkInfo, NewDownload, SegmentView, Status,
 };
+pub use net::{Adapter, LaneView, LinkView, NetworkLink, adapters};
 pub use stats::{DayTotal, Stats};
 
 /// Number of speed samples kept per download and globally (one every 500 ms).

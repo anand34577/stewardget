@@ -976,3 +976,82 @@ async fn finished_downloads_stay_in_the_history_after_leaving_the_list() {
     assert_eq!(engine.remove_history(&[id]), 1);
     assert!(engine.history().is_empty());
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn mirrors_share_the_work_and_a_wrong_sized_one_is_ignored() {
+    let len = 8 * 1024 * 1024;
+    let opts = ServerOpts { ranges: true, throttle: 2 * 1024 * 1024, ..Default::default() };
+    let primary = serve(len, opts).await;
+    let mirror = serve(len, opts).await;
+    let other_file = serve(len + 5, opts).await;
+    let dir = temp_dir("mirrors");
+    let engine = Engine::start(EngineOptions::in_memory().with_config(config(&dir))).unwrap();
+    let id = engine
+        .add(NewDownload {
+            url: primary.url.clone(),
+            options: DownloadOptions {
+                mirrors: vec![mirror.url.clone(), other_file.url.clone(), "not a link".into()],
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .unwrap();
+
+    // While it runs, both usable sources carry traffic and the wrong one isn't there.
+    let mut best = 0;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    while engine.download(id).is_some_and(|d| !d.status.is_finished()) && tokio::time::Instant::now() < deadline {
+        if let Some(d) = engine.download(id) {
+            assert!(d.lanes.len() <= 2, "the wrong-sized mirror must not become a lane: {:?}", d.lanes);
+            best = best.max(d.lanes.iter().filter(|l| l.bytes > 0).count());
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(wait_for(&engine, id, Status::Completed, 30).await, Status::Completed);
+    assert_eq!(best, 2, "both the original and the mirror should have carried bytes");
+    let view = engine.download(id).unwrap();
+    assert_eq!(std::fs::read(&view.path).unwrap(), *primary.data);
+    assert!(mirror.ranged_requests.load(Ordering::SeqCst) > 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_failing_mirror_is_dropped_and_the_download_still_completes() {
+    let len = 6 * 1024 * 1024;
+    let primary = serve(len, ServerOpts { ranges: true, throttle: 2 * 1024 * 1024, ..Default::default() }).await;
+    // Answers the check, then refuses everything.
+    let mirror = serve(len, ServerOpts { ranges: true, busy_every: 1, ..Default::default() }).await;
+    let dir = temp_dir("badmirror");
+    let engine = Engine::start(EngineOptions::in_memory().with_config(config(&dir))).unwrap();
+    let id = engine
+        .add(NewDownload {
+            url: primary.url.clone(),
+            options: DownloadOptions { mirrors: vec![mirror.url.clone()], ..Default::default() },
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(wait_for(&engine, id, Status::Completed, 60).await, Status::Completed);
+    assert_eq!(std::fs::read(&engine.download(id).unwrap().path).unwrap(), *primary.data);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_tuner_adds_connections_while_the_speed_keeps_improving() {
+    // Each connection is limited, so more connections really are faster.
+    let opts = ServerOpts { ranges: true, throttle: 768 * 1024, ..Default::default() };
+    let server = serve(24 * 1024 * 1024, opts).await;
+    let dir = temp_dir("tuner");
+    let cfg = Config { connections: 16, ..config(&dir) };
+    let engine = Engine::start(EngineOptions::in_memory().with_config(cfg)).unwrap();
+    let id = engine.add(NewDownload::new(&server.url)).unwrap();
+    let mut seen = Vec::new();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    while engine.download(id).is_some_and(|d| !d.status.is_finished()) && tokio::time::Instant::now() < deadline {
+        if let Some(n) = engine.download(id).and_then(|d| d.tuned_connections) {
+            seen.push(n);
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(seen.first().is_some_and(|&n| n <= 6), "starts small: {seen:?}");
+    assert!(seen.iter().max().is_some_and(|&n| n > 4), "grows beyond the start: {seen:?}");
+    assert_eq!(wait_for(&engine, id, Status::Completed, 60).await, Status::Completed);
+    assert_eq!(std::fs::read(&engine.download(id).unwrap().path).unwrap(), *server.data);
+}

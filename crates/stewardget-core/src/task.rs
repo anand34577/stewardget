@@ -4,7 +4,7 @@ use std::fs::OpenOptions;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use futures_util::StreamExt;
 use reqwest::header::{self, HeaderMap, HeaderName, HeaderValue};
@@ -15,6 +15,7 @@ use url::Url;
 
 use crate::control::{self, ControlFile};
 use crate::limiter::RateLimiter;
+use crate::net::{LaneStat, Link, LinkPool};
 use crate::probe::{self, Probe};
 use crate::segment::{SegmentTable, UNBOUNDED};
 use crate::{Config, DownloadOptions, Error, ExistingFile, Status, filename, fsio, util};
@@ -42,6 +43,10 @@ pub(crate) struct Shared {
     /// Connections waiting to retry after an error (shown as "Reconnecting").
     pub retrying: AtomicUsize,
     pub limiter: RateLimiter,
+    /// Where connections go; see [`crate::net`].
+    pub lanes: Mutex<Vec<Arc<LaneStat>>>,
+    /// Connections the auto-tuner is currently allowing; `0` = not tuned.
+    pub target_connections: AtomicUsize,
 }
 
 impl Shared {
@@ -53,6 +58,8 @@ impl Shared {
             transferred: AtomicU64::new(0),
             retrying: AtomicUsize::new(0),
             limiter: RateLimiter::new(speed_limit),
+            lanes: Mutex::new(Vec::new()),
+            target_connections: AtomicUsize::new(0),
         }
     }
 
@@ -66,6 +73,8 @@ pub(crate) struct Job {
     pub options: DownloadOptions,
     pub config: Config,
     pub client: Client,
+    /// The ways out to the network (one, unless several adapters are in use).
+    pub links: Arc<LinkPool>,
     pub global_limiter: Arc<RateLimiter>,
     /// Shared by the downloads of this download's queue.
     pub queue_limiter: Arc<RateLimiter>,
@@ -198,7 +207,18 @@ async fn run_inner(job: &Job) -> Result<Outcome, Error> {
         let _ = ctl.save(&meta);
     }
 
-    let workers = if ranged { (remaining / min_split).clamp(1, connections as u64) as usize } else { 1 };
+    let mut max_workers = if ranged { (remaining / min_split).clamp(1, connections as u64) as usize } else { 1 };
+    let lanes = build_lanes(job, &probe, &headers, ranged).await;
+    // Every lane should get a connection, whatever the configured count.
+    if ranged {
+        max_workers = max_workers.max(lanes.len().min(64));
+    }
+    // Auto-tuning: begin modestly and grow while more connections still help.
+    let start = TUNE_START.max(lanes.len());
+    let tuned = ranged && job.config.auto_tune && job.options.connections.is_none() && max_workers > start;
+    let mut spawned = if tuned { start } else { max_workers };
+    job.shared.target_connections.store(if tuned { spawned } else { 0 }, Ordering::Relaxed);
+    *job.shared.lanes.lock().unwrap() = lanes.iter().map(|l| Arc::clone(&l.stat)).collect();
     let file = Arc::new(file);
     let ctx = Arc::new(WorkerCtx {
         client: job.client.clone(),
@@ -214,6 +234,7 @@ async fn run_inner(job: &Job) -> Result<Outcome, Error> {
         shared: Arc::clone(shared),
         global: Arc::clone(&job.global_limiter),
         queue: Arc::clone(&job.queue_limiter),
+        lanes,
         stop: job.cancel.child_token(),
         min_split,
         max_retries: job.config.max_retries,
@@ -222,12 +243,15 @@ async fn run_inner(job: &Job) -> Result<Outcome, Error> {
     });
 
     let mut set = JoinSet::new();
-    for _ in 0..workers {
-        set.spawn(worker(Arc::clone(&ctx)));
+    for n in 0..spawned {
+        set.spawn(worker(Arc::clone(&ctx), n));
     }
+    let mut tuner = Tuner::default();
     let mut tick = tokio::time::interval(CHECKPOINT_INTERVAL);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut first_error: Option<Error> = None;
+    let mut tune_tick = tokio::time::interval(TUNE_INTERVAL);
+    tune_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         tokio::select! {
             joined = set.join_next() => match joined {
@@ -245,6 +269,23 @@ async fn run_inner(job: &Job) -> Result<Outcome, Error> {
                 }
             },
             _ = tick.tick(), if ranged => checkpoint(&mut ctl, shared, &meta, &file).await,
+            _ = tune_tick.tick(), if tuned && spawned < max_workers => {
+                let moved = shared.transferred.load(Ordering::Relaxed);
+                if !ctx.stop.is_cancelled() && !shared.table.lock().unwrap().is_complete() {
+                    match tuner.step(moved, spawned, max_workers) {
+                        Tune::Grow(add) => {
+                            for n in spawned..spawned + add {
+                                set.spawn(worker(Arc::clone(&ctx), n));
+                            }
+                            spawned += add;
+                            shared.target_connections.store(spawned, Ordering::Relaxed);
+                        }
+                        // Growth stopped helping: this is the right count.
+                        Tune::Settled => max_workers = spawned,
+                        Tune::Wait => {}
+                    }
+                }
+            }
         }
     }
     drop(ctx);
@@ -421,6 +462,7 @@ struct WorkerCtx {
     shared: Arc<Shared>,
     global: Arc<RateLimiter>,
     queue: Arc<RateLimiter>,
+    lanes: Vec<Lane>,
     stop: CancellationToken,
     min_split: u64,
     max_retries: u32,
@@ -439,6 +481,21 @@ impl WorkerCtx {
 
     fn current_url(&self) -> Url {
         self.url.read().unwrap().clone()
+    }
+
+    /// Where `lane` fetches from.
+    fn lane_url(&self, lane: &Lane) -> Url {
+        lane.mirror_url.clone().unwrap_or_else(|| self.current_url())
+    }
+
+    fn alive_lanes(&self) -> usize {
+        self.lanes.iter().filter(|l| l.stat.is_alive()).count()
+    }
+
+    /// The first lane at or after `from` (wrapping) that is still alive.
+    fn alive_lane(&self, from: usize) -> usize {
+        let n = self.lanes.len();
+        (0..n).map(|i| (from + i) % n).find(|&i| self.lanes[i].stat.is_alive()).unwrap_or(from % n)
     }
 
     /// Request headers for `url`: cookies and passwords belong to the host
@@ -488,7 +545,17 @@ impl WorkerCtx {
 }
 
 /// One connection: claims segments (stealing work when idle) until none are left.
-async fn worker(ctx: Arc<WorkerCtx>) -> Result<(), Error> {
+/// `first_lane` spreads connections over the lanes; a connection moves to
+/// another lane when its own keeps failing.
+async fn worker(ctx: Arc<WorkerCtx>, first_lane: usize) -> Result<(), Error> {
+    let mut lane = ctx.alive_lane(first_lane);
+    ctx.lanes[lane].stat.workers.fetch_add(1, Ordering::Relaxed);
+    let result = work(&ctx, &mut lane).await;
+    ctx.lanes[lane].stat.workers.fetch_sub(1, Ordering::Relaxed);
+    result
+}
+
+async fn work(ctx: &Arc<WorkerCtx>, lane: &mut usize) -> Result<(), Error> {
     loop {
         if ctx.stop.is_cancelled() {
             return Ok(());
@@ -496,9 +563,16 @@ async fn worker(ctx: Arc<WorkerCtx>) -> Result<(), Error> {
         let Some(idx) = ctx.table().claim(ctx.min_split) else { return Ok(()) };
         let mut attempt = 0;
         loop {
+            if !ctx.lanes[*lane].stat.is_alive() {
+                let next = ctx.alive_lane(*lane);
+                ctx.lanes[*lane].stat.workers.fetch_sub(1, Ordering::Relaxed);
+                ctx.lanes[next].stat.workers.fetch_add(1, Ordering::Relaxed);
+                *lane = next;
+            }
+            let this = &ctx.lanes[*lane];
             let before = ctx.table().segments[idx].written;
-            let url = ctx.current_url();
-            match fetch_segment(&ctx, idx, &url).await {
+            let url = ctx.lane_url(this);
+            match fetch_segment(ctx, idx, this, &url).await {
                 Ok(()) => {
                     ctx.table().segments[idx].active = false;
                     break;
@@ -507,7 +581,7 @@ async fn worker(ctx: Arc<WorkerCtx>) -> Result<(), Error> {
                     ctx.table().release(idx);
                     return Ok(());
                 }
-                Err(e) if ctx.link_expired(&e) => match ctx.relink(&url).await {
+                Err(e) if this.mirror_url.is_none() && ctx.link_expired(&e) => match ctx.relink(&url).await {
                     Ok(()) => {} // try again with the fresh link
                     Err(Error::Cancelled) => {
                         ctx.table().release(idx);
@@ -523,6 +597,14 @@ async fn worker(ctx: Arc<WorkerCtx>) -> Result<(), Error> {
                     let progressed = ctx.table().segments[idx].written > before;
                     if progressed {
                         attempt = 0; // made progress: the connection is flaky, not dead
+                    }
+                    // Another lane can carry on where this one gave up: a mirror
+                    // that serves something else, a network link that went down.
+                    if ctx.alive_lanes() > 1 && (!e.is_retryable() || (!progressed && attempt >= 2)) {
+                        this.stat.failed.store(true, Ordering::Relaxed);
+                        *this.stat.reason.lock().unwrap() = Some(e.to_string());
+                        attempt = 0;
+                        continue; // the top of the loop moves to a live lane
                     }
                     if !e.is_retryable() || attempt >= ctx.max_retries {
                         ctx.table().release(idx);
@@ -554,7 +636,7 @@ async fn worker(ctx: Arc<WorkerCtx>) -> Result<(), Error> {
 
 /// Streams one segment into the file. Returns `Ok` once the segment's
 /// (possibly shrunk) end is reached.
-async fn fetch_segment(ctx: &WorkerCtx, idx: usize, url: &Url) -> Result<(), Error> {
+async fn fetch_segment(ctx: &WorkerCtx, idx: usize, lane: &Lane, url: &Url) -> Result<(), Error> {
     let (offset, end) = {
         let mut t = ctx.table();
         let s = &mut t.segments[idx];
@@ -568,7 +650,7 @@ async fn fetch_segment(ctx: &WorkerCtx, idx: usize, url: &Url) -> Result<(), Err
         return Ok(());
     }
 
-    let mut req = ctx.client.get(url.clone()).headers(ctx.headers_for(url));
+    let mut req = lane.link.client.get(url.clone()).headers(ctx.headers_for(url));
     if ctx.ranged {
         req = req.header(header::RANGE, format!("bytes={offset}-{}", end - 1));
         if let Some(etag) = &ctx.etag {
@@ -622,6 +704,7 @@ async fn fetch_segment(ctx: &WorkerCtx, idx: usize, url: &Url) -> Result<(), Err
             _ = ctx.stop.cancelled() => break Err(Error::Cancelled),
             _ = async {
                 ctx.shared.limiter.acquire(chunk.len()).await;
+                lane.link.limiter.acquire(chunk.len()).await;
                 ctx.queue.acquire(chunk.len()).await;
                 ctx.global.acquire(chunk.len()).await;
             } => {}
@@ -636,6 +719,8 @@ async fn fetch_segment(ctx: &WorkerCtx, idx: usize, url: &Url) -> Result<(), Err
             (take, s.cursor() >= s.end)
         };
         ctx.shared.transferred.fetch_add(take as u64, Ordering::Relaxed);
+        lane.stat.bytes.fetch_add(take as u64, Ordering::Relaxed);
+        lane.link.bytes.fetch_add(take as u64, Ordering::Relaxed);
         buf.extend_from_slice(&chunk[..take]);
 
         if buf.len() >= WRITE_BUFFER || reached_end {
@@ -676,6 +761,150 @@ async fn flush(ctx: &WorkerCtx, idx: usize, offset: u64, buf: Vec<u8>) -> Result
     ctx.table().segments[idx].written += len;
     buf.clear();
     Ok(buf)
+}
+
+/// Connections a download starts with when auto-tuning.
+const TUNE_START: usize = 4;
+/// How often the tuner looks at the speed.
+const TUNE_INTERVAL: Duration = Duration::from_millis(1500);
+/// A step must gain at least this much to be worth another one.
+const TUNE_GAIN: f64 = 1.10;
+/// How long a mirror gets to answer the check before being skipped.
+const MIRROR_CHECK: Duration = Duration::from_secs(10);
+
+/// One network link talking to one source.
+pub(crate) struct Lane {
+    pub link: Arc<Link>,
+    /// `None` for the file's own address (which may be refreshed), otherwise a mirror.
+    pub mirror_url: Option<Url>,
+    pub stat: Arc<LaneStat>,
+}
+
+/// Lanes of a download: every network link times every usable source. A
+/// mirror is only used once it answered a range request with the same size.
+async fn build_lanes(job: &Job, probe: &Probe, headers: &HeaderMap, ranged: bool) -> Vec<Lane> {
+    let mut mirrors: Vec<Url> = Vec::new();
+    if ranged && !job.options.mirrors.is_empty() {
+        let checker = job.links.links.first().map_or_else(|| job.client.clone(), |l| l.client.clone());
+        let mut seen = vec![job.url.clone(), probe.final_url.clone()];
+        let candidates: Vec<Url> = job
+            .options
+            .mirrors
+            .iter()
+            .filter_map(|m| Url::parse(m.trim()).ok())
+            .filter(|u| matches!(u.scheme(), "http" | "https") && u.host_str().is_some())
+            .filter(|u| {
+                let fresh = !seen.contains(u);
+                seen.push(u.clone());
+                fresh
+            })
+            .take(8)
+            .collect();
+        let checks = candidates.iter().map(|url| {
+            let (client, url) = (checker.clone(), url.clone());
+            let headers = if same_origin(&job.url, &url) { headers.clone() } else { without_credentials(headers.clone()) };
+            async move {
+                let result = tokio::time::timeout(MIRROR_CHECK, probe::probe(&client, &url, &headers)).await;
+                (url, result)
+            }
+        });
+        for (_url, result) in futures_util::future::join_all(checks).await {
+            if let Ok(Ok(p)) = result
+                && p.ranges
+                && crate::net::same_content(probe.total, p.total)
+            {
+                mirrors.push(p.final_url);
+            }
+        }
+    }
+    let sources: Vec<Option<Url>> = std::iter::once(None).chain(mirrors.into_iter().map(Some)).collect();
+    let mut lanes = Vec::new();
+    for source in &sources {
+        for link in &job.links.links {
+            let host = source.as_ref().unwrap_or(&probe.final_url).host_str().unwrap_or("").to_lowercase();
+            lanes.push(Lane {
+                stat: Arc::new(LaneStat::new(&link.label, &host, source.is_some())),
+                link: Arc::clone(link),
+                mirror_url: source.clone(),
+            });
+        }
+    }
+    lanes
+}
+
+/// What the auto-tuner decided.
+#[derive(Debug, PartialEq, Eq)]
+enum Tune {
+    /// Start this many more connections.
+    Grow(usize),
+    /// More connections no longer help.
+    Settled,
+    Wait,
+}
+
+/// Grows the connection count while the speed keeps improving. Servers and
+/// links differ: some give a single stream the whole line, others hand out a
+/// slice per connection. Measuring beats guessing.
+struct Tuner {
+    last_moved: u64,
+    last_at: Instant,
+    /// Speed seen before the latest step.
+    baseline: Option<f64>,
+    flat: u32,
+}
+
+impl Default for Tuner {
+    fn default() -> Self {
+        Self { last_moved: 0, last_at: Instant::now(), baseline: None, flat: 0 }
+    }
+}
+
+impl Tuner {
+    fn step(&mut self, moved: u64, spawned: usize, max: usize) -> Tune {
+        let now = Instant::now();
+        let secs = now.duration_since(self.last_at).as_secs_f64().max(0.05);
+        let speed = moved.saturating_sub(self.last_moved) as f64 / secs;
+        self.last_moved = moved;
+        self.last_at = now;
+        if speed < 1.0 {
+            return Tune::Wait; // nothing flowing yet
+        }
+        let better = self.baseline.is_none_or(|b| speed >= b * TUNE_GAIN);
+        if better {
+            self.baseline = Some(speed);
+            self.flat = 0;
+            return Tune::Grow((spawned / 2).max(2).min(max - spawned));
+        }
+        self.flat += 1;
+        if self.flat >= 2 { Tune::Settled } else { Tune::Wait }
+    }
+}
+
+#[cfg(test)]
+mod tune_tests {
+    use super::*;
+
+    #[test]
+    fn grows_until_the_speed_stops_improving() {
+        let mut t = Tuner::default();
+        t.last_at = Instant::now() - Duration::from_secs(1);
+        assert_eq!(t.step(0, 4, 16), Tune::Wait);
+        t.last_at = Instant::now() - Duration::from_secs(1);
+        assert_eq!(t.step(1_000_000, 4, 16), Tune::Grow(2)); // 1 MB/s, first reading
+        t.last_at = Instant::now() - Duration::from_secs(1);
+        assert_eq!(t.step(3_000_000, 6, 16), Tune::Grow(3)); // 2 MB/s: better
+        t.last_at = Instant::now() - Duration::from_secs(1);
+        assert_eq!(t.step(5_050_000, 9, 16), Tune::Wait); // 2.05 MB/s: flat once
+        t.last_at = Instant::now() - Duration::from_secs(1);
+        assert_eq!(t.step(7_100_000, 9, 16), Tune::Settled);
+    }
+
+    #[test]
+    fn never_exceeds_the_maximum() {
+        let mut t = Tuner::default();
+        t.last_at = Instant::now() - Duration::from_secs(1);
+        assert_eq!(t.step(1_000_000, 15, 16), Tune::Grow(1));
+    }
 }
 
 #[cfg(test)]

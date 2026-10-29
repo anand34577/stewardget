@@ -100,6 +100,7 @@ pub struct AddDialog {
     checksum: String,
     referrer: String,
     headers: String,
+    mirrors: String,
     advanced: bool,
     duplicates: Duplicates,
     pub queue: QueueId,
@@ -125,6 +126,7 @@ impl AddDialog {
             checksum: String::new(),
             referrer: String::new(),
             headers: String::new(),
+            mirrors: String::new(),
             advanced: false,
             duplicates: Duplicates::Skip,
             queue: MAIN_QUEUE,
@@ -191,6 +193,7 @@ impl AddDialog {
             referrer: Some(self.referrer.trim().to_owned()).filter(|r| !r.is_empty()),
             user_agent: None,
             fallback_url: None,
+            mirrors: stewardget_core::util::split_links(&self.mirrors),
         })
     }
 
@@ -200,6 +203,9 @@ impl AddDialog {
         }
         let options = self.options()?;
         let single = links.len() == 1;
+        if !single && !options.mirrors.is_empty() {
+            return Err("Mirrors belong to one file. Add these links one at a time, or clear the mirrors.".into());
+        }
         if !single && options.checksum.is_some() {
             return Err("A checksum belongs to one file. Add these links one at a time, or clear the checksum.".into());
         }
@@ -391,6 +397,15 @@ impl StewardGetApp {
                     ui.add(
                         widgets::input(&mut dialog.referrer)
                             .hint_text("page the link came from (optional)")
+                            .desired_width(f32::INFINITY),
+                    );
+                });
+                widgets::form_row(ui, LABEL_W, "Mirrors", &p, |ui| {
+                    ui.add(
+                        widgets::input_multiline(&mut dialog.mirrors)
+                            .hint_text("Other links to the same file, one per line.
+Connections are shared across all of them.")
+                            .desired_rows(2)
                             .desired_width(f32::INFINITY),
                     );
                 });
@@ -700,6 +715,7 @@ pub struct PropertiesDialog {
     referrer: String,
     user_agent: String,
     headers: String,
+    mirrors: String,
     error: Option<String>,
 }
 
@@ -718,6 +734,8 @@ impl PropertiesDialog {
             referrer: o.referrer.clone().unwrap_or_default(),
             user_agent: o.user_agent.clone().unwrap_or_default(),
             headers: o.headers.iter().map(|(k, v)| format!("{k}: {v}\n")).collect::<String>().trim_end().to_owned(),
+            mirrors: o.mirrors.join("
+"),
             error: None,
         }
     }
@@ -745,6 +763,7 @@ impl PropertiesDialog {
             checksum,
             referrer: Some(self.referrer.trim().to_owned()).filter(|r| !r.is_empty()),
             user_agent: Some(self.user_agent.trim().to_owned()).filter(|r| !r.is_empty()),
+            mirrors: stewardget_core::util::split_links(&self.mirrors),
             ..current.clone()
         })
     }
@@ -807,6 +826,14 @@ impl StewardGetApp {
             });
             widgets::form_row(ui, LABEL_W, "User agent", &p, |ui| {
                 ui.add(widgets::input(&mut d.user_agent).hint_text("default").desired_width(f32::INFINITY));
+            });
+            widgets::form_row(ui, LABEL_W, "Mirrors", &p, |ui| {
+                ui.add(
+                    widgets::input_multiline(&mut d.mirrors)
+                        .hint_text("Other links to the same file, one per line")
+                        .desired_rows(2)
+                        .desired_width(f32::INFINITY),
+                );
             });
             widgets::form_row(ui, LABEL_W, "Headers", &p, |ui| {
                 ui.add(

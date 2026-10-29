@@ -46,6 +46,9 @@ pub struct HistoryEntry {
     /// Free-form labels the user (or a rule) attached.
     #[serde(default)]
     pub tags: Vec<String>,
+    /// What the post-download actions did, one line each.
+    #[serde(default)]
+    pub notes: Vec<String>,
 }
 
 impl HistoryEntry {
@@ -195,6 +198,7 @@ mod tests {
             connections: 8,
             checksum_verified: false,
             tags: vec![],
+            notes: vec![],
         }
     }
 

@@ -304,6 +304,18 @@ pub struct Config {
     /// from before it existed read as 0).
     #[serde(default = "look_zero")]
     pub look_version: u8,
+    /// Start a download with a few connections and add more while the speed
+    /// still improves, up to `connections`. A download with its own connection
+    /// count is never tuned.
+    pub auto_tune: bool,
+    /// Spread connections over several network adapters at once (Wi-Fi plus
+    /// Ethernet, a phone's hotspot…), see `interfaces`.
+    pub multi_link: bool,
+    /// Adapters known to the user; used when `multi_link` is on.
+    pub interfaces: Vec<crate::NetworkLink>,
+    /// What to do with each finished file: unpack, scan, move, run a program,
+    /// tag. Rules run in order, in the background.
+    pub post_actions: Vec<crate::PostRule>,
 }
 
 fn look_zero() -> u8 {
@@ -373,6 +385,10 @@ impl Default for Config {
             hidden_columns: Vec::new(),
             progress_window: true,
             look_version: 1,
+            auto_tune: true,
+            multi_link: false,
+            interfaces: Vec::new(),
+            post_actions: Vec::new(),
         }
     }
 }

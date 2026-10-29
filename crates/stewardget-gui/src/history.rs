@@ -579,6 +579,7 @@ mod tests {
             connections: 4,
             checksum_verified: false,
             tags: vec!["a".into(), "b".into()],
+            notes: vec![],
         };
         let csv = to_csv(&[&e]);
         let row = csv.lines().nth(1).unwrap();
