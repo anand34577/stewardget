@@ -80,6 +80,11 @@ impl StewardGetApp {
             });
         });
         self.problem_bar(ui, &d);
+        if d.status.is_active() {
+            ui.add_space(4.0);
+            self.insight_card(ui, &d);
+            self.lanes_card(ui, &d);
+        }
         ui.add_space(6.0);
 
         let wide = ui.available_width() > 760.0;
@@ -104,9 +109,9 @@ impl StewardGetApp {
         } else {
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                 self.map_block(ui, &d, 90.0);
-                ui.add_space(8.0);
+                ui.add_space(5.0);
                 self.info_grid(ui, &d);
-                ui.add_space(8.0);
+                ui.add_space(5.0);
                 self.speed_block(ui, &d, 120.0);
             });
         }
@@ -402,7 +407,7 @@ impl StewardGetApp {
                 }
                 _ => "The speed graph appears while downloading.".to_owned(),
             };
-            ui.add_space(8.0);
+            ui.add_space(5.0);
             ui.label(RichText::new(text).color(p.text_dim));
             return;
         }

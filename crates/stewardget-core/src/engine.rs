@@ -1,7 +1,7 @@
 //! The engine: owns the queue, schedules downloads, samples speeds and
 //! persists state. Cheap to clone; every method is non-blocking.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, RwLock};
@@ -20,12 +20,13 @@ use crate::model::{
     ApiState, Capture, CaptureAction, DownloadView, EngineSnapshot, Event, ExtensionInfo, LinkInfo, NewDownload,
     SegmentView,
 };
+use crate::net::{LaneView, Link, LinkPool, LinkView};
 use crate::probe::Probe;
 use crate::store::{self, DownloadList, Record, Store};
 use crate::task::{self, Hooks, Job, Outcome, Shared};
 use crate::{
-    Category, Config, DownloadId, DownloadOptions, Error, ExistingFile, HISTORY_LEN, MAIN_QUEUE, QueueId,
-    SAMPLE_INTERVAL_MS, Stats, Status,
+    Category, Config, DownloadId, DownloadOptions, Error, ExistingFile, HISTORY_LEN, History, HistoryEntry, MAIN_QUEUE,
+    QueueId, SAMPLE_INTERVAL_MS, Stats, Status,
 };
 use crate::{filename, fsio, util};
 
@@ -118,6 +119,14 @@ pub(crate) struct Inner {
     store: Store,
     config: RwLock<Config>,
     client: RwLock<Client>,
+    /// Ways out to the network; several when adapters are bonded.
+    links: RwLock<Arc<LinkPool>>,
+    /// Live numbers per link, by position in `links`.
+    link_stats: Mutex<Vec<LinkStat>>,
+    /// Video/audio groups being joined right now.
+    muxing: Mutex<HashSet<String>>,
+    /// The monthly data cap stopped the downloads.
+    cap_hit: AtomicBool,
     global_limiter: Arc<RateLimiter>,
     /// Bandwidth shared by each queue's downloads ([`crate::Queue::speed_limit`]).
     queue_limiters: Mutex<HashMap<QueueId, Arc<RateLimiter>>>,
@@ -147,6 +156,14 @@ pub(crate) struct Inner {
 type ShowHandler = Arc<dyn Fn() + Send + Sync>;
 type CaptureHandler = Arc<dyn Fn(Vec<NewDownload>) + Send + Sync>;
 
+/// Smoothed speed and history of one link.
+#[derive(Default)]
+struct LinkStat {
+    last_bytes: u64,
+    speed: f64,
+    history: VecDeque<f32>,
+}
+
 struct ApiRuntime {
     state: ApiState,
     stop: Option<CancellationToken>,
@@ -161,6 +178,11 @@ struct State {
     /// Only the statistics changed (bytes counted); saved less often.
     stats_dirty: bool,
     stats: Stats,
+    /// Permanent log of finished downloads.
+    log: History,
+    log_dirty: bool,
+    /// Bumped whenever `log` changes, so front-ends can cache what they show.
+    log_gen: u64,
     speed: f64,
     history: VecDeque<f32>,
     /// Last local `(day, minute)` the scheduler looked at.
@@ -182,6 +204,9 @@ struct Item {
     retry_at: Option<Instant>,
     /// Bytes received when the user paused, shown until the task has stopped.
     frozen: Option<u64>,
+    /// Bytes each lane had carried at the last sample, and its smoothed speed.
+    lane_prev: Vec<u64>,
+    lane_speed: Vec<f64>,
 }
 
 struct Running {
@@ -213,6 +238,8 @@ impl Item {
             auto_retries: 0,
             retry_at: None,
             frozen: None,
+            lane_prev: Vec::new(),
+            lane_speed: Vec::new(),
         }
     }
 
@@ -281,7 +308,32 @@ impl Item {
                 .filter(|_| rec.status == Status::Queued)
                 .map(|t| t.saturating_duration_since(Instant::now()).as_secs_f64().ceil() as u64),
             retries: self.auto_retries,
+            lanes: self.lane_views(),
+            tuned_connections: self
+                .run
+                .as_ref()
+                .map(|r| r.shared.target_connections.load(Ordering::Relaxed))
+                .filter(|&n| n > 0),
         }
+    }
+
+    fn lane_views(&self) -> Vec<LaneView> {
+        let Some(run) = &self.run else { return Vec::new() };
+        let lanes = run.shared.lanes.lock().unwrap();
+        lanes
+            .iter()
+            .enumerate()
+            .map(|(i, l)| LaneView {
+                link: l.link.clone(),
+                host: l.host.clone(),
+                mirror: l.mirror,
+                bytes: l.bytes.load(Ordering::Relaxed),
+                speed: self.lane_speed.get(i).copied().unwrap_or(0.0),
+                workers: l.workers.load(Ordering::Relaxed),
+                failed: !l.is_alive(),
+                reason: l.reason.lock().unwrap().clone(),
+            })
+            .collect()
     }
 }
 
@@ -309,6 +361,20 @@ impl Engine {
             rec.category = config.categorize(&rec.file_name);
         }
         let stats = store.load_stats().unwrap_or_default();
+        // Lists from before the history existed: start it from what they hold.
+        let (log, log_dirty) = match store.load_history() {
+            Some(log) => (log, false),
+            None => {
+                let mut log = History::default();
+                let mut done: Vec<_> = list.downloads.iter().filter(|r| r.status == Status::Completed).collect();
+                done.sort_by_key(|r| r.finished_at.unwrap_or(r.added_at));
+                for rec in done {
+                    log.record(history_entry(rec, config.connections));
+                }
+                let seeded = !log.entries.is_empty();
+                (log, seeded)
+            }
+        };
 
         let items: Vec<Item> = list
             .downloads
@@ -326,6 +392,10 @@ impl Engine {
         let inner = Arc::new(Inner {
             runtime,
             client: RwLock::new(build_client(&config)?),
+            links: RwLock::new(Arc::new(build_pool(&config, &build_client(&config)?))),
+            link_stats: Mutex::new(Vec::new()),
+            muxing: Mutex::new(HashSet::new()),
+            cap_hit: AtomicBool::new(false),
             global_limiter: Arc::new(RateLimiter::new(config.speed_limit)),
             queue_limiters: Mutex::new(HashMap::new()),
             scheduled_limit: AtomicBool::new(false),
@@ -339,6 +409,9 @@ impl Engine {
                 dirty: false,
                 stats_dirty: false,
                 stats,
+                log,
+                log_dirty,
+                log_gen: 1,
                 speed: 0.0,
                 history: VecDeque::with_capacity(HISTORY_LEN),
                 schedule_minute: None,
@@ -896,10 +969,44 @@ impl Engine {
                 || old.insecure_tls != config.insecure_tls
                 || old.proxy != config.proxy
         };
+        let relink = {
+            let old = self.inner.config.read().unwrap();
+            rebuild
+                || old.multi_link != config.multi_link
+                || old
+                    .interfaces
+                    .iter()
+                    .map(|l| (&l.address, l.enabled))
+                    .ne(config.interfaces.iter().map(|l| (&l.address, l.enabled)))
+        };
         let client = if rebuild { Some(build_client(&config)?) } else { None };
+        let pool = if relink {
+            let base = client.clone().unwrap_or_else(|| self.inner.client.read().unwrap().clone());
+            Some(build_pool(&config, &base))
+        } else {
+            None
+        };
         self.inner.store.save_config(&config)?;
         if let Some(client) = client {
             *self.inner.client.write().unwrap() = client;
+        }
+        match pool {
+            Some(pool) => {
+                *self.inner.links.write().unwrap() = Arc::new(pool);
+                self.inner.link_stats.lock().unwrap().clear();
+            }
+            None => {
+                // Only the caps changed: apply them without dropping connections.
+                for link in &self.inner.links.read().unwrap().links {
+                    if let Some(l) = config
+                        .interfaces
+                        .iter()
+                        .find(|l| Some(l.address.as_str()) == link.address.map(|a| a.to_string()).as_deref())
+                    {
+                        link.limiter.set_rate(l.limit);
+                    }
+                }
+            }
         }
         {
             // Downloads of a deleted queue join the main queue, and every
@@ -924,6 +1031,198 @@ impl Engine {
         Ok(())
     }
 
+    /// The network links in use with their live speed. One entry (the default
+    /// connection) unless several adapters are bonded.
+    pub fn links(&self) -> Vec<LinkView> {
+        let pool = Arc::clone(&self.inner.links.read().unwrap());
+        let stats = self.inner.link_stats.lock().unwrap();
+        pool.links
+            .iter()
+            .enumerate()
+            .map(|(i, link)| LinkView {
+                label: link.label.clone(),
+                address: link.address.map(|a| a.to_string()),
+                speed: stats.get(i).map_or(0.0, |s| s.speed),
+                bytes: link.bytes.load(Ordering::Relaxed),
+                limit: link.limiter.rate(),
+                history: stats.get(i).map(|s| s.history.iter().copied().collect()).unwrap_or_default(),
+            })
+            .collect()
+    }
+
+    /// Data downloaded this month, the cap (`0` = none) and whether it stopped the downloads.
+    pub fn month_usage(&self) -> (u64, u64, bool) {
+        let used = self.inner.lock().stats.month_total(util::now_unix());
+        (used, self.config().monthly_cap, self.inner.cap_hit.load(Ordering::Relaxed))
+    }
+
+    /// Partial-download files that no download in the list owns, in the
+    /// download folders (they pile up after removing unfinished downloads).
+    pub fn leftovers(&self) -> Vec<crate::Leftover> {
+        let config = self.config();
+        let st = self.inner.lock();
+        let mut dirs: Vec<PathBuf> = vec![config.download_dir.clone()];
+        dirs.extend(config.category_dirs.values().cloned());
+        let mut owned = HashSet::new();
+        for item in &st.items {
+            if let Some(dir) = item.rec.path.parent() {
+                dirs.push(dir.to_path_buf());
+            }
+            if item.rec.status != Status::Completed {
+                owned.insert(part_path(&item.rec.path));
+                owned.insert(meta_path(&item.rec.path));
+            }
+        }
+        drop(st);
+        dirs.sort();
+        dirs.dedup();
+        // A folder inside another is read with it.
+        let roots: Vec<PathBuf> =
+            dirs.iter().filter(|d| !dirs.iter().any(|o| o != *d && d.starts_with(o))).cloned().collect();
+        crate::tools::find_leftovers(&roots, &owned)
+    }
+
+    /// Folders worth scanning for duplicates.
+    pub fn download_folders(&self) -> Vec<PathBuf> {
+        let config = self.config();
+        let mut dirs = vec![config.download_dir.clone()];
+        dirs.extend(config.category_dirs.values().cloned());
+        dirs.sort();
+        dirs.dedup();
+        dirs.iter().filter(|d| !dirs.iter().any(|o| o != *d && d.starts_with(o))).cloned().collect()
+    }
+
+    /// Writes a backup of settings (without access tokens), history, statistics and the list.
+    pub fn export_backup(&self, dest: &Path) -> Result<(), Error> {
+        let dir = self.data_dir().ok_or_else(|| Error::Unsupported("this engine keeps nothing on disk".into()))?;
+        // Make sure the files are current.
+        self.inner.persist_parts(true, true);
+        crate::tools::export_backup(&dir, &self.config(), dest)
+    }
+
+    /// Applies the settings of a backup; this computer's access tokens and
+    /// the folders' existence are left as they are.
+    pub fn import_settings(&self, src: &Path) -> Result<(), Error> {
+        let mut config = crate::tools::read_backup_settings(src)?;
+        let mine = self.config();
+        config.api_token = mine.api_token;
+        config.mcp_token = mine.mcp_token;
+        config.control_token = mine.control_token;
+        self.update_config(config)
+    }
+
+    /// A report for bug reports: versions, settings that matter, adapters,
+    /// tools and free space. No links, names or tokens.
+    pub fn diagnostics(&self) -> String {
+        let c = self.config();
+        let (ytdlp, ffmpeg) = self.media_tools();
+        let tool = |name: &str, p: Option<PathBuf>| match p {
+            Some(p) => format!("{name}: {} ({})", p.display(), crate::tool_version(&p, name).unwrap_or_else(|e| e)),
+            None => format!("{name}: not found"),
+        };
+        let adapters =
+            crate::adapters().iter().map(|a| format!("{} {}", a.name, a.address)).collect::<Vec<_>>().join(", ");
+        let (used, cap, hit) = self.month_usage();
+        let snap = self.snapshot();
+        let free = util::free_space(&c.download_dir).map_or("unknown".into(), util::format_bytes);
+        [
+            format!("StewardGet {} on {} {}", env!("CARGO_PKG_VERSION"), std::env::consts::OS, std::env::consts::ARCH),
+            format!("Downloads: {} in the list, {} active", snap.downloads.len(), snap.count(Status::is_active)),
+            format!("Free space in the download folder: {free}"),
+            format!(
+                "Connections {} (auto-tune {}), simultaneous {}, retries {}, HTTP/1.1 only {}",
+                c.connections, c.auto_tune, c.max_concurrent, c.max_retries, c.http1_only
+            ),
+            format!("Proxy: {}", if c.proxy.is_some() { "set" } else { "none" }),
+            format!(
+                "Several networks: {} ({} chosen)",
+                c.multi_link,
+                c.interfaces.iter().filter(|l| l.enabled).count()
+            ),
+            format!("Adapters: {}", if adapters.is_empty() { "none found".into() } else { adapters }),
+            format!("Links in use: {}", self.links().iter().map(|l| l.label.clone()).collect::<Vec<_>>().join(", ")),
+            tool("yt-dlp", ytdlp),
+            tool("ffmpeg", ffmpeg),
+            format!("Steps after download: {}", c.post_actions.iter().filter(|r| r.enabled).count()),
+            format!(
+                "Monthly cap: {} used of {}{}",
+                util::format_bytes(used),
+                if cap == 0 { "no cap".into() } else { util::format_bytes(cap) },
+                if hit { " (reached)" } else { "" }
+            ),
+            format!("Browser API: {} on port {}", if c.api_enabled { "on" } else { "off" }, c.api_port),
+        ]
+        .join("\n")
+    }
+
+    /// Asks yt-dlp (or reads a DASH manifest) for what a page offers.
+    pub async fn inspect_media(&self, url: &str) -> Result<crate::MediaInfo, Error> {
+        let config = self.config();
+        let client = self.inner.client.read().unwrap().clone();
+        let ytdlp = crate::find_tool(config.ytdlp_path.as_deref(), "yt-dlp");
+        crate::media::inspect(&client, ytdlp.as_deref(), url.trim()).await
+    }
+
+    /// Where yt-dlp and ffmpeg were found, if anywhere.
+    pub fn media_tools(&self) -> (Option<PathBuf>, Option<PathBuf>) {
+        let config = self.config();
+        (
+            crate::find_tool(config.ytdlp_path.as_deref(), "yt-dlp"),
+            crate::find_tool(config.ffmpeg_path.as_deref(), "ffmpeg"),
+        )
+    }
+
+    /// Downloads one of the choices from [`Engine::inspect_media`]. A choice
+    /// with separate picture and sound becomes two downloads that are joined
+    /// when both are done.
+    pub fn add_media(
+        &self,
+        info: &crate::MediaInfo,
+        index: usize,
+        directory: Option<PathBuf>,
+        queue: Option<QueueId>,
+    ) -> Result<Vec<DownloadId>, Error> {
+        let option = info.options.get(index).ok_or(Error::NotFound)?;
+        if option.needs_merge() && self.media_tools().1.is_none() {
+            return Err(Error::Unsupported(
+                "joining video and audio needs ffmpeg, which isn't installed (for example `winget install ffmpeg`). Pick a choice with picture and sound in one file, or audio only".into(),
+            ));
+        }
+        let title = filename::sanitize(&info.title);
+        let group = util::random_token();
+        let out_ext = match option.parts.as_slice() {
+            [v, a] if v.ext == "mp4" && matches!(a.ext.as_str(), "m4a" | "mp4") => "mp4",
+            _ => "mkv",
+        };
+        let mut ids = Vec::new();
+        for part in &option.parts {
+            let (file_name, mux) = match part.stream {
+                Some(stream) => {
+                    let tag = if stream == crate::MuxStream::Video { "video" } else { "audio" };
+                    (
+                        format!("{title}.{tag}.{}", part.ext),
+                        Some(crate::Mux { group: group.clone(), stream, output: format!("{title}.{out_ext}") }),
+                    )
+                }
+                None => (format!("{title}.{}", part.ext), None),
+            };
+            let headers = part
+                .headers
+                .iter()
+                .filter(|(k, _)| !matches!(k.to_ascii_lowercase().as_str(), "accept-encoding" | "range" | "host"))
+                .cloned()
+                .collect();
+            let mut new = NewDownload::new(part.url.clone());
+            new.queue = queue;
+            new.options.file_name = Some(file_name);
+            new.options.directory = directory.clone();
+            new.options.headers = headers;
+            new.options.mux = mux;
+            ids.push(self.add(new)?);
+        }
+        Ok(ids)
+    }
+
     pub fn snapshot(&self) -> EngineSnapshot {
         let config = self.config();
         let st = self.inner.lock();
@@ -942,6 +1241,50 @@ impl Engine {
                 seen_secs: at.elapsed().as_secs(),
             }),
         }
+    }
+
+    /// The permanent log of finished downloads, oldest first.
+    pub fn history(&self) -> Vec<HistoryEntry> {
+        self.inner.lock().log.entries.clone()
+    }
+
+    /// Changes whenever [`Engine::history`] would return something different.
+    pub fn history_generation(&self) -> u64 {
+        self.inner.lock().log_gen
+    }
+
+    /// Forgets history entries (files stay). Returns how many were removed.
+    pub fn remove_history(&self, ids: &[DownloadId]) -> usize {
+        let mut st = self.inner.lock();
+        let n = st.log.remove(ids);
+        if n > 0 {
+            st.log_dirty = true;
+            st.log_gen += 1;
+        }
+        n
+    }
+
+    pub fn clear_history(&self) {
+        let mut st = self.inner.lock();
+        st.log.clear();
+        st.log_dirty = true;
+        st.log_gen += 1;
+    }
+
+    /// Replaces the tags of a history entry.
+    pub fn tag_history(&self, id: DownloadId, tags: Vec<String>) -> bool {
+        let mut st = self.inner.lock();
+        let ok = st.log.set_tags(id, tags);
+        if ok {
+            st.log_dirty = true;
+            st.log_gen += 1;
+        }
+        ok
+    }
+
+    /// Reads the history without starting an engine or taking the lock.
+    pub fn peek_history(dir: &Path) -> Vec<HistoryEntry> {
+        store::peek_history(dir).map(|h| h.entries).unwrap_or_default()
     }
 
     /// True when StewardGet runs for the first time with this data directory (no
@@ -1111,6 +1454,9 @@ impl Inner {
         if self.shutting_down.load(Ordering::SeqCst) {
             return;
         }
+        if self.cap_hit.load(Ordering::Relaxed) {
+            return; // the monthly data cap is used up
+        }
         let (max, caps): (usize, HashMap<QueueId, usize>) = {
             let config = self.config.read().unwrap();
             (config.max_concurrent, config.queues.iter().map(|q| (q.id, q.max_concurrent)).collect())
@@ -1159,6 +1505,7 @@ impl Inner {
             options: item.rec.options.clone(),
             config: self.config(),
             client: self.client.read().unwrap().clone(),
+            links: Arc::clone(&self.links.read().unwrap()),
             global_limiter: Arc::clone(&self.global_limiter),
             queue_limiter: self.queue_limiter(item.rec.queue),
             shared: Arc::clone(&shared),
@@ -1181,6 +1528,7 @@ impl Inner {
 
     fn finish(self: &Arc<Self>, id: DownloadId, outcome: Outcome) {
         let config = self.config();
+        let mut mux_group = None;
         {
             let mut st = self.lock();
             let Some(pos) = st.items.iter().position(|i| i.rec.id == id) else { return };
@@ -1224,8 +1572,16 @@ impl Inner {
                     item.segments.clear();
                     self.set_status(item, Status::Completed);
                     completed = true;
-                    if let Some(command) = &config.on_complete_command {
-                        after_command = Some((command.clone(), item.rec.path.clone(), item.rec.url.clone()));
+                    mux_group = item.rec.options.mux.as_ref().map(|m| m.group.clone());
+                    if config.on_complete_command.is_some() || config.post_actions.iter().any(|r| r.enabled) {
+                        after_command = Some((
+                            config.on_complete_command.clone(),
+                            config.post_actions.clone(),
+                            item.rec.path.clone(),
+                            item.rec.url.clone(),
+                            item.rec.category,
+                            total,
+                        ));
                     }
                 }
                 // Interrupted by quitting: picked up again at the next start, unless
@@ -1267,6 +1623,12 @@ impl Inner {
                 }
             }
 
+            if completed || failed {
+                let entry = history_entry(&st.items[pos].rec, config.connections);
+                st.log.record(entry);
+                st.log_dirty = true;
+                st.log_gen += 1;
+            }
             st.stats.record_bytes(late, now);
             st.stats.completed += u64::from(completed);
             st.stats.failed += u64::from(failed);
@@ -1278,13 +1640,158 @@ impl Inner {
                 cleanup_files(&rec, delete_file);
                 self.emit(Event::Removed(id));
             }
-            if let Some((command, path, url)) = after_command {
+            if let Some((command, rules, path, url, category, size)) = after_command {
                 // Best effort, in the background: a slow scanner mustn't hold up the queue.
-                self.runtime.spawn_blocking(move || util::run_after_download(&command, &path, &url));
+                let inner = Arc::clone(self);
+                self.runtime.spawn_blocking(move || {
+                    if let Some(command) = command {
+                        let _ = util::run_after_download(&command, &path, &url);
+                    }
+                    let report = crate::run_rules(&rules, &path, &url, category, size);
+                    if !report.outcomes.is_empty() || !report.tags.is_empty() {
+                        inner.apply_report(id, report);
+                    }
+                });
             }
         }
         self.schedule();
         self.persist(false);
+        // After the state lock is released: joining looks at every download.
+        if let Some(group) = mux_group {
+            self.try_mux(group);
+        }
+    }
+
+    /// Once both halves of a video have arrived, joins them with ffmpeg.
+    fn try_mux(self: &Arc<Self>, group: String) {
+        let (video, audio, output) = {
+            let st = self.lock();
+            let parts: Vec<&Item> =
+                st.items.iter().filter(|i| i.rec.options.mux.as_ref().is_some_and(|m| m.group == group)).collect();
+            if parts.len() != 2 || parts.iter().any(|i| i.rec.status != Status::Completed) {
+                return;
+            }
+            let pick =
+                |s: crate::MuxStream| parts.iter().find(|i| i.rec.options.mux.as_ref().is_some_and(|m| m.stream == s));
+            let (Some(v), Some(a)) = (pick(crate::MuxStream::Video), pick(crate::MuxStream::Audio)) else { return };
+            let output = v.rec.options.mux.as_ref().map(|m| m.output.clone()).unwrap_or_default();
+            ((v.rec.id, v.rec.path.clone()), (a.rec.id, a.rec.path.clone()), output)
+        };
+        if !self.muxing.lock().unwrap().insert(group.clone()) {
+            return;
+        }
+        let ffmpeg = crate::find_tool(self.config().ffmpeg_path.as_deref(), "ffmpeg");
+        let inner = Arc::clone(self);
+        self.runtime.spawn_blocking(move || {
+            let dir = video.1.parent().map(Path::to_path_buf).unwrap_or_default();
+            let target = filename::unique_path(&dir, &filename::sanitize(&output), |p| p.exists());
+            let result = match &ffmpeg {
+                Some(ff) => crate::merge_media(ff, &video.1, &audio.1, &target).map_err(|e| e.to_string()),
+                None => Err("ffmpeg was not found; install it to join video and audio".to_owned()),
+            };
+            inner.muxing.lock().unwrap().remove(&group);
+            inner.finish_mux(video.0, audio.0, &video.1, &audio.1, &target, result);
+        });
+    }
+
+    fn finish_mux(
+        self: &Arc<Self>,
+        video_id: DownloadId,
+        audio_id: DownloadId,
+        video: &Path,
+        audio: &Path,
+        target: &Path,
+        result: Result<(), String>,
+    ) {
+        {
+            let mut st = self.lock();
+            match &result {
+                Ok(()) => {
+                    let _ = std::fs::remove_file(video);
+                    let _ = std::fs::remove_file(audio);
+                    let name = target.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                    let category = self.config().categorize(&name);
+                    if let Some(item) = st.items.iter_mut().find(|i| i.rec.id == video_id) {
+                        item.rec.path = target.to_path_buf();
+                        item.rec.file_name = name.clone();
+                        item.rec.category = category;
+                        item.rec.options.mux = None;
+                        item.rec.total = std::fs::metadata(target).ok().map(|m| m.len());
+                    }
+                    st.items.retain(|i| i.rec.id != audio_id);
+                    st.log.entries.retain(|e| e.id != audio_id);
+                    if let Some(e) = st.log.entries.iter_mut().find(|e| e.id == video_id) {
+                        e.path = target.to_path_buf();
+                        e.file_name = name;
+                        e.category = category;
+                        e.size = std::fs::metadata(target).ok().map(|m| m.len());
+                        e.notes = vec!["✓ Joined video and audio with ffmpeg".into()];
+                    }
+                }
+                Err(why) => {
+                    for id in [video_id, audio_id] {
+                        if let Some(e) = st.log.entries.iter_mut().find(|e| e.id == id) {
+                            e.notes =
+                                vec![format!("✗ Could not join video and audio: {why}. The two files were kept.")];
+                        }
+                    }
+                }
+            }
+            st.dirty = true;
+            st.log_dirty = true;
+            st.log_gen += 1;
+        }
+        if result.is_ok() {
+            self.emit(Event::Removed(audio_id));
+        }
+        self.persist(false);
+    }
+
+    /// Records what the post-download rules did: the new place of a moved file,
+    /// tags and a line per step in the history.
+    fn apply_report(self: &Arc<Self>, id: DownloadId, report: crate::ActionReport) {
+        {
+            let mut st = self.lock();
+            let moved = report.new_path.clone();
+            if let (Some(path), Some(item)) = (&moved, st.items.iter_mut().find(|i| i.rec.id == id)) {
+                item.rec.path = path.clone();
+                item.rec.file_name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                st.dirty = true;
+            }
+            if let Some(entry) = st.log.entries.iter_mut().find(|e| e.id == id) {
+                if let Some(path) = &moved {
+                    entry.path = path.clone();
+                    entry.file_name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                }
+                for tag in report.tags {
+                    if !entry.tags.contains(&tag) {
+                        entry.tags.push(tag);
+                    }
+                }
+                entry.notes = report
+                    .outcomes
+                    .iter()
+                    .map(|o| format!("{} {}: {}", if o.ok { "✓" } else { "✗" }, o.rule, o.message))
+                    .collect();
+                st.log_dirty = true;
+                st.log_gen += 1;
+            }
+        }
+        self.persist(false);
+    }
+
+    /// Pauses everything once the month's data cap is used up, and lets
+    /// downloads start again when the cap is raised or a new month begins.
+    fn enforce_cap(self: &Arc<Self>) {
+        let cap = self.config.read().unwrap().monthly_cap;
+        let used = self.lock().stats.month_total(util::now_unix());
+        if cap > 0 && used >= cap {
+            if !self.cap_hit.swap(true, Ordering::Relaxed) {
+                Engine::from_inner(Arc::clone(self)).pause_all();
+            }
+        } else if self.cap_hit.swap(false, Ordering::Relaxed) {
+            self.schedule();
+        }
     }
 
     /// Updates speeds, histories and statistics. Called every sample interval.
@@ -1313,6 +1820,20 @@ impl Inner {
                     item.rec.downloaded = t.received();
                 }
             }
+            {
+                let lanes = run.shared.lanes.lock().unwrap();
+                item.lane_prev.resize(lanes.len(), 0);
+                item.lane_speed.resize(lanes.len(), 0.0);
+                for (i, lane) in lanes.iter().enumerate() {
+                    let bytes = lane.bytes.load(Ordering::Relaxed);
+                    let now_speed = bytes.saturating_sub(item.lane_prev[i]) as f64 / dt;
+                    item.lane_prev[i] = bytes;
+                    item.lane_speed[i] += SPEED_ALPHA * (now_speed - item.lane_speed[i]);
+                    if item.lane_speed[i] < 1.0 {
+                        item.lane_speed[i] = 0.0;
+                    }
+                }
+            }
             item.rec.total = run.shared.total().or(item.rec.total);
             item.rec.resumable = run.shared.resumable.load(Ordering::Relaxed);
             if item.rec.status == Status::Downloading {
@@ -1324,6 +1845,21 @@ impl Inner {
         }
         st.speed = speed_total;
         push_bounded(&mut st.history, speed_total as f32);
+        {
+            let pool = Arc::clone(&self.links.read().unwrap());
+            let mut stats = self.link_stats.lock().unwrap();
+            stats.resize_with(pool.links.len(), LinkStat::default);
+            for (link, stat) in pool.links.iter().zip(stats.iter_mut()) {
+                let bytes = link.bytes.load(Ordering::Relaxed);
+                let instant = bytes.saturating_sub(stat.last_bytes) as f64 / dt;
+                stat.last_bytes = bytes;
+                stat.speed += SPEED_ALPHA * (instant - stat.speed);
+                if stat.speed < 1.0 {
+                    stat.speed = 0.0;
+                }
+                push_bounded(&mut stat.history, stat.speed as f32);
+            }
+        }
         if delta_total > 0 || transferring {
             st.stats.record_bytes(delta_total, now);
             if transferring {
@@ -1393,7 +1929,7 @@ impl Inner {
     /// the statistics. Does file I/O: call it off the async threads when busy.
     fn persist_parts(&self, force: bool, stats: bool) {
         let _one_at_a_time = self.persist_lock.lock().unwrap();
-        let (list, stats) = {
+        let (list, stats, log) = {
             let mut st = self.lock();
             let list = (st.dirty || force).then(|| {
                 st.dirty = false;
@@ -1403,7 +1939,11 @@ impl Inner {
                 st.stats_dirty = false;
                 st.stats.clone()
             });
-            (list, stats)
+            let log = st.log_dirty.then(|| {
+                st.log_dirty = false;
+                st.log.clone()
+            });
+            (list, stats, log)
         };
         // Persisting is best-effort; the next cycle retries.
         if let Some(list) = list {
@@ -1411,6 +1951,9 @@ impl Inner {
         }
         if let Some(stats) = stats {
             let _ = self.store.save_stats(&stats);
+        }
+        if let Some(log) = log {
+            let _ = self.store.save_history(&log);
         }
     }
 }
@@ -1447,7 +1990,7 @@ impl Hooks for EngineHooks {
             let name = resolve_name(&rec.options, probe, &url);
             rec.category = config.categorize(&name);
             let dir = target_dir(&config, &rec.options, rec.category);
-            let overwrite = config.existing_file == ExistingFile::Overwrite;
+            let overwrite = rec.options.existing.unwrap_or(config.existing_file) == ExistingFile::Overwrite;
             // Re-adding a URL whose partial download is still on disk resumes it.
             let candidate = dir.join(&name);
             let resumable_here = !reserved.contains(&candidate)
@@ -1494,6 +2037,7 @@ async fn sampler(inner: std::sync::Weak<Inner>) {
         let now = Instant::now();
         inner.sample(now.duration_since(last).as_secs_f64().max(0.001));
         last = now;
+        inner.enforce_cap();
         inner.run_scheduler();
         // Picks up downloads whose automatic-retry pause is over.
         inner.schedule();
@@ -1652,13 +2196,40 @@ fn parse_url(input: &str) -> Result<Url, Error> {
     });
     let url = url.map_err(|e| Error::InvalidUrl(format!("{input}: {e}")))?;
     match url.scheme() {
-        "http" | "https" if url.host().is_some() => Ok(url),
-        "http" | "https" => Err(Error::InvalidUrl(format!("{input}: missing host"))),
+        "http" | "https" | "ftp" if url.host().is_some() => Ok(url),
+        "http" | "https" | "ftp" => Err(Error::InvalidUrl(format!("{input}: missing host"))),
         other => Err(Error::InvalidUrl(format!("unsupported scheme `{other}`"))),
     }
 }
 
+/// The links downloads use: the enabled adapters that are really present when
+/// bonding is on, otherwise the default connection.
+fn build_pool(config: &Config, base: &Client) -> LinkPool {
+    let present = crate::net::adapters();
+    let mut links: Vec<Arc<Link>> = Vec::new();
+    if config.multi_link {
+        for l in config.interfaces.iter().filter(|l| l.enabled) {
+            let Ok(addr) = l.address.parse::<std::net::IpAddr>() else { continue };
+            if !present.iter().any(|a| a.address == addr) {
+                continue; // unplugged or switched off
+            }
+            if let Ok(client) = build_client_for(config, Some(addr)) {
+                let label = if l.name.trim().is_empty() { addr.to_string() } else { l.name.clone() };
+                links.push(Arc::new(Link::new(label, Some(addr), client, l.limit)));
+            }
+        }
+    }
+    if links.is_empty() {
+        links.push(Arc::new(Link::new("Default connection", None, base.clone(), 0)));
+    }
+    LinkPool { links }
+}
+
 fn build_client(config: &Config) -> Result<Client, Error> {
+    build_client_for(config, None)
+}
+
+fn build_client_for(config: &Config, local: Option<std::net::IpAddr>) -> Result<Client, Error> {
     let mut headers = HeaderMap::new();
     // We want the bytes exactly as stored; compression would break ranges.
     headers.insert(header::ACCEPT_ENCODING, HeaderValue::from_static("identity"));
@@ -1672,6 +2243,9 @@ fn build_client(config: &Config) -> Result<Client, Error> {
         .pool_max_idle_per_host(64)
         .redirect(reqwest::redirect::Policy::limited(16))
         .tls_danger_accept_invalid_certs(config.insecure_tls);
+    if let Some(addr) = local {
+        builder = builder.local_address(addr);
+    }
     if config.http1_only {
         builder = builder.http1_only();
     }
@@ -1680,6 +2254,27 @@ fn build_client(config: &Config) -> Result<Client, Error> {
         builder = builder.proxy(proxy);
     }
     builder.build().map_err(|e| Error::Network(e.to_string()))
+}
+
+fn history_entry(rec: &Record, default_connections: usize) -> HistoryEntry {
+    HistoryEntry {
+        id: rec.id,
+        url: rec.url.clone(),
+        host: crate::host_of(&rec.url),
+        file_name: rec.file_name.clone(),
+        path: rec.path.clone(),
+        category: rec.category,
+        size: rec.total.or((rec.downloaded > 0).then_some(rec.downloaded)),
+        status: rec.status,
+        error: rec.error.clone(),
+        added_at: rec.added_at,
+        finished_at: rec.finished_at.unwrap_or_else(util::now_unix),
+        active_secs: rec.active_secs as u64,
+        connections: rec.options.connections.unwrap_or(default_connections),
+        checksum_verified: rec.checksum_verified,
+        tags: Vec::new(),
+        notes: Vec::new(),
+    }
 }
 
 #[cfg(test)]
@@ -1697,7 +2292,8 @@ mod tests {
     #[test]
     fn urls() {
         assert_eq!(parse_url("example.com/a.zip").unwrap().as_str(), "https://example.com/a.zip");
-        assert!(parse_url("ftp://example.com/a").is_err());
+        assert!(parse_url("ftp://example.com/a").is_ok());
+        assert!(parse_url("gopher://example.com/a").is_err());
         assert!(parse_url("http://").is_err());
     }
 }

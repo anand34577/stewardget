@@ -3,21 +3,28 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
+mod automation;
 mod autostart;
 mod capture;
 mod categories;
 mod details;
 mod dialogs;
 mod grab;
+mod history;
 mod icons;
+mod insight;
+mod lanes;
+mod media;
 mod menubar;
 mod notify;
+mod overview;
 mod progress;
 mod queues;
 mod settings;
 mod stats;
 mod table;
 mod theme;
+mod toolbox;
 mod tray;
 mod widgets;
 

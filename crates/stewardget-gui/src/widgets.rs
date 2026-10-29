@@ -254,6 +254,81 @@ pub fn day_bars(ui: &mut Ui, days: &[DayTotal], p: &Palette, height: f32) {
     }
 }
 
+/// Counts per hour of the day as bars; the busiest hour is highlighted.
+pub fn hour_bars(ui: &mut Ui, hours: &[u32; 24], p: &Palette, height: f32) {
+    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
+    let painter = ui.painter_at(rect.expand(4.0));
+    let chart = Rect::from_min_max(rect.min + vec2(4.0, 14.0), pos2(rect.max.x - 4.0, rect.max.y - 14.0));
+    let max = (*hours.iter().max().unwrap_or(&0)).max(1) as f32;
+    let slot = chart.width() / 24.0;
+    let hovered = response.hover_pos().map(|h| ((h.x - chart.left()) / slot).floor() as usize);
+    let busiest = hours.iter().enumerate().max_by_key(|(_, n)| **n).map(|(h, _)| h);
+    for (h, &n) in hours.iter().enumerate() {
+        let x = chart.left() + slot * (h as f32 + 0.5);
+        let bar_h = (n as f32 / max * chart.height()).max(if n > 0 { 3.0 } else { 1.0 });
+        let bar = Rect::from_center_size(pos2(x, chart.bottom() - bar_h / 2.0), vec2((slot * 0.7).max(2.0), bar_h));
+        let color =
+            if hovered == Some(h) || (busiest == Some(h) && n > 0) { p.accent2 } else { p.accent.gamma_multiply(0.7) };
+        painter.rect_filled(bar, CornerRadius::same(2), if n == 0 { p.track } else { color });
+        if h % 6 == 0 {
+            painter.text(
+                pos2(x, rect.bottom()),
+                Align2::CENTER_BOTTOM,
+                format!("{h:02}"),
+                FontId::proportional(10.5),
+                p.text_dim,
+            );
+        }
+        if hovered == Some(h) {
+            painter.text(
+                pos2(x, bar.top() - 3.0),
+                Align2::CENTER_BOTTOM,
+                format!("{n} · {h:02}:00"),
+                FontId::proportional(11.0),
+                p.text,
+            );
+        }
+    }
+}
+
+/// GitHub-style calendar: one column per week, one cell per day, shaded by
+/// bytes. `days` is oldest first and should end today.
+pub fn heatmap(ui: &mut Ui, days: &[DayTotal], p: &Palette) {
+    const GAP: f32 = 3.0;
+    // Weeks fill the card; cells stay square between 9 and 20 points.
+    let weeks = days.len().div_ceil(7) + 1;
+    let cell_size = ((ui.available_width() - 4.0) / weeks as f32 - GAP).clamp(9.0, 20.0);
+    let size = vec2(weeks as f32 * (cell_size + GAP), 7.0 * (cell_size + GAP));
+    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width().max(size.x), size.y), Sense::hover());
+    let painter = ui.painter_at(rect);
+    let max = days.iter().map(|d| d.bytes).max().unwrap_or(0).max(1) as f32;
+    // Weekday of the first day: day 0 of the epoch was a Thursday.
+    let first_dow = days.first().map_or(0, |d| (d.day + 3).rem_euclid(7)) as usize;
+    let hover = response.hover_pos();
+    let mut tip = None;
+    for (i, d) in days.iter().enumerate() {
+        let slot = first_dow + i;
+        let (col, row) = (slot / 7, slot % 7);
+        let cell = Rect::from_min_size(
+            rect.min + vec2(col as f32 * (cell_size + GAP), row as f32 * (cell_size + GAP)),
+            Vec2::splat(cell_size),
+        );
+        let color = if d.bytes == 0 {
+            p.track
+        } else {
+            lerp_color(p.accent.gamma_multiply(0.35), p.accent2, (d.bytes as f32 / max).sqrt())
+        };
+        painter.rect_filled(cell, CornerRadius::same(3), color);
+        if hover.is_some_and(|h| cell.expand(GAP / 2.0).contains(h)) {
+            painter.rect_stroke(cell, CornerRadius::same(3), Stroke::new(1.5, p.text), StrokeKind::Outside);
+            tip = Some(format!("{}  ·  {}", d.label(), format_bytes(d.bytes)));
+        }
+    }
+    if let Some(tip) = tip {
+        response.on_hover_text(tip);
+    }
+}
+
 /// Horizontal share bar.
 pub fn share_bar(ui: &mut Ui, fraction: f32, color: Color32, p: &Palette) {
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 6.0), Sense::hover());
@@ -512,7 +587,7 @@ pub fn card(p: &Palette) -> egui::Frame {
         .fill(p.card)
         .stroke(Stroke::new(1.0, p.border))
         .corner_radius(CornerRadius::same(10))
-        .inner_margin(egui::Margin::same(12))
+        .inner_margin(egui::Margin::same(9))
 }
 
 /// Small upper-case section caption.
@@ -549,12 +624,11 @@ pub fn section(ui: &mut Ui, text: &str, p: &Palette) -> bool {
 pub fn stat_tile(ui: &mut Ui, p: &Palette, label: &str, value: &str, caption_text: &str, color: Color32) {
     card(p).show(ui, |ui| {
         ui.set_min_width(ui.available_width());
-        ui.set_min_height(58.0);
         ui.label(egui::RichText::new(label).size(11.5).color(p.text_dim));
-        ui.label(egui::RichText::new(value).size(19.0).family(crate::theme::semi()).color(color));
-        if !caption_text.is_empty() {
-            ui.label(egui::RichText::new(caption_text).size(11.0).color(p.text_dim));
-        }
+        ui.label(egui::RichText::new(value).size(17.0).family(crate::theme::semi()).color(color));
+        // Always one line, so tiles side by side have the same height.
+        let caption_text = if caption_text.is_empty() { "\u{a0}" } else { caption_text };
+        ui.label(egui::RichText::new(caption_text).size(11.0).color(p.text_dim));
     });
 }
 
@@ -571,4 +645,19 @@ pub fn pill(ui: &mut Ui, text: &str, color: Color32) -> Response {
     ui.painter().rect_filled(rect, CornerRadius::same(255), color.gamma_multiply(0.15));
     ui.painter().galley(rect.center() - galley.size() / 2.0, galley, color);
     response
+}
+
+/// A small toggle chip: filled when on.
+pub fn chip(ui: &mut Ui, label: &str, on: bool, p: &Palette) -> Response {
+    let font = FontId::proportional(12.0);
+    let galley = ui.painter().layout_no_wrap(label.to_owned(), font, p.text);
+    let (rect, response) = ui.allocate_exact_size(galley.size() + vec2(16.0, 8.0), Sense::click());
+    let (fill, fg, stroke) = if on {
+        (p.accent, p.on_accent, Stroke::NONE)
+    } else {
+        (p.card, p.text_dim, Stroke::new(1.0, p.control_border))
+    };
+    ui.painter().rect(rect, CornerRadius::same(7), fill, stroke, egui::StrokeKind::Inside);
+    ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, label, FontId::proportional(12.0), fg);
+    response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }

@@ -40,7 +40,7 @@ pub async fn handle(engine: &Engine, message: Value) -> Option<Value> {
         "initialize" => Ok(initialize(&params)),
         "ping" => Ok(json!({})),
         "tools/list" => Ok(json!({ "tools": tools() })),
-        "tools/call" => Ok(call(engine, &params)),
+        "tools/call" => Ok(call(engine, &params).await),
         "resources/list" => Ok(json!({ "resources": [] })),
         "prompts/list" => Ok(json!({ "prompts": [] })),
         _ => Err((-32601, format!("method not found: {method}"))),
@@ -115,15 +115,60 @@ fn tools() -> Vec<Value> {
             &["kib_per_sec"],
             false,
         ),
+        tool(
+            "search_history",
+            "Search the permanent log of finished and failed downloads (name, link, site, folder, tags). Every word must match.",
+            json!({
+                "query": { "type": "string", "description": "Words to look for; empty lists the newest" },
+                "status": { "type": "string", "enum": ["completed", "failed"] },
+                "limit": { "type": "integer", "minimum": 1, "maximum": 100, "description": "Default 20" }
+            }),
+            &[],
+            true,
+        ),
+        tool(
+            "history_summary",
+            "What the history says: totals, busiest hours of the day, and the sites downloads came from with their average speed.",
+            json!({}),
+            &[],
+            true,
+        ),
+        tool(
+            "tag_download",
+            "Replace the tags of a finished download in the history.",
+            json!({ "id": { "type": "integer" }, "tags": { "type": "array", "items": { "type": "string" } } }),
+            &["id", "tags"],
+            false,
+        ),
+        tool(
+            "add_downloads",
+            "Start several http(s) links at once (up to 100).",
+            json!({ "urls": { "type": "array", "items": { "type": "string" } }, "folder": { "type": "string", "description": "Sub-folder of the download folder" } }),
+            &["urls"],
+            false,
+        ),
+        tool(
+            "grab_page",
+            "Find the files linked from a web page (and pages it links to, up to depth 2), optionally downloading every one found. Respects robots.txt.",
+            json!({
+                "url": { "type": "string" },
+                "extensions": { "type": "array", "items": { "type": "string" }, "description": "For example pdf or zip; empty = every known kind of file" },
+                "depth": { "type": "integer", "minimum": 0, "maximum": 2 },
+                "add": { "type": "boolean", "description": "Download what was found (up to 200 files). Default false: only list it." }
+            }),
+            &["url"],
+            false,
+        ),
         tool("get_status", "Overall speed, counts and lifetime totals.", json!({}), &[], true),
         tool("list_queues", "Download queues and their limits.", json!({}), &[], true),
     ]
 }
 
-fn call(engine: &Engine, params: &Value) -> Value {
+async fn call(engine: &Engine, params: &Value) -> Value {
     let name = params.get("name").and_then(Value::as_str).unwrap_or("");
     let args = params.get("arguments").cloned().unwrap_or(Value::Null);
-    match run(engine, name, &args) {
+    let outcome = if name == "grab_page" { grab_page(engine, &args).await } else { run(engine, name, &args) };
+    match outcome {
         Ok(value) => reply(&value, false),
         Err(message) => reply(&Value::String(message), true),
     }
@@ -193,6 +238,90 @@ fn run(engine: &Engine, name: &str, args: &Value) -> Result<Value, String> {
             engine.set_speed_limit(kib.saturating_mul(1024));
             Ok(json!(if kib == 0 { "speed limit removed".to_owned() } else { format!("limited to {kib} KiB/s") }))
         }
+        "search_history" => {
+            let query = text_of(args, "query").unwrap_or("");
+            let status = text_of(args, "status").map(str::to_ascii_lowercase);
+            let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(20).clamp(1, 100) as usize;
+            let history = crate::History { entries: engine.history() };
+            let list: Vec<Value> = history
+                .entries
+                .iter()
+                .rev()
+                .filter(|e| e.matches(query))
+                .filter(|e| status.as_deref().is_none_or(|s| e.status.label().eq_ignore_ascii_case(s)))
+                .take(limit)
+                .map(|e| {
+                    json!({
+                        "id": e.id,
+                        "file_name": e.file_name,
+                        "status": e.status.label().to_ascii_lowercase(),
+                        "size_bytes": e.size,
+                        "site": e.host,
+                        "url": e.url,
+                        "saved_to": e.path.display().to_string(),
+                        "finished_at_unix": e.finished_at,
+                        "average_speed_bytes_per_sec": e.average_speed().round(),
+                        "tags": e.tags,
+                        "notes": e.notes,
+                        "error": e.error,
+                    })
+                })
+                .collect();
+            Ok(json!(list))
+        }
+        "history_summary" => {
+            let h = crate::History { entries: engine.history() };
+            let done = h.entries.iter().filter(|e| e.status == Status::Completed).count();
+            let bytes: u64 = h.entries.iter().filter(|e| e.status == Status::Completed).filter_map(|e| e.size).sum();
+            let hours = h.by_hour(crate::util::local_offset_secs(crate::util::now_unix()));
+            let busiest = hours.iter().enumerate().max_by_key(|(_, n)| **n).filter(|(_, n)| **n > 0).map(|(i, _)| i);
+            Ok(json!({
+                "completed": done,
+                "failed": h.entries.len() - done,
+                "completed_bytes": bytes,
+                "busiest_hour_local": busiest,
+                "downloads_by_hour_local": hours,
+                "top_sites": h.top_hosts(8).iter().map(|s| json!({
+                    "site": s.host, "downloads": s.downloads, "bytes": s.bytes,
+                    "average_speed_bytes_per_sec": s.average_speed().round(),
+                })).collect::<Vec<_>>(),
+            }))
+        }
+        "tag_download" => {
+            let tags: Vec<String> = args
+                .get("tags")
+                .and_then(Value::as_array)
+                .ok_or("`tags` (array of strings) is required")?
+                .iter()
+                .filter_map(Value::as_str)
+                .map(|t| t.trim().to_owned())
+                .filter(|t| !t.is_empty())
+                .take(20)
+                .collect();
+            if engine.tag_history(id_of(args)?, tags) {
+                Ok(json!("tagged"))
+            } else {
+                Err("no such entry in the history".to_owned())
+            }
+        }
+        "add_downloads" => {
+            let urls = args.get("urls").and_then(Value::as_array).ok_or("`urls` (array of strings) is required")?;
+            let folder = match text_of(args, "folder") {
+                Some(f) => Some(sub_folder(&engine.config().download_dir, f)?),
+                None => None,
+            };
+            let mut ids = Vec::new();
+            let mut errors = Vec::new();
+            for url in urls.iter().filter_map(Value::as_str).take(100) {
+                let mut new = NewDownload::new(url);
+                new.options.directory = folder.clone();
+                match engine.add(new) {
+                    Ok(id) => ids.push(id),
+                    Err(e) => errors.push(format!("{url}: {e}")),
+                }
+            }
+            Ok(json!({ "added": ids, "errors": errors }))
+        }
         "get_status" => {
             let s = engine.snapshot();
             Ok(json!({
@@ -216,6 +345,39 @@ fn run(engine: &Engine, name: &str, args: &Value) -> Result<Value, String> {
         )),
         _ => Err(format!("unknown tool: {name}")),
     }
+}
+
+async fn grab_page(engine: &Engine, args: &Value) -> Result<Value, String> {
+    let url = text_of(args, "url").ok_or("`url` is required")?;
+    let options = crate::GrabOptions {
+        depth: args.get("depth").and_then(Value::as_u64).unwrap_or(0).min(2) as u8,
+        other_sites: false,
+        extensions: args
+            .get("extensions")
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(Value::as_str).map(str::to_owned).collect())
+            .unwrap_or_default(),
+    };
+    let found = engine.grab_links(url, &options).await.map_err(|e| e.to_string())?;
+    let add = args.get("add").and_then(Value::as_bool).unwrap_or(false);
+    let mut added = 0;
+    if add {
+        for (file, page) in found.files.iter().take(200) {
+            let mut new = NewDownload::new(file);
+            new.options.referrer = Some(page.clone());
+            if engine.add(new).is_ok() {
+                added += 1;
+            }
+        }
+    }
+    Ok(json!({
+        "pages_read": found.pages,
+        "files_found": found.files.len(),
+        "added": added,
+        "blocked_by_robots": found.blocked_by_robots,
+        "truncated": found.truncated,
+        "files": found.files.iter().take(200).map(|(f, _)| f).collect::<Vec<_>>(),
+    }))
 }
 
 /// A folder below the download folder: relative, no `..`.
@@ -280,6 +442,22 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(status["result"]["isError"], true);
+        engine.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn history_tools_work_on_an_empty_history() {
+        let engine = Engine::start(crate::EngineOptions::in_memory()).unwrap();
+        let call = |name: &str, args: Value| json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": { "name": name, "arguments": args } });
+        let found = handle(&engine, call("search_history", json!({ "query": "iso" }))).await.unwrap();
+        assert_eq!(found["result"]["isError"], false);
+        assert_eq!(found["result"]["content"][0]["text"], "[]");
+        let summary = handle(&engine, call("history_summary", json!({}))).await.unwrap();
+        assert_eq!(summary["result"]["isError"], false);
+        let tagged = handle(&engine, call("tag_download", json!({ "id": 5, "tags": ["x"] }))).await.unwrap();
+        assert_eq!(tagged["result"]["isError"], true);
+        let batch = handle(&engine, call("add_downloads", json!({ "urls": ["not a url"] }))).await.unwrap();
+        assert_eq!(batch["result"]["isError"], false);
         engine.shutdown().await;
     }
 }

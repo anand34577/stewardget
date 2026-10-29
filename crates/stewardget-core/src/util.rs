@@ -73,7 +73,7 @@ pub fn day_index(unix_secs: u64) -> i64 {
 }
 
 /// The local time zone's offset from UTC at that instant, in seconds.
-fn local_offset_secs(unix_secs: u64) -> i64 {
+pub fn local_offset_secs(unix_secs: u64) -> i64 {
     use chrono::{Offset, TimeZone};
     chrono::Local
         .timestamp_opt(unix_secs as i64, 0)
@@ -263,13 +263,16 @@ pub fn free_space(dir: &Path) -> Option<u64> {
 }
 
 /// Splits pasted text into links: one per line, or several on a line when
-/// each starts with `http://` or `https://`. Words after a link on the same
+/// each starts with `http://`, `https://`, `ftp://` or `magnet:`. Words after a link on the same
 /// line belong to it, so `https://x/Firefox Setup.exe` stays one link (with
 /// its spaces encoded) instead of becoming three.
 pub fn split_links(text: &str) -> Vec<String> {
     let has_scheme = |t: &str| {
         let lower = t.get(..8).unwrap_or(t).to_ascii_lowercase();
-        lower.starts_with("http://") || lower.starts_with("https://")
+        lower.starts_with("http://")
+            || lower.starts_with("https://")
+            || lower.starts_with("ftp://")
+            || lower.starts_with("magnet:")
     };
     let mut out = Vec::new();
     for line in text.lines() {

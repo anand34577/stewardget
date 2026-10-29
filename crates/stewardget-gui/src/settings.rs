@@ -122,7 +122,7 @@ impl StewardGetApp {
                     }
                 });
             });
-            ui.add_space(12.0);
+            ui.add_space(6.0);
 
             let narrow = ui.available_width() < 760.0;
             if narrow {
@@ -133,7 +133,7 @@ impl StewardGetApp {
                         }
                     }
                 });
-                ui.add_space(8.0);
+                ui.add_space(5.0);
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
                     .show(ui, |ui| self.settings_tab_body(ui, &mut draft));
@@ -152,7 +152,7 @@ impl StewardGetApp {
                 });
                 ui.scope_builder(egui::UiBuilder::new().max_rect(body), |ui| {
                     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                        ui.set_max_width(880.0_f32.min(body.width()));
+                        ui.set_max_width(1400.0_f32.min(body.width()));
                         self.settings_tab_body(ui, &mut draft);
                     });
                 });
@@ -339,6 +339,15 @@ impl StewardGetApp {
                     row(
                         ui,
                         &p,
+                        "Monthly data limit",
+                        "For a metered or phone connection: downloads pause when this much has been downloaded in the calendar month, and start again next month or when you raise it. Empty for none.",
+                        |ui| {
+                            widgets::speed_input(ui, "monthly-cap", &mut draft.monthly_cap, 150.0);
+                        },
+                    );
+                    row(
+                        ui,
+                        &p,
                         "Different limit during set hours",
                         "For example slower during work hours, so the connection stays usable. Overrides the limit above while it runs.",
                         |ui| {
@@ -392,6 +401,7 @@ impl StewardGetApp {
                             });
                     });
                 });
+                self.links_section(ui, draft);
                 section(ui, &p, "When something goes wrong", |ui| {
                     row(
                         ui,
@@ -464,6 +474,7 @@ impl StewardGetApp {
                         });
                     }
                 });
+                self.actions_section(ui, draft);
             }
             Tab::Network => section(ui, &p, "Network", |ui| {
                 row(ui, &p, "Connect timeout", "Seconds to wait for a server to accept a connection.", |ui| {
@@ -519,7 +530,7 @@ impl StewardGetApp {
                     )
                     .wrap(),
                 );
-                ui.add_space(8.0);
+                ui.add_space(5.0);
                 // Queues are saved as soon as they are edited, not with the Save button.
                 for q in self.engine.config().queues {
                     let count = self.snap.downloads.iter().filter(|d| d.queue == q.id).count();
@@ -529,7 +540,7 @@ impl StewardGetApp {
                         crate::queues::QueueCardAction::None => {}
                     }
                 }
-                ui.add_space(12.0);
+                ui.add_space(6.0);
                 section(ui, &p, "When all downloads finish", |ui| {
                     ui.add(egui::Label::new(RichText::new(format!(
                         "For this session: {}. Change it from the toolbar's More menu. StewardGet counts down for 30 seconds first, so you can cancel.",
@@ -545,7 +556,7 @@ impl StewardGetApp {
                 if widgets::button(ui, ButtonKind::Primary, Some(Icon::Plus), "New category", true, &p).clicked() {
                     self.category_dialog = Some(crate::categories::CategoryDialog::create());
                 }
-                ui.add_space(8.0);
+                ui.add_space(5.0);
                 for c in draft.categories() {
                     let label = draft.category_label(c);
                     row_icon(ui, &p, Icon::for_category(c), p.category(c), &label, |ui| {
@@ -599,7 +610,7 @@ impl StewardGetApp {
                     ui.horizontal_wrapped(|ui| {
                         widgets::segmented(ui, &mut self.setup_browser, &Browser::ALL, &p);
                     });
-                    ui.add_space(10.0);
+                    ui.add_space(6.0);
                     self.browser_steps(ui);
                 });
                 section(ui, &p, "Browser integration", |ui| {
@@ -732,7 +743,7 @@ impl StewardGetApp {
 }
 
 /// A titled card grouping related settings.
-fn section(ui: &mut Ui, p: &Palette, title: &str, add: impl FnOnce(&mut Ui)) {
+pub(crate) fn section(ui: &mut Ui, p: &Palette, title: &str, add: impl FnOnce(&mut Ui)) {
     ui.label(RichText::new(title).size(14.0).family(theme::semi()).color(p.text));
     ui.add_space(6.0);
     card(p).inner_margin(Margin::symmetric(18, 12)).show(ui, |ui| {
@@ -769,9 +780,9 @@ fn tab_button(ui: &mut Ui, icon: Icon, label: &str, selected: bool, p: &Palette,
 }
 
 /// A setting: title and help on the left, the control on the right.
-fn row(ui: &mut Ui, p: &Palette, label: &str, help: &str, add: impl FnOnce(&mut Ui)) {
+pub(crate) fn row(ui: &mut Ui, p: &Palette, label: &str, help: &str, add: impl FnOnce(&mut Ui)) {
     let width = ui.available_width();
-    let label_w = (width * 0.42).clamp(170.0, 320.0);
+    let label_w = (width * 0.5).clamp(180.0, 520.0);
     // Dividers go between rows only, never after the last one in a card.
     if ui.min_rect().height() > 4.0 {
         divider(ui, p, width);
@@ -785,8 +796,18 @@ fn row(ui: &mut Ui, p: &Palette, label: &str, help: &str, add: impl FnOnce(&mut 
                 ui.add(egui::Label::new(RichText::new(help).size(12.0).color(p.text_dim)).wrap());
             }
         });
-        ui.add_space(12.0);
-        add(ui);
+        // Controls sit at the right edge of the card and keep their order: the
+        // width they took last frame says how much room to leave on the left.
+        let key = egui::Id::unique(("settings-row-width", label));
+        let known: Option<f32> = ui.data(|d| d.get_temp(key));
+        if let Some(w) = known {
+            ui.add_space((ui.available_width() - w).max(0.0));
+        }
+        let used = ui.horizontal(add).response.rect.width();
+        if known.is_none_or(|w| (w - used).abs() > 0.5) {
+            ui.data_mut(|d| d.insert_temp(key, used));
+            ui.ctx().request_repaint();
+        }
     });
 }
 
@@ -804,10 +825,10 @@ fn row_icon(ui: &mut Ui, p: &Palette, icon: Icon, color: Color32, label: &str, a
 }
 
 fn divider(ui: &mut Ui, p: &Palette, width: f32) {
-    ui.add_space(8.0);
+    ui.add_space(5.0);
     let (r, _) = ui.allocate_exact_size(vec2(width, 1.0), Sense::hover());
     ui.painter().rect_filled(r, CornerRadius::ZERO, p.border.gamma_multiply(0.6));
-    ui.add_space(8.0);
+    ui.add_space(5.0);
 }
 
 /// A miniature preview of a theme.
@@ -956,6 +977,7 @@ fn random_token() -> String {
 impl StewardGetApp {
     /// MCP server for AI assistants, and a pointer to the command line.
     fn integrations_tab(&mut self, ui: &mut Ui, draft: &mut Config) {
+        self.media_tools_section(ui, draft);
         let p = self.palette;
         if draft.mcp_enabled && draft.mcp_token.is_none() {
             draft.mcp_token = Some(random_token());
@@ -1243,5 +1265,5 @@ fn step(ui: &mut Ui, p: &Palette, n: &mut usize, text: &str, add: impl FnOnce(&m
             add(ui);
         });
     });
-    ui.add_space(8.0);
+    ui.add_space(5.0);
 }

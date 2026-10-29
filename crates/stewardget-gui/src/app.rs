@@ -69,8 +69,11 @@ impl ListFilter {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Page {
+    Overview,
     Downloads,
+    History,
     Stats,
+    Tools,
     Settings,
 }
 
@@ -114,6 +117,7 @@ pub struct StewardGetApp {
     pub cfg: Config,
     pub palette: Palette,
     pub page: Page,
+    pub history: crate::history::HistoryView,
     pub filter: ListFilter,
     pub search: String,
     pub focus_search: bool,
@@ -163,6 +167,8 @@ pub struct StewardGetApp {
     pub category_dialog: Option<crate::categories::CategoryDialog>,
     /// The "find files on a web page" window.
     pub grab_dialog: Option<crate::grab::GrabDialog>,
+    pub media_dialog: Option<crate::media::MediaDialog>,
+    pub tools: crate::toolbox::ToolsState,
     /// Queue whose deletion is being confirmed.
     pub delete_queue: Option<QueueId>,
     /// "Keep running?" prompt after the close button; holds "remember my choice".
@@ -268,7 +274,8 @@ impl StewardGetApp {
             rows_cache: std::cell::RefCell::new(None),
             cfg: config.clone(),
             palette,
-            page: Page::Downloads,
+            page: Page::Overview,
+            history: Default::default(),
             filter: ListFilter::All,
             search: String::new(),
             focus_search: false,
@@ -304,6 +311,8 @@ impl StewardGetApp {
             queue_dialog: None,
             category_dialog: None,
             grab_dialog: None,
+            media_dialog: None,
+            tools: Default::default(),
             delete_queue: None,
             close_prompt: None,
             quitting: false,
@@ -481,7 +490,7 @@ impl StewardGetApp {
             links.extend(
                 stewardget_core::util::split_links(&text)
                     .into_iter()
-                    .filter(|t| t.starts_with("http://") || t.starts_with("https://")),
+                    .filter(|t| ["http://", "https://", "ftp://", "magnet:"].iter().any(|s| t.starts_with(s))),
             );
         }
         if links.is_empty() {
@@ -817,7 +826,9 @@ impl StewardGetApp {
             self.open_settings(crate::settings::Tab::General);
         }
         if keys.find {
-            self.page = Page::Downloads;
+            if self.page != Page::History {
+                self.page = Page::Downloads;
+            }
             self.focus_search = true;
         }
         if typing || self.page != Page::Downloads {
@@ -886,7 +897,7 @@ impl StewardGetApp {
             {
                 self.grab_dialog = Some(crate::grab::GrabDialog::new(None));
             }
-            ui.add_space(8.0);
+            ui.add_space(5.0);
             if widgets::button(ui, ButtonKind::Tool, Some(Icon::Play), label("Resume"), can_resume, &p)
                 .on_hover_text("Resume selected (Space)")
                 .clicked()
@@ -1058,11 +1069,11 @@ impl StewardGetApp {
                 ui.label(RichText::new("StewardGet").size(18.0).family(theme::semi()).color(p.text));
             }
         });
-        ui.add_space(16.0);
+        ui.add_space(8.0);
 
         // The lists scroll when the window is short; Statistics and Settings stay pinned.
-        // Two pinned entries, plus the version line when the sidebar is open.
-        let list_h = (ui.available_height() - 2.0 * 34.0 - 10.0 - if collapsed { 0.0 } else { 24.0 }).max(60.0);
+        // Three pinned entries, plus the version line when the sidebar is open.
+        let list_h = (ui.available_height() - 3.0 * 34.0 - 10.0 - if collapsed { 0.0 } else { 24.0 }).max(60.0);
         ui.allocate_ui(vec2(ui.available_width(), list_h), |ui| {
             egui::ScrollArea::vertical().id_salt("nav-scroll").auto_shrink([false, false]).show(ui, |ui| {
                 // Keep clear of the scroll bar, which floats over the right edge.
@@ -1070,6 +1081,15 @@ impl StewardGetApp {
                 fn count(all: &[DownloadView], f: ListFilter) -> usize {
                     all.iter().filter(|d| f.matches(d)).count()
                 }
+                if nav_item(ui, Icon::Gauge, None, "Overview", 0, self.page == Page::Overview, collapsed, &p).clicked()
+                {
+                    self.page = Page::Overview;
+                }
+                if nav_item(ui, Icon::History, None, "History", 0, self.page == Page::History, collapsed, &p).clicked()
+                {
+                    self.page = Page::History;
+                }
+                ui.add_space(6.0);
                 let open = collapsed || widgets::section(ui, "DOWNLOADS", &p);
                 if !collapsed {
                     ui.add_space(2.0);
@@ -1090,9 +1110,9 @@ impl StewardGetApp {
                         self.filter = filter;
                     }
                 }
-                ui.add_space(12.0);
+                ui.add_space(6.0);
                 self.sidebar_queues(ui, collapsed);
-                ui.add_space(12.0);
+                ui.add_space(6.0);
                 let open = collapsed || widgets::section(ui, "CATEGORIES", &p);
                 if !collapsed {
                     ui.add_space(2.0);
@@ -1141,6 +1161,9 @@ impl StewardGetApp {
             }
             if nav_item(ui, Icon::Chart, None, "Statistics", 0, self.page == Page::Stats, collapsed, &p).clicked() {
                 self.page = Page::Stats;
+            }
+            if nav_item(ui, Icon::Sliders, None, "Tools", 0, self.page == Page::Tools, collapsed, &p).clicked() {
+                self.page = Page::Tools;
             }
         });
     }
@@ -1501,7 +1524,7 @@ fn nav_item(
     collapsed: bool,
     p: &Palette,
 ) -> egui::Response {
-    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 32.0), Sense::hover());
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 28.0), Sense::hover());
     // Explicit ids keep navigation stable regardless of layout nesting; the
     // icon tells a queue called "Video" from the Video category.
     let response = ui.interact(rect, egui::Id::unique(("stewardget-nav", label, format!("{icon:?}"))), Sense::click());
@@ -1791,12 +1814,12 @@ impl eframe::App for StewardGetApp {
         let collapsed = self.sidebar_pref.unwrap_or(width < 940.0);
 
         egui::Panel::top("stewardget-menubar")
-            .exact_size(26.0)
-            .frame(Frame::new().fill(p.sidebar).inner_margin(Margin { left: 8, right: 8, top: 2, bottom: 0 }))
+            .exact_size(34.0)
+            .frame(Frame::new().fill(p.sidebar).inner_margin(Margin::symmetric(8, 3)))
             .show(ui, |ui| ui.push_id("menubar", |ui| self.menu_bar(ui)));
 
         egui::Panel::top("stewardget-toolbar")
-            .exact_size(50.0)
+            .exact_size(44.0)
             .frame(
                 Frame::new().fill(p.sidebar).inner_margin(Margin::symmetric(10, 0)).stroke(Stroke::new(1.0, p.border)),
             )
@@ -1813,7 +1836,7 @@ impl eframe::App for StewardGetApp {
             .exact_size(if collapsed { 56.0 } else { 204.0 })
             .resizable(false)
             .frame(
-                Frame::new().fill(p.sidebar).inner_margin(Margin::symmetric(8, 12)).stroke(Stroke::new(1.0, p.border)),
+                Frame::new().fill(p.sidebar).inner_margin(Margin::symmetric(6, 8)).stroke(Stroke::new(1.0, p.border)),
             )
             .show(ui, |ui| ui.push_id("nav", |ui| self.sidebar(ui, collapsed)));
 
@@ -1825,7 +1848,7 @@ impl eframe::App for StewardGetApp {
                 .frame(
                     Frame::new()
                         .fill(p.sidebar)
-                        .inner_margin(Margin::symmetric(16, 12))
+                        .inner_margin(Margin::symmetric(12, 8))
                         .stroke(Stroke::new(1.0, p.border)),
                 )
                 .show(ui, |ui| ui.push_id("details", |ui| self.details_pane(ui)));
@@ -1833,8 +1856,11 @@ impl eframe::App for StewardGetApp {
 
         egui::CentralPanel::no_frame().frame(Frame::new().fill(p.bg).inner_margin(Margin::ZERO)).show(ui, |ui| {
             ui.push_id("central", |ui| match self.page {
+                Page::Overview => self.overview_page(ui),
                 Page::Downloads => self.downloads_page(ui),
+                Page::History => self.history_page(ui),
                 Page::Stats => self.stats_page(ui),
+                Page::Tools => self.tools_page(ui),
                 Page::Settings => self.settings_page(ui),
             })
         });
@@ -1849,6 +1875,7 @@ impl eframe::App for StewardGetApp {
         self.queue_dialog(&ctx);
         self.category_dialog(&ctx);
         self.grab_dialog(&ctx);
+        self.media_dialog(&ctx);
         self.delete_queue_dialog(&ctx);
         self.close_prompt(&ctx);
         self.capture_window(&ctx);

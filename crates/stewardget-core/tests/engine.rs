@@ -663,7 +663,7 @@ async fn the_desktop_app_can_ask_before_browser_downloads_start() {
     // One bad link: nothing at all is handed over.
     assert!(
         engine
-            .capture_many(vec![capture("four.zip"), Capture { url: "ftp://x/y".into(), ..Default::default() }])
+            .capture_many(vec![capture("four.zip"), Capture { url: "gopher://x/y".into(), ..Default::default() }])
             .is_err()
     );
     assert_eq!(asked.lock().unwrap().len(), 1);
@@ -718,6 +718,13 @@ async fn custom_categories_choose_the_folder_and_existing_files_follow_the_polic
     let path = engine.download(third).unwrap().path;
     assert_eq!(path, dir.join("Firmware").join("test file.bin"));
     assert_eq!(std::fs::read(&path).unwrap(), *server.data);
+
+    // One download can ask for the other behaviour than the setting.
+    let mut keep_both = NewDownload::new(&server.url);
+    keep_both.options.existing = Some(ExistingFile::Rename);
+    let fourth = engine.add(keep_both).unwrap();
+    assert_eq!(wait_for(&engine, fourth, Status::Completed, 30).await, Status::Completed);
+    assert_eq!(engine.download(fourth).unwrap().path, dir.join("Firmware").join("test file (2).bin"));
 
     // Deleting the category sorts its downloads back into the built-in ones.
     let mut cfg = engine.config();
@@ -934,4 +941,274 @@ async fn pausing_wins_over_an_automatic_retry() {
     tokio::time::sleep(Duration::from_secs(4)).await;
     let d = engine.download(id).unwrap();
     assert_eq!(d.status, Status::Paused, "{:?}", d.error);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn finished_downloads_stay_in_the_history_after_leaving_the_list() {
+    let server = serve(2 * 1024 * 1024, ServerOpts { ranges: true, ..Default::default() }).await;
+    let dir = temp_dir("history");
+    let data_dir = dir.join("state");
+    let downloads = dir.join("files");
+    let options = || EngineOptions { data_dir: Some(data_dir.clone()), config: Some(config(&downloads)) };
+
+    let engine = Engine::start(options()).unwrap();
+    assert!(engine.history().is_empty());
+    let generation = engine.history_generation();
+    let id = engine.add(NewDownload::new(&server.url)).unwrap();
+    assert_eq!(wait_for(&engine, id, Status::Completed, 30).await, Status::Completed);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    let log = engine.history();
+    assert_eq!(log.len(), 1);
+    assert_eq!(log[0].id, id);
+    assert_eq!(log[0].file_name, "test file.bin");
+    assert_eq!(log[0].host, "127.0.0.1");
+    assert_eq!(log[0].size, Some(server.data.len() as u64));
+    assert_eq!(log[0].status, Status::Completed);
+    assert!(engine.history_generation() > generation);
+
+    // Clearing the list does not clear the history…
+    engine.clear_completed();
+    assert!(engine.download(id).is_none());
+    assert_eq!(engine.history().len(), 1);
+    assert!(engine.tag_history(id, vec!["work".into()]));
+
+    // …which is stored and comes back after a restart.
+    engine.shutdown().await;
+    drop(engine);
+    let engine = Engine::start(options()).unwrap();
+    let log = engine.history();
+    assert_eq!(log.len(), 1);
+    assert_eq!(log[0].tags, ["work"]);
+    assert_eq!(engine.remove_history(&[id]), 1);
+    assert!(engine.history().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn mirrors_share_the_work_and_a_wrong_sized_one_is_ignored() {
+    let len = 8 * 1024 * 1024;
+    let opts = ServerOpts { ranges: true, throttle: 2 * 1024 * 1024, ..Default::default() };
+    let primary = serve(len, opts).await;
+    let mirror = serve(len, opts).await;
+    let other_file = serve(len + 5, opts).await;
+    let dir = temp_dir("mirrors");
+    let engine = Engine::start(EngineOptions::in_memory().with_config(config(&dir))).unwrap();
+    let id = engine
+        .add(NewDownload {
+            url: primary.url.clone(),
+            options: DownloadOptions {
+                mirrors: vec![mirror.url.clone(), other_file.url.clone(), "not a link".into()],
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .unwrap();
+
+    // While it runs, both usable sources carry traffic and the wrong one isn't there.
+    let mut best = 0;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    while engine.download(id).is_some_and(|d| !d.status.is_finished()) && tokio::time::Instant::now() < deadline {
+        if let Some(d) = engine.download(id) {
+            assert!(d.lanes.len() <= 2, "the wrong-sized mirror must not become a lane: {:?}", d.lanes);
+            best = best.max(d.lanes.iter().filter(|l| l.bytes > 0).count());
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(wait_for(&engine, id, Status::Completed, 30).await, Status::Completed);
+    assert_eq!(best, 2, "both the original and the mirror should have carried bytes");
+    let view = engine.download(id).unwrap();
+    assert_eq!(std::fs::read(&view.path).unwrap(), *primary.data);
+    assert!(mirror.ranged_requests.load(Ordering::SeqCst) > 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_failing_mirror_is_dropped_and_the_download_still_completes() {
+    let len = 6 * 1024 * 1024;
+    let primary = serve(len, ServerOpts { ranges: true, throttle: 2 * 1024 * 1024, ..Default::default() }).await;
+    // Answers the check, then refuses everything.
+    let mirror = serve(len, ServerOpts { ranges: true, busy_every: 1, ..Default::default() }).await;
+    let dir = temp_dir("badmirror");
+    let engine = Engine::start(EngineOptions::in_memory().with_config(config(&dir))).unwrap();
+    let id = engine
+        .add(NewDownload {
+            url: primary.url.clone(),
+            options: DownloadOptions { mirrors: vec![mirror.url.clone()], ..Default::default() },
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(wait_for(&engine, id, Status::Completed, 60).await, Status::Completed);
+    assert_eq!(std::fs::read(&engine.download(id).unwrap().path).unwrap(), *primary.data);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_tuner_adds_connections_while_the_speed_keeps_improving() {
+    // Each connection is limited, so more connections really are faster.
+    let opts = ServerOpts { ranges: true, throttle: 768 * 1024, ..Default::default() };
+    let server = serve(24 * 1024 * 1024, opts).await;
+    let dir = temp_dir("tuner");
+    let cfg = Config { connections: 16, ..config(&dir) };
+    let engine = Engine::start(EngineOptions::in_memory().with_config(cfg)).unwrap();
+    let id = engine.add(NewDownload::new(&server.url)).unwrap();
+    let mut seen = Vec::new();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    while engine.download(id).is_some_and(|d| !d.status.is_finished()) && tokio::time::Instant::now() < deadline {
+        if let Some(n) = engine.download(id).and_then(|d| d.tuned_connections) {
+            seen.push(n);
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(seen.first().is_some_and(|&n| n <= 6), "starts small: {seen:?}");
+    assert!(seen.iter().max().is_some_and(|&n| n > 4), "grows beyond the start: {seen:?}");
+    assert_eq!(wait_for(&engine, id, Status::Completed, 60).await, Status::Completed);
+    assert_eq!(std::fs::read(&engine.download(id).unwrap().path).unwrap(), *server.data);
+}
+
+/// A minimal FTP server (passive mode, REST) holding one file.
+async fn serve_ftp(data: Arc<Vec<u8>>, logins: Arc<AtomicUsize>) -> u16 {
+    use tokio::io::AsyncBufReadExt;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        loop {
+            let Ok((sock, _)) = listener.accept().await else { return };
+            let (data, logins) = (Arc::clone(&data), Arc::clone(&logins));
+            tokio::spawn(async move {
+                let mut io = tokio::io::BufReader::new(sock);
+                let (mut pasv, mut rest): (Option<TcpListener>, usize) = (None, 0);
+                io.get_mut().write_all(b"220 ready\r\n").await.unwrap();
+                loop {
+                    let mut line = String::new();
+                    if io.read_line(&mut line).await.unwrap_or(0) == 0 {
+                        return;
+                    }
+                    let (cmd, arg) = line.trim().split_once(' ').unwrap_or((line.trim(), ""));
+                    let out = match cmd {
+                        "USER" => "331 pass\r\n".to_owned(),
+                        "PASS" => {
+                            logins.fetch_add(1, Ordering::SeqCst);
+                            "230 ok\r\n".to_owned()
+                        }
+                        "TYPE" => "200 ok\r\n".to_owned(),
+                        "SIZE" => format!("213 {}\r\n", data.len()),
+                        "MDTM" => "213 20250101000000\r\n".to_owned(),
+                        "REST" => {
+                            rest = arg.parse().unwrap_or(0);
+                            "350 ok\r\n".to_owned()
+                        }
+                        "PASV" => {
+                            let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
+                            let p = l.local_addr().unwrap().port();
+                            pasv = Some(l);
+                            format!("227 Entering Passive Mode (127,0,0,1,{},{})\r\n", p / 256, p % 256)
+                        }
+                        "RETR" => {
+                            io.get_mut().write_all(b"150 go\r\n").await.unwrap();
+                            let (mut d, _) = pasv.take().unwrap().accept().await.unwrap();
+                            for chunk in data[rest.min(data.len())..].chunks(64 * 1024) {
+                                if d.write_all(chunk).await.is_err() {
+                                    break;
+                                }
+                            }
+                            drop(d);
+                            "226 done\r\n".to_owned()
+                        }
+                        "QUIT" => return,
+                        _ => "500 ?\r\n".to_owned(),
+                    };
+                    if io.get_mut().write_all(out.as_bytes()).await.is_err() {
+                        return;
+                    }
+                }
+            });
+        }
+    });
+    port
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn ftp_links_download_in_parallel_segments() {
+    let data = Arc::new(payload(6 * 1024 * 1024 + 11));
+    let logins = Arc::new(AtomicUsize::new(0));
+    let port = serve_ftp(Arc::clone(&data), Arc::clone(&logins)).await;
+    let dir = temp_dir("ftp");
+    let engine = Engine::start(EngineOptions::in_memory().with_config(config(&dir))).unwrap();
+    let id = engine.add(NewDownload::new(format!("ftp://127.0.0.1:{port}/pub/archive%20one.bin"))).unwrap();
+    assert_eq!(wait_for(&engine, id, Status::Completed, 60).await, Status::Completed);
+    let view = engine.download(id).unwrap();
+    assert_eq!(view.file_name, "archive one.bin");
+    assert_eq!(std::fs::read(&view.path).unwrap(), *data);
+    assert!(logins.load(Ordering::SeqCst) > 2, "several connections should have logged in");
+    assert!(view.resumable);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn video_and_audio_halves_are_downloaded_and_a_failed_join_keeps_both_files() {
+    use stewardget_core::{MediaInfo, MediaOption, MediaPart, MuxStream};
+    let video = serve(2 * 1024 * 1024, ServerOpts { ranges: true, ..Default::default() }).await;
+    let audio = serve(1024 * 1024 + 7, ServerOpts { ranges: true, ..Default::default() }).await;
+    let part = |url: &str, ext: &str, stream| MediaPart {
+        url: url.to_owned(),
+        headers: vec![("Accept-Encoding".into(), "gzip".into())],
+        ext: ext.to_owned(),
+        stream: Some(stream),
+        size: None,
+    };
+    let info = MediaInfo {
+        title: "Demo clip".into(),
+        source: "test",
+        options: vec![MediaOption {
+            label: "1080p".into(),
+            parts: vec![part(&video.url, "mp4", MuxStream::Video), part(&audio.url, "m4a", MuxStream::Audio)],
+            height: 1080,
+        }],
+    };
+    let dir = temp_dir("mux");
+    let engine = Engine::start(EngineOptions::in_memory().with_config(config(&dir))).unwrap();
+    let ids = match engine.add_media(&info, 0, None, None) {
+        Ok(ids) => ids,
+        Err(e) => {
+            // No ffmpeg on this machine: the choice must be refused with a clear reason.
+            assert!(e.to_string().contains("ffmpeg"), "{e}");
+            return;
+        }
+    };
+    assert_eq!(ids.len(), 2);
+    for id in &ids {
+        assert_eq!(wait_for(&engine, *id, Status::Completed, 30).await, Status::Completed);
+    }
+    // The payload isn't real media, so ffmpeg refuses; both files must survive with a note.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    loop {
+        let notes: Vec<String> = engine.history().iter().flat_map(|e| e.notes.clone()).collect();
+        if notes.iter().any(|n| n.contains("Could not join")) {
+            break;
+        }
+        assert!(tokio::time::Instant::now() < deadline, "no note about the failed join: {notes:?}");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(dir.join("Demo clip.video.mp4").exists() && dir.join("Demo clip.audio.m4a").exists());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_monthly_cap_stops_downloads_until_it_is_raised() {
+    let server =
+        serve(8 * 1024 * 1024, ServerOpts { ranges: true, throttle: 2 * 1024 * 1024, ..Default::default() }).await;
+    let dir = temp_dir("cap");
+    let cfg = Config { monthly_cap: 1024 * 1024, ..config(&dir) };
+    let engine = Engine::start(EngineOptions::in_memory().with_config(cfg)).unwrap();
+    let first = engine.add(NewDownload::new(&server.url)).unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    while !engine.month_usage().2 {
+        assert!(tokio::time::Instant::now() < deadline, "the cap never stopped the download");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(wait_for(&engine, first, Status::Paused, 10).await, Status::Paused);
+    // Anything new waits while the cap is used up.
+    let second = engine.add(NewDownload::new(&server.url)).unwrap();
+    tokio::time::sleep(Duration::from_millis(700)).await;
+    assert_eq!(engine.download(second).unwrap().status, Status::Queued);
+    // Raising the cap lets it go on.
+    engine.update_config(Config { monthly_cap: 0, ..engine.config() }).unwrap();
+    assert_eq!(wait_for(&engine, second, Status::Completed, 60).await, Status::Completed);
+    assert!(!engine.month_usage().2);
 }

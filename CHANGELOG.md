@@ -1,8 +1,60 @@
-# Changelog
+﻿# Changelog
 
 All notable changes to StewardGet are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions follow
 [Semantic Versioning](https://semver.org/).
+
+## [Unreleased]
+
+## [0.8.0] - 2026-10-30
+
+- Adding a link whose file is already downloaded now offers three choices: open the existing file in its folder, save with another name, or replace it (a per-download choice; the setting stays the default).
+- The Add dialog is more compact, and the Statistics cards are the same height side by side.
+
+### Added (more sources and smarter automation)
+- **FTP**: `ftp://` links download in parallel, resumable segments like HTTP ones (passive mode, `REST`). Plain FTP is not encrypted; SFTP and FTPS are not supported.
+- **Video and audio from a page**: File â€º Video or audio from a page asks yt-dlp (if installed) what a page offers and downloads the direct files with StewardGet's own engine. Separate picture and sound files are joined without re-encoding by ffmpeg (if installed); if joining fails, both files are kept. DASH manifests (`.mpd`) made of single files are read directly; segmented manifests are not supported.
+- **Magnet links** are recognised and handed to your default torrent app. StewardGet has no BitTorrent engine of its own.
+- **Steps for finished files** gained Rename and folder/name templates (`{category}`, `{year}`, `{month}`, `{day}`, `{host}`, `{name}`, `{ext}`).
+- **Already downloaded?** The Add window says when the same link, or a file with the same name and size, finished earlier.
+- **Quiet hours**: the Overview suggests the least-used hours and creates a scheduled queue for them.
+- **MCP**: `search_history`, `history_summary`, `tag_download`, `add_downloads` and `grab_page` tools.
+- **Headless mode**: `stewardget serve` runs downloads, queues, schedules, the browser API and MCP without a window.
+
+### Added (tools)
+- **Tools page**: duplicate-file finder (by content), leftover partial-file cleanup, link checker, backup and restore of settings, diagnostics report (no links or tokens).
+- **Monthly data limit** for metered or hotspot connections, with a usage bar on the Overview.
+- **yt-dlp and ffmpeg setup**: found automatically (also in winget, Scoop and Chocolatey folders), file picker with a real version check, one-click install through winget, and an advanced path field.
+
+### Fixed
+- The menu bar was too short.
+- Settings controls are aligned to the right edge and the page uses the full width.
+
+### Added (speed and automation)
+- **Mirrors**: give a file several links; connections are spread over all of them. A mirror must answer a range request with the same size, and one that fails or serves something else is dropped without stopping the download. `stewardget get --mirror`.
+- **Several networks at once**: bind connections to Wi-Fi, Ethernet or a phone's hotspot together, with a switch and a speed cap per adapter and live speed per link on the Overview. `stewardget get --bind`, `stewardget links`.
+- **Connection auto-tuner**: starts with a few connections and adds more while the speed keeps improving. Off per file when you set its connection count.
+- **Sources and links** card in the details pane shows each lane's speed, share and failures.
+- **Steps for each finished file**: unpack (.zip, .tar, .tar.gz), scan (Defender or ClamAV), move, run a program, tag; filtered by kind, extension and site. Results show in the History.
+
+### Added
+- **History**: every finished or failed download is kept in a permanent,
+  searchable log that outlives the download list. Filter by status, period
+  and type; open, reveal, re-download, copy the link or forget an entry;
+  export to CSV. Stored locally in `history.json`; lists from earlier
+  versions seed it from their completed downloads.
+- **Overview** page: live speed over its graph, what is downloading with the
+  reason for its speed, recently finished files, when you download and which
+  sources have been fastest.
+- **"Why this speed?"** explainer for running downloads (details pane and
+  Overview): names the cause â€” your own limits, the server allowing fewer
+  connections or no ranges, dropping connections, sharing the line, or a
+  source slower or faster than usual â€” and offers a one-click fix.
+- A six-month calendar heat-map on the Statistics page.
+
+### Changed
+- A tighter, more compact interface: less padding and spacing in the sidebar,
+  toolbar, tables, cards and pages, so more of each screen shows content.
 
 ## [0.7.4] - 2026-10-28
 
@@ -12,7 +64,7 @@ All notable changes to StewardGet are listed here. The format follows
   browser asks for a file name (`downloads.onDeterminingFilename`), instead of
   racing the browser after it started.
 - Downloads from the browser get the server's file name instead of an id from
-  the link (`5a26b454-bf1a-…`): a name that is only the link's last segment no
+  the link (`5a26b454-bf1a-â€¦`): a name that is only the link's last segment no
   longer overrides `Content-Disposition`, also when the new-download window is
   accepted before the server answered.
 - Accepting the new-download window opens the progress window right away, and
@@ -68,7 +120,7 @@ All notable changes to StewardGet are listed here. The format follows
 - A partial file that was cut short is reported instead of finishing with holes.
 - A fresh browser link attaches to a waiting download only when the file name
   also matches, not on size alone.
-- Batch patterns such as `[a-b][a-b]…` no longer take exponential time, and
+- Batch patterns such as `[a-b][a-b]â€¦` no longer take exponential time, and
   `[A-z]` is not a range.
 - `CON .txt`, `CONIN$` and `CONOUT$` are made safe on Windows.
 - A file name starting with `-` is passed as `./-name` to the after-download
@@ -127,7 +179,7 @@ arrow over a wave.
   `$STEWARDGET_DATA_DIR` / `$STEWARDGET_MIRROR` / `$STEWARDGET_PREFIX`.
 - The repository is now
   [github.com/anand34577/stewardget](https://github.com/anand34577/stewardget).
-- The browser extension sends `X-StewardGet-…` headers.
+- The browser extension sends `X-StewardGet-â€¦` headers.
 
 ### Upgrading from Velox
 Nothing is lost, and nothing has to be set up again:
@@ -150,7 +202,7 @@ fixes from a full audit.
 - **Progress window** for each download, like IDM's: status, downloaded,
   speed and time left, resume support, the parts, Pause and Close. It opens
   by itself for a download started on its own (not for each file of a batch);
-  double-click or Enter opens it for any download. Settings › General.
+  double-click or Enter opens it for any download. Settings â€º General.
 - **Video and audio on a page.** The browser extension lists the media a page
   played, with a count on its icon, and sends any of them to StewardGet. HLS
   streams (`.m3u8`) are saved as one `.ts` or `.mp4` file in the best quality,
@@ -166,7 +218,7 @@ fixes from a full audit.
   added as "5 min ago" (the full time on hover). Downloads that haven't
   started show no empty bar or dashes.
 - Sidebar sections fold away, so the categories fit on a laptop screen.
-- A download whose connections are retrying says *Reconnecting…* instead of
+- A download whose connections are retrying says *Reconnectingâ€¦* instead of
   showing 0 B/s.
 - "Finished in" counts the time spent downloading, not waiting in the queue.
 - **Faster with long lists.** Only the rows on screen are copied each frame,
@@ -177,7 +229,7 @@ fixes from a full audit.
   watches requests (to find media and form downloads), never changes them.
 
 ### Fixed
-- A link with spaces (`…/Firefox Setup 131.0.exe`) was split into several
+- A link with spaces (`â€¦/Firefox Setup 131.0.exe`) was split into several
   links, and the pieces were added as bogus downloads.
 - The window could open taller than the screen, hiding the status bar behind
   the taskbar.
@@ -188,7 +240,7 @@ fixes from a full audit.
 - A checksum entered for several links at once failed all but one of them; it
   is now refused with an explanation. A checksum added in Properties while a
   download runs is now checked.
-- Renaming a file only by case (`file.zip` → `File.zip`) failed on Windows and
+- Renaming a file only by case (`file.zip` â†’ `File.zip`) failed on Windows and
   macOS.
 - The statistics chart's last two dates overlapped, and finished downloads
   showed "peak 0 B/s".
@@ -239,7 +291,7 @@ A quiet start, a lighter idle, and a tighter local API.
 - The program run after each download is stopped if it takes over ten minutes.
 
 ### Added
-- **Completion sound**, on by default (Settings › General).
+- **Completion sound**, on by default (Settings â€º General).
 
 ## [0.5.0] - 2026-10-21
 
@@ -253,7 +305,7 @@ assistants, a site grabber, a fuller command line, and a new default look.
 - **The tray icon now does its job.** The minimise button and *Keep running*
   hide StewardGet in the notification area (Windows) or menu bar (macOS) instead of
   leaving a taskbar button; click the icon to bring it back. Turn it off in
-  **Settings › General › Minimise to the tray**.
+  **Settings â€º General â€º Minimise to the tray**.
 - **Browser downloads while StewardGet was hidden.** StewardGet could close itself when
   a browser download arrived while its window was hidden, and the browser had
   already handed the file over. The new-download window now opens reliably
@@ -264,7 +316,7 @@ assistants, a site grabber, a fuller command line, and a new default look.
   longer leave the saved progress ahead of the data.
 
 ### Added
-- **MCP server** (off by default): **Settings › AI & automation**. An AI
+- **MCP server** (off by default): **Settings â€º AI & automation**. An AI
   assistant can add, list, pause, resume, restart and remove downloads and
   set the speed limit. It runs on the local address only, needs a token, keeps
   new files below your download folder, and cannot change settings or run
@@ -287,7 +339,7 @@ assistants, a site grabber, a fuller command line, and a new default look.
 ### Changed
 - New default colour: teal, instead of violet, so the app and its violet icon
   are easy to tell apart. Settings saved with the old default move to teal
-  once; pick any accent in **Settings › Appearance**.
+  once; pick any accent in **Settings â€º Appearance**.
 - The extension's colours follow the app. The extension is now version 0.5.0.
 
 ## [0.4.0] - 2026-10-20
@@ -296,7 +348,7 @@ Your own categories, speed limits per queue and by time of day, a tray icon,
 notifications, and more control over what happens when a download finishes.
 
 ### Categories
-- Add your own categories in **Settings › Categories**: a name and the file
+- Add your own categories in **Settings â€º Categories**: a name and the file
   extensions that belong to it (for example *Disk images*: `iso, img`). Each
   gets a sidebar entry, a colour and its own folder, and takes priority over
   the built-in categories. Edit or delete them at any time; existing downloads
@@ -305,7 +357,7 @@ notifications, and more control over what happens when a download finishes.
 ### Speed
 - **Speed limit per queue**, shared by the queue's downloads (edit the queue).
 - **A different limit during set hours**, for example slower during work
-  hours (**Settings › Downloads**). It can run past midnight and is set per
+  hours (**Settings â€º Downloads**). It can run past midnight and is set per
   weekday; the status bar shows when it is in force.
 - Typing a limit such as `2M` now works; before, the field turned `2` into
   `2 B` before the `M` could be typed.
@@ -318,7 +370,7 @@ notifications, and more control over what happens when a download finishes.
   one click sets up a Microsoft Defender scan. No shell is involved, so a file
   name can never run commands.
 - **System notifications** when downloads finish or fail while StewardGet is in the
-  background (turn them off in **Settings › General**).
+  background (turn them off in **Settings â€º General**).
 
 ### Desktop app
 - **Tray icon** on Windows and a menu-bar icon on macOS: shows the current
@@ -328,19 +380,19 @@ notifications, and more control over what happens when a download finishes.
   comes forward with the link ready to add.
 - The window remembers its size and position.
 - Back up all settings, queues and categories to a file and restore them, in
-  **Settings › Privacy & data**.
+  **Settings â€º Privacy & data**.
 
 ### Browser
 - **Never capture on these sites**, with a one-click button in the popup for
   the site you are on.
 - Hold **Alt** while clicking a link to keep that one download in the browser.
 - The popup shows the extension's version, warns when it is older than the
-  app, has an **Open StewardGet** button, and no longer hangs on "checking…".
+  app, has an **Open StewardGet** button, and no longer hangs on "checkingâ€¦".
 
 ### Fixed
-- Theme previews in **Settings › Appearance** no longer stick out past their
+- Theme previews in **Settings â€º Appearance** no longer stick out past their
   rounded corners.
-- A queue's schedule that runs past midnight (say 23:00–07:00 on Fridays) now
+- A queue's schedule that runs past midnight (say 23:00â€“07:00 on Fridays) now
   stops in the morning even when that day is not selected.
 - Start and stop times that pass while the computer sleeps are caught up when
   it wakes.
@@ -366,15 +418,15 @@ notifications, and more control over what happens when a download finishes.
 Queues, a new-download window for browser downloads, and "download all links".
 
 ### Queues
-- Create as many download queues as you like (sidebar **+**, or **⋯ › New
-  queue…**). Each has its own name, how many of its downloads run at once, and
+- Create as many download queues as you like (sidebar **+**, or **â‹¯ â€º New
+  queueâ€¦**). Each has its own name, how many of its downloads run at once, and
   its own schedule (start time, pause time, weekdays).
 - Move downloads between queues by dragging them onto a queue in the sidebar,
-  or with right-click › **Move to queue**. Move to top or bottom of a queue.
+  or with right-click â€º **Move to queue**. Move to top or bottom of a queue.
 - With a queue open, the toolbar's **Start queue** and **Stop queue** act on it
   alone. Right-click a queue to start, stop, edit or delete it. Deleting a
   queue moves its downloads to the main queue; nothing is deleted.
-- **Settings › Queues & schedule** lists every queue. The schedule of StewardGet 0.2
+- **Settings â€º Queues & schedule** lists every queue. The schedule of StewardGet 0.2
   becomes the main queue's schedule.
 - `stewardget queues` lists them; `stewardget add --queue NAME [--paused]` adds to one.
 
@@ -384,21 +436,21 @@ Queues, a new-download window for browser downloads, and "download all links".
   used folders), free space and the queue. **Download**, **Later** (added
   paused to the queue) or **Cancel**; Enter and Esc work too. It stays on top
   and appears even while StewardGet is minimised. Turn it off with *Don't ask
-  again* or in **Settings › General**.
+  again* or in **Settings â€º General**.
 - Several downloads at once (see below) show a list with checkboxes, filters
   by file type and a search box. Files are preselected, web pages are not, and
   links already in your list are marked.
 - Downloads waiting in the window when StewardGet quits are kept, paused.
 
 ### Browser
-- **Download all links with StewardGet…** in the page's right-click menu and in the
+- **Download all links with StewardGetâ€¦** in the page's right-click menu and in the
   extension's popup sends every link and media file on the page to the list
   window, to pick what you want.
 - Chrome, Edge, Brave, Opera and Vivaldi no longer report
   "'background.scripts' requires manifest version of 2 or lower" when you load
   the extension. Chromium browsers and Firefox now each get a manifest they
   accept: the folder for Chromium browsers stays where it was, and Firefox
-  loads its own `browser-extension-firefox` folder (Settings › Browser and
+  loads its own `browser-extension-firefox` folder (Settings â€º Browser and
   `stewardget extension` show the right one). If you already loaded the extension,
   restart StewardGet, then click the reload button on the extensions page; the error
   entry can be cleared.
@@ -406,7 +458,7 @@ Queues, a new-download window for browser downloads, and "download all links".
 ### Also new
 - The close button can keep StewardGet running in the background (minimised), so
   downloads continue and the browser can still hand it new ones. StewardGet asks
-  the first time; change it in **Settings › General**. **⋯ › Quit StewardGet** or
+  the first time; change it in **Settings â€º General**. **â‹¯ â€º Quit StewardGet** or
   Ctrl+Q quits.
 - Recently used folders in the Add dialog and the new-download window.
 - **Download later** in the Add dialog, with a queue to add to.
@@ -440,13 +492,13 @@ Easy installation on every platform, and browser setup built into the app.
 ### First start
 - A welcome dialog asks where to save downloads, offers to start StewardGet with
   your computer and leads to the browser setup.
-- **Start with your computer** (Settings › General) opens StewardGet minimised when
+- **Start with your computer** (Settings â€º General) opens StewardGet minimised when
   you sign in, on Windows, macOS and Linux.
 - Opening StewardGet while it is already running brings the running window forward
   and hands over any links, instead of showing an error.
 
 ### Browser extension
-- **Settings › Browser** now has a guided setup for Chrome, Edge, Brave,
+- **Settings â€º Browser** now has a guided setup for Chrome, Edge, Brave,
   Opera, Vivaldi and Firefox, with buttons to copy the page address and the
   folder, and a live status that turns green once the extension connects.
 - The extension ships inside the app and is kept up to date with it.

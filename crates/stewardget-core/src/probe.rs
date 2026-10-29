@@ -25,6 +25,9 @@ pub(crate) struct Probe {
 }
 
 pub(crate) async fn probe(client: &Client, url: &Url, headers: &HeaderMap) -> Result<Probe, Error> {
+    if url.scheme() == "ftp" {
+        return crate::ftp::probe(url).await;
+    }
     let resp = client.get(url.clone()).headers(headers.clone()).header(header::RANGE, "bytes=0-0").send().await?;
     let status = resp.status();
     let h = resp.headers();

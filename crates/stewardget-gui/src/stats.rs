@@ -10,13 +10,40 @@ use crate::app::StewardGetApp;
 use crate::icons::Icon;
 use crate::widgets::{self, card};
 
+/// Draws a card whose height matches the other cards of the same `key`, so
+/// cards side by side end on the same line. Heights are learned one frame
+/// behind: each card reports its natural height, the tallest one wins.
+fn even_card(ui: &mut Ui, p: &crate::theme::Palette, key: &str, even: bool, add: impl FnOnce(&mut Ui)) {
+    card(p).show(ui, |ui| {
+        ui.set_min_width(ui.available_width());
+        let natural = ui.vertical(add).response.rect.height();
+        if !even {
+            return;
+        }
+        let ctx = ui.ctx().clone();
+        let id = egui::Id::unique(("stewardget-even-card", key));
+        let pass = ctx.cumulative_pass_nr();
+        let (seen, now, before): (u64, f32, f32) = ctx.data(|d| d.get_temp(id)).unwrap_or((pass, 0.0, 0.0));
+        let (now, before) = if seen == pass { (now, before) } else { (0.0, now) };
+        let now = now.max(natural);
+        ctx.data_mut(|d| d.insert_temp(id, (pass, now, before)));
+        if (before - now).abs() > 0.5 && seen != pass {
+            ctx.request_repaint();
+        }
+        let pad = before.max(natural) - natural - ui.spacing().item_spacing.y;
+        if pad > 0.5 {
+            ui.allocate_space(vec2(1.0, pad));
+        }
+    });
+}
+
 impl StewardGetApp {
     pub fn stats_page(&mut self, ui: &mut Ui) {
         let p = self.palette;
         let s = self.snap.stats.clone();
         let now = now_unix();
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-            egui::Frame::new().inner_margin(Margin::symmetric(18, 14)).show(ui, |ui| {
+            egui::Frame::new().inner_margin(Margin::symmetric(12, 8)).show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new("Statistics").size(18.0).family(crate::theme::semi()).color(p.text));
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -28,7 +55,7 @@ impl StewardGetApp {
                         widgets::icon(ui, Icon::Lock, 13.0, p.green);
                     });
                 });
-                ui.add_space(10.0);
+                ui.add_space(6.0);
 
                 let tiles = [
                     ("Total downloaded", format_bytes(s.total_bytes), String::new(), p.accent),
@@ -50,30 +77,32 @@ impl StewardGetApp {
                         p.text,
                     ),
                 ];
-                let per_row = ((ui.available_width() / 210.0).floor() as usize).clamp(2, 8);
+                let per_row = ((ui.available_width() / 150.0).floor() as usize).clamp(2, 8);
                 for chunk in tiles.chunks(per_row) {
                     ui.columns(per_row, |cols| {
                         for (col, (label, value, caption, color)) in cols.iter_mut().zip(chunk) {
                             widgets::stat_tile(col, &p, label, value, caption, *color);
                         }
                     });
-                    ui.add_space(8.0);
+                    ui.add_space(5.0);
                 }
 
                 let wide = ui.available_width() > 900.0;
                 let days_chart = |ui: &mut Ui| {
-                    card(&p).show(ui, |ui| {
-                        ui.set_min_width(ui.available_width());
-                        widgets::caption(ui, "LAST 30 DAYS", &p);
-                        widgets::day_bars(ui, &s.recent_days(30, now), &p, 170.0);
+                    even_card(ui, &p, "stats-charts", wide, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.set_min_height(18.0);
+                            widgets::caption(ui, "LAST 30 DAYS", &p);
+                        });
+                        widgets::day_bars(ui, &s.recent_days(30, now), &p, 160.0);
                     });
                 };
                 let history = self.snap.history.clone();
                 let speed = self.snap.speed;
                 let live_chart = |ui: &mut Ui| {
-                    card(&p).show(ui, |ui| {
-                        ui.set_min_width(ui.available_width());
+                    even_card(ui, &p, "stats-charts", wide, |ui| {
                         ui.horizontal(|ui| {
+                            ui.set_min_height(18.0);
                             widgets::caption(ui, "LIVE THROUGHPUT · 60 s", &p);
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                 ui.label(
@@ -81,7 +110,7 @@ impl StewardGetApp {
                                 );
                             });
                         });
-                        widgets::area_chart(ui, &history, vec2(ui.available_width(), 156.0), p.accent2, &p);
+                        widgets::area_chart(ui, &history, vec2(ui.available_width(), 160.0), p.accent2, &p);
                     });
                 };
                 if wide {
@@ -91,16 +120,25 @@ impl StewardGetApp {
                     });
                 } else {
                     days_chart(ui);
-                    ui.add_space(8.0);
+                    ui.add_space(5.0);
                     live_chart(ui);
                 }
-                ui.add_space(8.0);
+                ui.add_space(5.0);
+
+                card(&p).show(ui, |ui| {
+                    ui.set_min_width(ui.available_width());
+                    widgets::caption(ui, "THE LAST 6 MONTHS", &p);
+                    ui.add_space(4.0);
+                    egui::ScrollArea::horizontal().id_salt("heatmap").show(ui, |ui| {
+                        widgets::heatmap(ui, &s.recent_days(182, now), &p);
+                    });
+                });
+                ui.add_space(5.0);
 
                 let categories = self.category_rows();
                 let hosts = self.host_rows();
                 let breakdown = |ui: &mut Ui, title: &str, rows: &[(String, Option<Category>, usize, u64)]| {
-                    card(&p).show(ui, |ui| {
-                        ui.set_min_width(ui.available_width());
+                    even_card(ui, &p, "stats-breakdown", wide, |ui| {
                         widgets::caption(ui, title, &p);
                         ui.add_space(4.0);
                         if rows.is_empty() {
@@ -134,7 +172,7 @@ impl StewardGetApp {
                     });
                 } else {
                     breakdown(ui, "BY CATEGORY", &categories);
-                    ui.add_space(8.0);
+                    ui.add_space(5.0);
                     breakdown(ui, "TOP SOURCES", &hosts);
                 }
             });

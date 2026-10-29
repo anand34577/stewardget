@@ -141,7 +141,7 @@ impl StewardGetApp {
                 widgets::speed_input(ui, "queue", &mut d.speed_limit, 150.0);
                 ui.label(RichText::new("shared by the queue, e.g. 2M").size(12.0).color(p.text_dim));
             });
-            ui.add_space(10.0);
+            ui.add_space(6.0);
             widgets::caption(ui, "SCHEDULE", &p);
             ui.add_space(4.0);
             schedule_editor(ui, &p, "queue", &mut d.schedule);
@@ -307,7 +307,7 @@ impl StewardGetApp {
                 "StewardGet can keep running in the background, minimised. Downloads continue, and your browser keeps handing downloads to it. Quitting stops both until you open StewardGet again.",
                 p.text,
             );
-            ui.add_space(10.0);
+            ui.add_space(6.0);
             ui.horizontal(|ui| {
                 widgets::toggle(ui, remember, &p);
                 ui.label(RichText::new("Remember my choice (change it in Settings › General)").size(12.5).color(p.text_dim));

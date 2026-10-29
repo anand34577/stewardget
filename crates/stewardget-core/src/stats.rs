@@ -71,6 +71,19 @@ impl Stats {
         self.daily.get(&util::day_index(now)).copied().unwrap_or(0)
     }
 
+    /// Bytes downloaded so far in the calendar month `now` falls in.
+    pub fn month_total(&self, now: u64) -> u64 {
+        let (year, month, _) = util::civil_from_days(util::day_index(now));
+        self.daily
+            .iter()
+            .filter(|(day, _)| {
+                let (y, m, _) = util::civil_from_days(**day);
+                (y, m) == (year, month)
+            })
+            .map(|(_, bytes)| bytes)
+            .sum()
+    }
+
     /// Mean speed while active, bytes/second.
     pub fn average_speed(&self) -> f64 {
         if self.active_secs > 1.0 { self.total_bytes as f64 / self.active_secs } else { 0.0 }

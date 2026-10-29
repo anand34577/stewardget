@@ -304,6 +304,25 @@ pub struct Config {
     /// from before it existed read as 0).
     #[serde(default = "look_zero")]
     pub look_version: u8,
+    /// Start a download with a few connections and add more while the speed
+    /// still improves, up to `connections`. A download with its own connection
+    /// count is never tuned.
+    pub auto_tune: bool,
+    /// Spread connections over several network adapters at once (Wi-Fi plus
+    /// Ethernet, a phone's hotspot…), see `interfaces`.
+    pub multi_link: bool,
+    /// Adapters known to the user; used when `multi_link` is on.
+    pub interfaces: Vec<crate::NetworkLink>,
+    /// What to do with each finished file: unpack, scan, move, run a program,
+    /// tag. Rules run in order, in the background.
+    pub post_actions: Vec<crate::PostRule>,
+    /// Where yt-dlp is, when it isn't on `PATH`.
+    pub ytdlp_path: Option<PathBuf>,
+    /// Where ffmpeg is, when it isn't on `PATH`; used to join video and audio.
+    pub ffmpeg_path: Option<PathBuf>,
+    /// Stop downloading for the rest of the calendar month once this many
+    /// bytes have been downloaded in it (a metered or hotspot connection); `0` = no cap.
+    pub monthly_cap: u64,
 }
 
 fn look_zero() -> u8 {
@@ -373,6 +392,13 @@ impl Default for Config {
             hidden_columns: Vec::new(),
             progress_window: true,
             look_version: 1,
+            auto_tune: true,
+            multi_link: false,
+            interfaces: Vec::new(),
+            post_actions: Vec::new(),
+            ytdlp_path: None,
+            ffmpeg_path: None,
+            monthly_cap: 0,
         }
     }
 }
