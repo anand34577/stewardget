@@ -3,6 +3,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
+mod automation;
 mod autostart;
 mod capture;
 mod categories;
@@ -12,6 +13,7 @@ mod grab;
 mod history;
 mod icons;
 mod insight;
+mod lanes;
 mod menubar;
 mod notify;
 mod overview;

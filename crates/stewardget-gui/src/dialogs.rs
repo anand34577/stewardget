@@ -403,8 +403,10 @@ impl StewardGetApp {
                 widgets::form_row(ui, LABEL_W, "Mirrors", &p, |ui| {
                     ui.add(
                         widgets::input_multiline(&mut dialog.mirrors)
-                            .hint_text("Other links to the same file, one per line.
-Connections are shared across all of them.")
+                            .hint_text(
+                                "Other links to the same file, one per line.
+Connections are shared across all of them.",
+                            )
                             .desired_rows(2)
                             .desired_width(f32::INFINITY),
                     );
@@ -734,8 +736,10 @@ impl PropertiesDialog {
             referrer: o.referrer.clone().unwrap_or_default(),
             user_agent: o.user_agent.clone().unwrap_or_default(),
             headers: o.headers.iter().map(|(k, v)| format!("{k}: {v}\n")).collect::<String>().trim_end().to_owned(),
-            mirrors: o.mirrors.join("
-"),
+            mirrors: o.mirrors.join(
+                "
+",
+            ),
             error: None,
         }
     }

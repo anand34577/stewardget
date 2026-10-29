@@ -44,6 +44,12 @@ pub async fn run(args: GetArgs) -> anyhow::Result<ExitCode> {
         user_agent: args.user_agent.clone().unwrap_or(base.user_agent.clone()),
         proxy: args.proxy.clone().or(base.proxy.clone()),
         insecure_tls: args.insecure,
+        multi_link: !args.binds.is_empty(),
+        interfaces: args
+            .binds
+            .iter()
+            .map(|ip| stewardget_core::NetworkLink { address: ip.clone(), name: ip.clone(), ..Default::default() })
+            .collect(),
         ..base
     };
     let engine = Engine::start(EngineOptions::in_memory().with_config(config))?;
@@ -54,6 +60,7 @@ pub async fn run(args: GetArgs) -> anyhow::Result<ExitCode> {
             file_name: args.output.clone(),
             headers: args.headers.clone(),
             checksum: args.checksum.clone(),
+            mirrors: if urls.len() == 1 { args.mirrors.clone() } else { Vec::new() },
             ..Default::default()
         };
         match engine.add(NewDownload { url: url.clone(), options, ..Default::default() }) {

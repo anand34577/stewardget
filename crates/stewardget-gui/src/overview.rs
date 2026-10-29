@@ -93,6 +93,8 @@ impl StewardGetApp {
                 }
                 ui.add_space(4.0);
 
+                self.links_card(ui);
+                ui.add_space(5.0);
                 let wide = ui.available_width() > 880.0;
                 let now_block = |this: &mut Self, ui: &mut Ui| this.overview_active(ui, &active);
                 let recent_block = |this: &mut Self, ui: &mut Ui| this.overview_recent(ui, now);

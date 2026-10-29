@@ -60,7 +60,9 @@ mod store;
 mod task;
 pub mod util;
 
-pub use actions::{Action as PostAction, Outcome as ActionOutcome, Report as ActionReport, Rule as PostRule, run_rules};
+pub use actions::{
+    Action as PostAction, Outcome as ActionOutcome, Report as ActionReport, Rule as PostRule, run_rules,
+};
 pub use category::{Category, CustomCategory};
 pub use checksum::{Checksum, HashAlgo, hash_file};
 pub use config::{

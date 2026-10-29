@@ -392,6 +392,7 @@ impl StewardGetApp {
                             });
                     });
                 });
+                self.links_section(ui, draft);
                 section(ui, &p, "When something goes wrong", |ui| {
                     row(
                         ui,
@@ -464,6 +465,7 @@ impl StewardGetApp {
                         });
                     }
                 });
+                self.actions_section(ui, draft);
             }
             Tab::Network => section(ui, &p, "Network", |ui| {
                 row(ui, &p, "Connect timeout", "Seconds to wait for a server to accept a connection.", |ui| {
@@ -732,7 +734,7 @@ impl StewardGetApp {
 }
 
 /// A titled card grouping related settings.
-fn section(ui: &mut Ui, p: &Palette, title: &str, add: impl FnOnce(&mut Ui)) {
+pub(crate) fn section(ui: &mut Ui, p: &Palette, title: &str, add: impl FnOnce(&mut Ui)) {
     ui.label(RichText::new(title).size(14.0).family(theme::semi()).color(p.text));
     ui.add_space(6.0);
     card(p).inner_margin(Margin::symmetric(18, 12)).show(ui, |ui| {
@@ -769,7 +771,7 @@ fn tab_button(ui: &mut Ui, icon: Icon, label: &str, selected: bool, p: &Palette,
 }
 
 /// A setting: title and help on the left, the control on the right.
-fn row(ui: &mut Ui, p: &Palette, label: &str, help: &str, add: impl FnOnce(&mut Ui)) {
+pub(crate) fn row(ui: &mut Ui, p: &Palette, label: &str, help: &str, add: impl FnOnce(&mut Ui)) {
     let width = ui.available_width();
     let label_w = (width * 0.42).clamp(170.0, 320.0);
     // Dividers go between rows only, never after the last one in a card.

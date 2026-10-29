@@ -16,11 +16,11 @@ use url::Url;
 
 use crate::control::{ControlFile, meta_path, part_path};
 use crate::limiter::RateLimiter;
-use crate::net::{LaneView, Link, LinkPool, LinkView};
 use crate::model::{
     ApiState, Capture, CaptureAction, DownloadView, EngineSnapshot, Event, ExtensionInfo, LinkInfo, NewDownload,
     SegmentView,
 };
+use crate::net::{LaneView, Link, LinkPool, LinkView};
 use crate::probe::Probe;
 use crate::store::{self, DownloadList, Record, Store};
 use crate::task::{self, Hooks, Job, Outcome, Shared};
@@ -967,7 +967,11 @@ impl Engine {
             let old = self.inner.config.read().unwrap();
             rebuild
                 || old.multi_link != config.multi_link
-                || old.interfaces.iter().map(|l| (&l.address, l.enabled)).ne(config.interfaces.iter().map(|l| (&l.address, l.enabled)))
+                || old
+                    .interfaces
+                    .iter()
+                    .map(|l| (&l.address, l.enabled))
+                    .ne(config.interfaces.iter().map(|l| (&l.address, l.enabled)))
         };
         let client = if rebuild { Some(build_client(&config)?) } else { None };
         let pool = if relink {
@@ -988,7 +992,11 @@ impl Engine {
             None => {
                 // Only the caps changed: apply them without dropping connections.
                 for link in &self.inner.links.read().unwrap().links {
-                    if let Some(l) = config.interfaces.iter().find(|l| Some(l.address.as_str()) == link.address.map(|a| a.to_string()).as_deref()) {
+                    if let Some(l) = config
+                        .interfaces
+                        .iter()
+                        .find(|l| Some(l.address.as_str()) == link.address.map(|a| a.to_string()).as_deref())
+                    {
                         link.limiter.set_rate(l.limit);
                     }
                 }

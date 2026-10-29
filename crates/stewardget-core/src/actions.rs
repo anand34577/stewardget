@@ -209,7 +209,8 @@ fn extract(archive: &Path, delete_archive: bool) -> io::Result<(PathBuf, usize)>
         dest = parent.join(format!("{folder_name} ({n})"));
     }
     fs::create_dir_all(&dest)?;
-    let count = if name.ends_with(".zip") { unzip(archive, &dest) } else { untar(archive, &dest, name.ends_with(".tar")) };
+    let count =
+        if name.ends_with(".zip") { unzip(archive, &dest) } else { untar(archive, &dest, name.ends_with(".tar")) };
     match count {
         Ok(count) => {
             if delete_archive {
@@ -305,7 +306,9 @@ fn scan(path: &Path) -> io::Result<Scan> {
     {
         if let Some(exe) = defender() {
             let status = run_quiet(
-                std::process::Command::new(exe).args(["-Scan", "-ScanType", "3", "-DisableRemediation", "-File"]).arg(path),
+                std::process::Command::new(exe)
+                    .args(["-Scan", "-ScanType", "3", "-DisableRemediation", "-File"])
+                    .arg(path),
             )?;
             // 0 = clean, 2 = something found.
             return match status {

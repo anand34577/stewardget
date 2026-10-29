@@ -646,3 +646,18 @@ pub fn pill(ui: &mut Ui, text: &str, color: Color32) -> Response {
     ui.painter().galley(rect.center() - galley.size() / 2.0, galley, color);
     response
 }
+
+/// A small toggle chip: filled when on.
+pub fn chip(ui: &mut Ui, label: &str, on: bool, p: &Palette) -> Response {
+    let font = FontId::proportional(12.0);
+    let galley = ui.painter().layout_no_wrap(label.to_owned(), font, p.text);
+    let (rect, response) = ui.allocate_exact_size(galley.size() + vec2(16.0, 8.0), Sense::click());
+    let (fill, fg, stroke) = if on {
+        (p.accent, p.on_accent, Stroke::NONE)
+    } else {
+        (p.card, p.text_dim, Stroke::new(1.0, p.control_border))
+    };
+    ui.painter().rect(rect, CornerRadius::same(7), fill, stroke, egui::StrokeKind::Inside);
+    ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, label, FontId::proportional(12.0), fg);
+    response.on_hover_cursor(egui::CursorIcon::PointingHand)
+}

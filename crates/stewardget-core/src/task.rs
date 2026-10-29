@@ -802,7 +802,8 @@ async fn build_lanes(job: &Job, probe: &Probe, headers: &HeaderMap, ranged: bool
             .collect();
         let checks = candidates.iter().map(|url| {
             let (client, url) = (checker.clone(), url.clone());
-            let headers = if same_origin(&job.url, &url) { headers.clone() } else { without_credentials(headers.clone()) };
+            let headers =
+                if same_origin(&job.url, &url) { headers.clone() } else { without_credentials(headers.clone()) };
             async move {
                 let result = tokio::time::timeout(MIRROR_CHECK, probe::probe(&client, &url, &headers)).await;
                 (url, result)
@@ -884,26 +885,26 @@ impl Tuner {
 mod tune_tests {
     use super::*;
 
+    /// One reading, as if a second had passed since the last one.
+    fn second(t: &mut Tuner, moved: u64, spawned: usize, max: usize) -> Tune {
+        t.last_at = Instant::now() - Duration::from_secs(1);
+        t.step(moved, spawned, max)
+    }
+
     #[test]
     fn grows_until_the_speed_stops_improving() {
         let mut t = Tuner::default();
-        t.last_at = Instant::now() - Duration::from_secs(1);
-        assert_eq!(t.step(0, 4, 16), Tune::Wait);
-        t.last_at = Instant::now() - Duration::from_secs(1);
-        assert_eq!(t.step(1_000_000, 4, 16), Tune::Grow(2)); // 1 MB/s, first reading
-        t.last_at = Instant::now() - Duration::from_secs(1);
-        assert_eq!(t.step(3_000_000, 6, 16), Tune::Grow(3)); // 2 MB/s: better
-        t.last_at = Instant::now() - Duration::from_secs(1);
-        assert_eq!(t.step(5_050_000, 9, 16), Tune::Wait); // 2.05 MB/s: flat once
-        t.last_at = Instant::now() - Duration::from_secs(1);
-        assert_eq!(t.step(7_100_000, 9, 16), Tune::Settled);
+        assert_eq!(second(&mut t, 0, 4, 16), Tune::Wait);
+        assert_eq!(second(&mut t, 1_000_000, 4, 16), Tune::Grow(2)); // 1 MB/s, first reading
+        assert_eq!(second(&mut t, 3_000_000, 6, 16), Tune::Grow(3)); // 2 MB/s: better
+        assert_eq!(second(&mut t, 5_050_000, 9, 16), Tune::Wait); // 2.05 MB/s: flat once
+        assert_eq!(second(&mut t, 7_100_000, 9, 16), Tune::Settled);
     }
 
     #[test]
     fn never_exceeds_the_maximum() {
         let mut t = Tuner::default();
-        t.last_at = Instant::now() - Duration::from_secs(1);
-        assert_eq!(t.step(1_000_000, 15, 16), Tune::Grow(1));
+        assert_eq!(second(&mut t, 1_000_000, 15, 16), Tune::Grow(1));
     }
 }
 

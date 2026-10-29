@@ -6,6 +6,13 @@ All notable changes to StewardGet are listed here. The format follows
 
 ## [Unreleased]
 
+### Added (speed and automation)
+- **Mirrors**: give a file several links; connections are spread over all of them. A mirror must answer a range request with the same size, and one that fails or serves something else is dropped without stopping the download. `stewardget get --mirror`.
+- **Several networks at once**: bind connections to Wi-Fi, Ethernet or a phone's hotspot together, with a switch and a speed cap per adapter and live speed per link on the Overview. `stewardget get --bind`, `stewardget links`.
+- **Connection auto-tuner**: starts with a few connections and adds more while the speed keeps improving. Off per file when you set its connection count.
+- **Sources and links** card in the details pane shows each lane's speed, share and failures.
+- **Steps for each finished file**: unpack (.zip, .tar, .tar.gz), scan (Defender or ClamAV), move, run a program, tag; filtered by kind, extension and site. Results show in the History.
+
 ### Added
 - **History**: every finished or failed download is kept in a permanent,
   searchable log that outlives the download list. Filter by status, period

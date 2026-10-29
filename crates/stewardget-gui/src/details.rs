@@ -83,6 +83,7 @@ impl StewardGetApp {
         if d.status.is_active() {
             ui.add_space(4.0);
             self.insight_card(ui, &d);
+            self.lanes_card(ui, &d);
         }
         ui.add_space(6.0);
 

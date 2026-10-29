@@ -57,6 +57,8 @@ enum Command {
     Stats,
     /// Show where settings live and what they are.
     Config,
+    /// List the network adapters that can be combined with `get --bind`.
+    Links,
     /// Pause a download in the running app (`all` for every download).
     Pause { target: String },
     /// Resume (or retry) a download in the running app (`all` for every one).
@@ -136,6 +138,14 @@ pub struct GetArgs {
     /// Expected checksum: `sha256:<hex>` (also md5, sha1, sha512).
     #[arg(long, value_name = "ALGO:HEX")]
     pub checksum: Option<stewardget_core::Checksum>,
+    /// Another link to the same file; connections are spread over all of them
+    /// (only with a single URL). Repeatable.
+    #[arg(long = "mirror", value_name = "URL")]
+    pub mirrors: Vec<String>,
+    /// Download through this local network address (e.g. a Wi-Fi and an
+    /// Ethernet adapter at once). Repeatable; see `stewardget links`.
+    #[arg(long = "bind", value_name = "IP")]
+    pub binds: Vec<String>,
     /// Extra request header, e.g. `-H "Cookie: a=b"`. Repeatable.
     #[arg(short = 'H', long = "header", value_name = "HEADER", value_parser = parse_header)]
     pub headers: Vec<(String, String)>,
@@ -200,6 +210,16 @@ fn main() -> ExitCode {
         }
         Command::Stats => stats().map(|()| ExitCode::SUCCESS),
         Command::Config => config().map(|()| ExitCode::SUCCESS),
+        Command::Links => {
+            let found = stewardget_core::adapters();
+            if found.is_empty() {
+                println!("No network adapters with an IPv4 address were found.");
+            }
+            for a in found {
+                println!("{:<24} {}", a.name, a.address);
+            }
+            Ok(ExitCode::SUCCESS)
+        }
         Command::Extension { open } => extension(open).map(|()| ExitCode::SUCCESS),
     };
     result.unwrap_or_else(|e| {
