@@ -719,6 +719,13 @@ async fn custom_categories_choose_the_folder_and_existing_files_follow_the_polic
     assert_eq!(path, dir.join("Firmware").join("test file.bin"));
     assert_eq!(std::fs::read(&path).unwrap(), *server.data);
 
+    // One download can ask for the other behaviour than the setting.
+    let mut keep_both = NewDownload::new(&server.url);
+    keep_both.options.existing = Some(ExistingFile::Rename);
+    let fourth = engine.add(keep_both).unwrap();
+    assert_eq!(wait_for(&engine, fourth, Status::Completed, 30).await, Status::Completed);
+    assert_eq!(engine.download(fourth).unwrap().path, dir.join("Firmware").join("test file (2).bin"));
+
     // Deleting the category sorts its downloads back into the built-in ones.
     let mut cfg = engine.config();
     cfg.custom_categories.clear();

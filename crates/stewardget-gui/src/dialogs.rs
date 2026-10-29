@@ -10,7 +10,7 @@ use stewardget_core::util::{expand_pattern, format_bytes, parse_size};
 
 use crate::table::free_space;
 use stewardget_core::{
-    Checksum, Config, DownloadId, DownloadOptions, DownloadView, LinkInfo, MAIN_QUEUE, NewDownload, QueueId, Status,
+    Checksum, Config, DownloadId, DownloadOptions, DownloadView, ExistingFile, LinkInfo, MAIN_QUEUE, NewDownload, QueueId, Status,
 };
 
 use crate::app::{AfterAll, ListFilter, Page, StewardGetApp, capitalize};
@@ -27,7 +27,7 @@ fn modal_frame(p: &Palette) -> Frame {
         .fill(p.card)
         .stroke(Stroke::new(1.0, p.border))
         .corner_radius(CornerRadius::same(14))
-        .inner_margin(Margin::same(22))
+        .inner_margin(Margin::same(18))
         .shadow(p.shadow(14, 44))
 }
 
@@ -43,7 +43,7 @@ pub(crate) fn title(ui: &mut Ui, p: &Palette, icon: Icon, text: &str) {
         ui.add_space(4.0);
         ui.label(RichText::new(text).size(17.0).family(theme::semi()).color(p.text));
     });
-    ui.add_space(6.0);
+    ui.add_space(4.0);
 }
 
 /// Right-aligned button row at the bottom of a dialog.
@@ -103,6 +103,8 @@ pub struct AddDialog {
     mirrors: String,
     advanced: bool,
     duplicates: Duplicates,
+    /// What to do when the file is already there; `None` = the setting's choice.
+    existing: Option<ExistingFile>,
     pub queue: QueueId,
     check: Option<LinkCheck>,
     error: Option<String>,
@@ -129,6 +131,7 @@ impl AddDialog {
             mirrors: String::new(),
             advanced: false,
             duplicates: Duplicates::Skip,
+            existing: None,
             queue: MAIN_QUEUE,
             check: None,
             error: None,
@@ -195,6 +198,7 @@ impl AddDialog {
             fallback_url: None,
             mirrors: stewardget_core::util::split_links(&self.mirrors),
             mux: None,
+            existing: self.existing,
         })
     }
 
@@ -270,7 +274,7 @@ impl StewardGetApp {
         let mut submit: Option<bool> = None; // Some(paused)
         let mut close = false;
         let mut show_existing = None;
-        let width = (ctx.content_rect().width() - 80.0).clamp(380.0, 640.0);
+        let width = (ctx.content_rect().width() - 80.0).clamp(380.0, 540.0);
 
         // Something finished earlier that looks like this: same link, or the
         // same file name and size once the server has been asked.
@@ -293,13 +297,35 @@ impl StewardGetApp {
             None
         };
 
+        // A file with this name is already on disk: the list has it finished,
+        // the history remembers it, or the folder holds one by that name.
+        let conflict: Option<PathBuf> = if links.len() == 1 {
+            let by_name = match dialog.checked() {
+                Some(Ok(info)) => Some(PathBuf::from(dialog.dir.trim()).join(info.file_name)),
+                _ => None,
+            };
+            existing
+                .iter()
+                .find(|d| d.status == Status::Completed && d.path.exists())
+                .map(|d| d.path.clone())
+                .or_else(|| earlier.as_ref().filter(|e| e.path.exists()).map(|e| e.path.clone()))
+                .or_else(|| by_name.filter(|p| p.exists()))
+        } else {
+            None
+        };
+        if conflict.is_none() {
+            dialog.existing = None;
+        }
+        let mut open_existing: Option<PathBuf> = None;
+        let default_existing = self.engine.config().existing_file;
+
         let modal = modal("stewardget-add", &p).show(ctx, |ui| {
             ui.set_width(width);
             title(ui, &p, Icon::Download, "Add downloads");
             let urls = ui.add(
                 widgets::input_multiline(&mut dialog.urls)
                     .hint_text("Paste one or more links, one per line.\nTip: img[001-120].jpg adds a numbered series.")
-                    .desired_rows(3)
+                    .desired_rows(2)
                     .desired_width(f32::INFINITY),
             );
             if !dialog.focus_requested {
@@ -351,7 +377,7 @@ impl StewardGetApp {
             }
 
             // Duplicates.
-            if !existing.is_empty() {
+            if !existing.is_empty() && conflict.is_none() {
                 ui.add_space(5.0);
                 callout(ui, &p, p.yellow, Icon::Info, |ui| {
                     let text = if existing.len() == 1 {
@@ -376,31 +402,48 @@ impl StewardGetApp {
                 });
             }
 
-            if let Some(e) = &earlier {
+            if let Some(path) = &conflict {
+                ui.add_space(5.0);
+                callout(ui, &p, p.yellow, Icon::Warning, |ui| {
+                    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                    let folder = path.parent().map(|d| d.display().to_string()).unwrap_or_default();
+                    ui.add(
+                        egui::Label::new(RichText::new(format!("“{name}” is already downloaded")).family(theme::semi()).color(p.text))
+                            .truncate(),
+                    );
+                    ui.add(egui::Label::new(RichText::new(folder).size(12.0).color(p.text_dim)).truncate());
+                    let mut choice = dialog.existing.unwrap_or(default_existing);
+                    ui.horizontal(|ui| {
+                        if widgets::button(ui, ButtonKind::Tool, Some(Icon::FolderOpen), "Open existing", true, &p)
+                            .on_hover_text("Show the file in its folder and cancel this download")
+                            .clicked()
+                        {
+                            open_existing = Some(path.clone());
+                        }
+                        widgets::segmented(
+                            ui,
+                            &mut choice,
+                            &[(ExistingFile::Rename, "Save with another name"), (ExistingFile::Overwrite, "Replace it")],
+                            &p,
+                        );
+                    });
+                    dialog.existing = Some(choice);
+                    let hint = match choice {
+                        ExistingFile::Rename => "Both files are kept; the new one gets a number in its name.".to_owned(),
+                        ExistingFile::Overwrite => "The old file is replaced when the download finishes.".to_owned(),
+                    };
+                    ui.label(RichText::new(hint).size(12.0).color(p.text_dim));
+                });
+            } else if let Some(e) = &earlier {
                 ui.add_space(5.0);
                 callout(ui, &p, p.accent2, Icon::Info, |ui| {
-                    let still_there = e.path.exists();
                     let when = stewardget_core::util::format_relative(e.finished_at, stewardget_core::util::now_unix());
-                    let text = if still_there {
-                        format!(
-                            "You already downloaded “{}” {when}, and it is still in {}.",
-                            e.file_name,
-                            e.path.parent().map(|d| d.display().to_string()).unwrap_or_default()
-                        )
-                    } else {
-                        format!("You downloaded “{}” {when}, but the file has been moved or deleted.", e.file_name)
-                    };
+                    let text = format!("You downloaded “{}” {when}, but the file has been moved or deleted.", e.file_name);
                     ui.add(egui::Label::new(RichText::new(text).color(p.text)).wrap());
-                    if still_there
-                        && widgets::button(ui, ButtonKind::Tool, Some(Icon::FolderOpen), "Show the file", true, &p)
-                            .clicked()
-                    {
-                        let _ = stewardget_core::util::reveal_in_file_manager(&e.path);
-                    }
                 });
             }
 
-            ui.add_space(6.0);
+            ui.add_space(4.0);
             let detected = match dialog.checked() {
                 Some(Ok(info)) => info.file_name,
                 _ => String::new(),
@@ -426,7 +469,6 @@ impl StewardGetApp {
                     ui.label(RichText::new(text).size(12.0).color(if short { p.red } else { p.text_dim }));
                 });
             }
-            ui.add_space(4.0);
             widgets::form_row(ui, LABEL_W, "File name", &p, |ui| {
                 let hint = match n {
                     0 | 1 if !detected.is_empty() => detected.clone(),
@@ -446,11 +488,6 @@ impl StewardGetApp {
                     });
             });
 
-            ui.add_space(6.0);
-            let arrow = if dialog.advanced { Icon::CaretUp } else { Icon::CaretDown };
-            if widgets::button(ui, ButtonKind::Tool, Some(arrow), "Advanced options", true, &p).clicked() {
-                dialog.advanced = !dialog.advanced;
-            }
             if dialog.advanced {
                 ui.add_space(4.0);
                 widgets::form_row(ui, LABEL_W, "Connections", &p, |ui| {
@@ -499,6 +536,7 @@ Connections are shared across all of them.",
             }
 
             let to_add = match dialog.duplicates {
+                _ if conflict.is_some() => n,
                 Duplicates::Skip => links.iter().filter(|l| !existing.iter().any(|d| &d.url == *l)).count(),
                 Duplicates::AddAgain => n,
             };
@@ -521,9 +559,17 @@ Connections are shared across all of them.",
                 if widgets::button(ui, ButtonKind::Ghost, None, "Cancel", true, &p).clicked() {
                     close = true;
                 }
+                let arrow = if dialog.advanced { Icon::CaretUp } else { Icon::CaretDown };
+                if widgets::button(ui, ButtonKind::Tool, Some(arrow), "Advanced", true, &p).clicked() {
+                    dialog.advanced = !dialog.advanced;
+                }
             });
         });
 
+        if let Some(path) = open_existing {
+            let _ = stewardget_core::util::reveal_in_file_manager(&path);
+            return;
+        }
         if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::Enter)) {
             submit = Some(false);
         }
@@ -536,6 +582,7 @@ Connections are shared across all of them.",
         }
         if let Some(paused) = submit {
             let wanted: Vec<String> = match dialog.duplicates {
+                _ if conflict.is_some() => links.clone(),
                 Duplicates::Skip => links.iter().filter(|l| !existing.iter().any(|d| &d.url == *l)).cloned().collect(),
                 Duplicates::AddAgain => links.clone(),
             };

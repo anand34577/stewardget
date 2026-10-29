@@ -349,7 +349,7 @@ pub(crate) async fn finalize(
     };
 
     // Unless told to overwrite, never clobber a file that appeared while we were downloading.
-    let final_path = if job.config.existing_file == ExistingFile::Overwrite {
+    let final_path = if job.options.existing.unwrap_or(job.config.existing_file) == ExistingFile::Overwrite {
         dest.to_path_buf()
     } else {
         let dir = dest.parent().unwrap_or(Path::new("."));

@@ -626,9 +626,9 @@ pub fn stat_tile(ui: &mut Ui, p: &Palette, label: &str, value: &str, caption_tex
         ui.set_min_width(ui.available_width());
         ui.label(egui::RichText::new(label).size(11.5).color(p.text_dim));
         ui.label(egui::RichText::new(value).size(17.0).family(crate::theme::semi()).color(color));
-        if !caption_text.is_empty() {
-            ui.label(egui::RichText::new(caption_text).size(11.0).color(p.text_dim));
-        }
+        // Always one line, so tiles side by side have the same height.
+        let caption_text = if caption_text.is_empty() { "\u{a0}" } else { caption_text };
+        ui.label(egui::RichText::new(caption_text).size(11.0).color(p.text_dim));
     });
 }
 

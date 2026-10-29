@@ -1990,7 +1990,7 @@ impl Hooks for EngineHooks {
             let name = resolve_name(&rec.options, probe, &url);
             rec.category = config.categorize(&name);
             let dir = target_dir(&config, &rec.options, rec.category);
-            let overwrite = config.existing_file == ExistingFile::Overwrite;
+            let overwrite = rec.options.existing.unwrap_or(config.existing_file) == ExistingFile::Overwrite;
             // Re-adding a URL whose partial download is still on disk resumes it.
             let candidate = dir.join(&name);
             let resumable_here = !reserved.contains(&candidate)
