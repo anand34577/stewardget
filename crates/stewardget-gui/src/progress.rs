@@ -224,10 +224,10 @@ fn running_body(
 ) -> Option<Action> {
     let mut action = None;
     facts(ui, p, d);
-    ui.add_space(8.0);
+    ui.add_space(5.0);
     big_bar(ui, p, d);
     if d.segments.len() > 1 && d.total.is_some() {
-        ui.add_space(8.0);
+        ui.add_space(5.0);
         ui.label(RichText::new("Download progress by connection").size(11.5).color(p.text_dim));
         connection_bars(ui, p, d);
     }
@@ -236,7 +236,7 @@ fn running_body(
         parts_table(ui, p, d);
     }
     if d.status != Status::Failed {
-        ui.add_space(8.0);
+        ui.add_space(5.0);
         ui.horizontal(|ui| {
             ui.label(RichText::new("Speed limit").color(p.text_dim));
             let current = d.options.speed_limit;
@@ -283,7 +283,7 @@ fn running_body(
                 });
             });
     }
-    ui.add_space(8.0);
+    ui.add_space(5.0);
     ui.horizontal(|ui| {
         if d.status.can_pause() {
             if widgets::button(ui, ButtonKind::Primary, Some(Icon::Pause), "Pause", true, p).clicked() {
@@ -359,7 +359,7 @@ fn complete_body(ui: &mut Ui, p: &Palette, d: &DownloadView, w: &ProgressWindow)
             RichText::new("A program disguised as a document or picture: do not open it.").size(12.5).color(p.red),
         );
     }
-    ui.add_space(10.0);
+    ui.add_space(6.0);
     ui.horizontal(|ui| {
         if widgets::button(ui, ButtonKind::Primary, Some(Icon::External), "Open", exists, p).clicked() {
             action = Some(Action::Open);

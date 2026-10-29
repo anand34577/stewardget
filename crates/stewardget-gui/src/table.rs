@@ -13,8 +13,8 @@ use crate::theme::Palette;
 use crate::widgets::{self, ButtonKind};
 
 /// Row height in compact mode, and with name plus details.
-const ROW_H_COMPACT: f32 = 32.0;
-const ROW_H_COMFORTABLE: f32 = 46.0;
+const ROW_H_COMPACT: f32 = 28.0;
+const ROW_H_COMFORTABLE: f32 = 40.0;
 const HEADER_H: f32 = 30.0;
 const PAD_X: f32 = 14.0;
 
@@ -585,7 +585,7 @@ impl StewardGetApp {
             ui.label(RichText::new(title).size(16.0).family(crate::theme::semi()).color(p.text));
             ui.add(egui::Label::new(RichText::new(sub).color(p.text_dim)).wrap());
             if self.snap.downloads.is_empty() {
-                ui.add_space(10.0);
+                ui.add_space(6.0);
                 if widgets::button(ui, ButtonKind::Primary, Some(Icon::Plus), "Add URL", true, &p).clicked() {
                     self.open_add(None);
                 }

@@ -16,7 +16,7 @@ impl StewardGetApp {
         let s = self.snap.stats.clone();
         let now = now_unix();
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-            egui::Frame::new().inner_margin(Margin::symmetric(18, 14)).show(ui, |ui| {
+            egui::Frame::new().inner_margin(Margin::symmetric(12, 8)).show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new("Statistics").size(18.0).family(crate::theme::semi()).color(p.text));
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -28,7 +28,7 @@ impl StewardGetApp {
                         widgets::icon(ui, Icon::Lock, 13.0, p.green);
                     });
                 });
-                ui.add_space(10.0);
+                ui.add_space(6.0);
 
                 let tiles = [
                     ("Total downloaded", format_bytes(s.total_bytes), String::new(), p.accent),
@@ -50,14 +50,14 @@ impl StewardGetApp {
                         p.text,
                     ),
                 ];
-                let per_row = ((ui.available_width() / 210.0).floor() as usize).clamp(2, 8);
+                let per_row = ((ui.available_width() / 150.0).floor() as usize).clamp(2, 8);
                 for chunk in tiles.chunks(per_row) {
                     ui.columns(per_row, |cols| {
                         for (col, (label, value, caption, color)) in cols.iter_mut().zip(chunk) {
                             widgets::stat_tile(col, &p, label, value, caption, *color);
                         }
                     });
-                    ui.add_space(8.0);
+                    ui.add_space(5.0);
                 }
 
                 let wide = ui.available_width() > 900.0;
@@ -91,10 +91,10 @@ impl StewardGetApp {
                     });
                 } else {
                     days_chart(ui);
-                    ui.add_space(8.0);
+                    ui.add_space(5.0);
                     live_chart(ui);
                 }
-                ui.add_space(8.0);
+                ui.add_space(5.0);
 
                 card(&p).show(ui, |ui| {
                     ui.set_min_width(ui.available_width());
@@ -104,7 +104,7 @@ impl StewardGetApp {
                         widgets::heatmap(ui, &s.recent_days(182, now), &p);
                     });
                 });
-                ui.add_space(8.0);
+                ui.add_space(5.0);
 
                 let categories = self.category_rows();
                 let hosts = self.host_rows();
@@ -144,7 +144,7 @@ impl StewardGetApp {
                     });
                 } else {
                     breakdown(ui, "BY CATEGORY", &categories);
-                    ui.add_space(8.0);
+                    ui.add_space(5.0);
                     breakdown(ui, "TOP SOURCES", &hosts);
                 }
             });

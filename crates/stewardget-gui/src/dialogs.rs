@@ -43,12 +43,12 @@ pub(crate) fn title(ui: &mut Ui, p: &Palette, icon: Icon, text: &str) {
         ui.add_space(4.0);
         ui.label(RichText::new(text).size(17.0).family(theme::semi()).color(p.text));
     });
-    ui.add_space(12.0);
+    ui.add_space(6.0);
 }
 
 /// Right-aligned button row at the bottom of a dialog.
 pub(crate) fn footer(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
-    ui.add_space(16.0);
+    ui.add_space(8.0);
     ui.with_layout(Layout::right_to_left(Align::Center), add);
 }
 
@@ -291,13 +291,13 @@ impl StewardGetApp {
 
             // Link info, as reported by the server.
             if n == 1 {
-                ui.add_space(8.0);
+                ui.add_space(5.0);
                 self.link_card(ui, &dialog);
             }
 
             // Duplicates.
             if !existing.is_empty() {
-                ui.add_space(8.0);
+                ui.add_space(5.0);
                 callout(ui, &p, p.yellow, Icon::Info, |ui| {
                     let text = if existing.len() == 1 {
                         format!("Already in your list: {} ({})", existing[0].file_name, existing[0].status.label())
@@ -321,7 +321,7 @@ impl StewardGetApp {
                 });
             }
 
-            ui.add_space(12.0);
+            ui.add_space(6.0);
             let detected = match dialog.checked() {
                 Some(Ok(info)) => info.file_name,
                 _ => String::new(),
@@ -583,7 +583,7 @@ impl StewardGetApp {
             if n > 5 {
                 ui.label(RichText::new(format!("…and {} more", n - 5)).color(p.text_dim));
             }
-            ui.add_space(10.0);
+            ui.add_space(6.0);
             let partial: u64 = c.items.iter().filter(|i| i.2 != Status::Completed).map(|i| i.3).sum();
             let has_done = c.items.iter().any(|i| i.2 == Status::Completed);
             ui.horizontal(|ui| {
@@ -657,7 +657,7 @@ impl StewardGetApp {
             for (_, name) in c.items.iter().take(5) {
                 ui.add(egui::Label::new(RichText::new(name).color(p.text)).truncate());
             }
-            ui.add_space(8.0);
+            ui.add_space(5.0);
             let text = if c.discarded > 0 {
                 format!(
                     "{} already downloaded will be discarded and everything is fetched again. To keep it, use Resume or Refresh link instead.",
@@ -771,7 +771,7 @@ impl StewardGetApp {
                 };
                 ui.label(RichText::new(size).size(12.5).color(p.text_dim));
             });
-            ui.add_space(10.0);
+            ui.add_space(6.0);
             widgets::caption(ui, "FILE", &p);
             ui.add_space(4.0);
             ui.add_enabled_ui(!running, |ui| {
@@ -788,7 +788,7 @@ impl StewardGetApp {
             if running {
                 note(ui, "Pause the download to rename or move it. Files on disk are moved with it.", p.text_dim);
             }
-            ui.add_space(10.0);
+            ui.add_space(6.0);
             widgets::caption(ui, "CONNECTION", &p);
             ui.add_space(4.0);
             ui.add_enabled_ui(view.status != Status::Completed, |ui| {
@@ -972,7 +972,7 @@ impl StewardGetApp {
                 }
             }
 
-            ui.add_space(16.0);
+            ui.add_space(8.0);
             widgets::caption(ui, "OPTION 2 · PASTE A NEW LINK", &p);
             ui.add_space(4.0);
             let (field, clicked) =
@@ -1044,7 +1044,7 @@ impl StewardGetApp {
             ui.set_width(420.0);
             title(ui, &p, Icon::Power, "All downloads are finished");
             ui.label(RichText::new(format!("{verb} in {left} seconds.")).size(14.0).color(p.text));
-            ui.add_space(8.0);
+            ui.add_space(5.0);
             let frac = since.elapsed().as_secs_f32() / SECS as f32;
             let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 6.0), egui::Sense::hover());
             ui.painter().rect_filled(rect, CornerRadius::same(3), p.track);
@@ -1109,7 +1109,7 @@ impl StewardGetApp {
                     );
                 });
             });
-            ui.add_space(16.0);
+            ui.add_space(8.0);
 
             step(ui, &p, Icon::Folder, "Save downloads to", |ui| {
                 let (_, browse) = widgets::input_with_button(ui, &mut w.download_dir, "", Icon::FolderOpen, "Browse", &p);
@@ -1187,5 +1187,5 @@ fn step(ui: &mut Ui, p: &Palette, icon: Icon, label: &str, add: impl FnOnce(&mut
             add(ui);
         });
     });
-    ui.add_space(12.0);
+    ui.add_space(6.0);
 }

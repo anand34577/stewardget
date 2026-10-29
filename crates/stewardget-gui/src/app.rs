@@ -892,7 +892,7 @@ impl StewardGetApp {
             {
                 self.grab_dialog = Some(crate::grab::GrabDialog::new(None));
             }
-            ui.add_space(8.0);
+            ui.add_space(5.0);
             if widgets::button(ui, ButtonKind::Tool, Some(Icon::Play), label("Resume"), can_resume, &p)
                 .on_hover_text("Resume selected (Space)")
                 .clicked()
@@ -1064,7 +1064,7 @@ impl StewardGetApp {
                 ui.label(RichText::new("StewardGet").size(18.0).family(theme::semi()).color(p.text));
             }
         });
-        ui.add_space(16.0);
+        ui.add_space(8.0);
 
         // The lists scroll when the window is short; Statistics and Settings stay pinned.
         // Two pinned entries, plus the version line when the sidebar is open.
@@ -1084,7 +1084,7 @@ impl StewardGetApp {
                 {
                     self.page = Page::History;
                 }
-                ui.add_space(10.0);
+                ui.add_space(6.0);
                 let open = collapsed || widgets::section(ui, "DOWNLOADS", &p);
                 if !collapsed {
                     ui.add_space(2.0);
@@ -1105,9 +1105,9 @@ impl StewardGetApp {
                         self.filter = filter;
                     }
                 }
-                ui.add_space(12.0);
+                ui.add_space(6.0);
                 self.sidebar_queues(ui, collapsed);
-                ui.add_space(12.0);
+                ui.add_space(6.0);
                 let open = collapsed || widgets::section(ui, "CATEGORIES", &p);
                 if !collapsed {
                     ui.add_space(2.0);
@@ -1516,7 +1516,7 @@ fn nav_item(
     collapsed: bool,
     p: &Palette,
 ) -> egui::Response {
-    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 32.0), Sense::hover());
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 28.0), Sense::hover());
     // Explicit ids keep navigation stable regardless of layout nesting; the
     // icon tells a queue called "Video" from the Video category.
     let response = ui.interact(rect, egui::Id::unique(("stewardget-nav", label, format!("{icon:?}"))), Sense::click());
@@ -1811,7 +1811,7 @@ impl eframe::App for StewardGetApp {
             .show(ui, |ui| ui.push_id("menubar", |ui| self.menu_bar(ui)));
 
         egui::Panel::top("stewardget-toolbar")
-            .exact_size(50.0)
+            .exact_size(44.0)
             .frame(
                 Frame::new().fill(p.sidebar).inner_margin(Margin::symmetric(10, 0)).stroke(Stroke::new(1.0, p.border)),
             )
@@ -1828,7 +1828,7 @@ impl eframe::App for StewardGetApp {
             .exact_size(if collapsed { 56.0 } else { 204.0 })
             .resizable(false)
             .frame(
-                Frame::new().fill(p.sidebar).inner_margin(Margin::symmetric(8, 12)).stroke(Stroke::new(1.0, p.border)),
+                Frame::new().fill(p.sidebar).inner_margin(Margin::symmetric(6, 8)).stroke(Stroke::new(1.0, p.border)),
             )
             .show(ui, |ui| ui.push_id("nav", |ui| self.sidebar(ui, collapsed)));
 
@@ -1840,7 +1840,7 @@ impl eframe::App for StewardGetApp {
                 .frame(
                     Frame::new()
                         .fill(p.sidebar)
-                        .inner_margin(Margin::symmetric(16, 12))
+                        .inner_margin(Margin::symmetric(12, 8))
                         .stroke(Stroke::new(1.0, p.border)),
                 )
                 .show(ui, |ui| ui.push_id("details", |ui| self.details_pane(ui)));

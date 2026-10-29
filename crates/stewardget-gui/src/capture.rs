@@ -386,7 +386,7 @@ impl StewardGetApp {
             .size(12.5)
             .color(p.text_dim),
         );
-        ui.add_space(8.0);
+        ui.add_space(5.0);
 
         // Pick by type: one chip per category present.
         ui.horizontal_wrapped(|ui| {
@@ -406,7 +406,7 @@ impl StewardGetApp {
                 }
             }
         });
-        ui.add_space(8.0);
+        ui.add_space(5.0);
         ui.horizontal(|ui| {
             ui.add(widgets::input(&mut w.search).hint_text("Filter by name or link").desired_width(260.0));
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -457,7 +457,7 @@ impl StewardGetApp {
                     ui.label(RichText::new("No links match the filter.").color(p.text_dim));
                 }
             });
-        ui.add_space(10.0);
+        ui.add_space(6.0);
     }
 
     /// Folder, free space and queue: shared by both layouts.
@@ -617,7 +617,7 @@ fn header(ui: &mut Ui, p: &Palette, icon: Icon, text: &str, waiting: usize) {
             });
         }
     });
-    ui.add_space(12.0);
+    ui.add_space(6.0);
 }
 
 fn footer(ui: &mut Ui, p: &Palette, w: &CaptureWindow, waiting: usize) -> Option<Decision> {

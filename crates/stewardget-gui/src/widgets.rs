@@ -587,7 +587,7 @@ pub fn card(p: &Palette) -> egui::Frame {
         .fill(p.card)
         .stroke(Stroke::new(1.0, p.border))
         .corner_radius(CornerRadius::same(10))
-        .inner_margin(egui::Margin::same(12))
+        .inner_margin(egui::Margin::same(9))
 }
 
 /// Small upper-case section caption.
@@ -624,9 +624,8 @@ pub fn section(ui: &mut Ui, text: &str, p: &Palette) -> bool {
 pub fn stat_tile(ui: &mut Ui, p: &Palette, label: &str, value: &str, caption_text: &str, color: Color32) {
     card(p).show(ui, |ui| {
         ui.set_min_width(ui.available_width());
-        ui.set_min_height(58.0);
         ui.label(egui::RichText::new(label).size(11.5).color(p.text_dim));
-        ui.label(egui::RichText::new(value).size(19.0).family(crate::theme::semi()).color(color));
+        ui.label(egui::RichText::new(value).size(17.0).family(crate::theme::semi()).color(color));
         if !caption_text.is_empty() {
             ui.label(egui::RichText::new(caption_text).size(11.0).color(p.text_dim));
         }

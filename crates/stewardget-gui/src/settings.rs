@@ -122,7 +122,7 @@ impl StewardGetApp {
                     }
                 });
             });
-            ui.add_space(12.0);
+            ui.add_space(6.0);
 
             let narrow = ui.available_width() < 760.0;
             if narrow {
@@ -133,7 +133,7 @@ impl StewardGetApp {
                         }
                     }
                 });
-                ui.add_space(8.0);
+                ui.add_space(5.0);
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
                     .show(ui, |ui| self.settings_tab_body(ui, &mut draft));
@@ -519,7 +519,7 @@ impl StewardGetApp {
                     )
                     .wrap(),
                 );
-                ui.add_space(8.0);
+                ui.add_space(5.0);
                 // Queues are saved as soon as they are edited, not with the Save button.
                 for q in self.engine.config().queues {
                     let count = self.snap.downloads.iter().filter(|d| d.queue == q.id).count();
@@ -529,7 +529,7 @@ impl StewardGetApp {
                         crate::queues::QueueCardAction::None => {}
                     }
                 }
-                ui.add_space(12.0);
+                ui.add_space(6.0);
                 section(ui, &p, "When all downloads finish", |ui| {
                     ui.add(egui::Label::new(RichText::new(format!(
                         "For this session: {}. Change it from the toolbar's More menu. StewardGet counts down for 30 seconds first, so you can cancel.",
@@ -545,7 +545,7 @@ impl StewardGetApp {
                 if widgets::button(ui, ButtonKind::Primary, Some(Icon::Plus), "New category", true, &p).clicked() {
                     self.category_dialog = Some(crate::categories::CategoryDialog::create());
                 }
-                ui.add_space(8.0);
+                ui.add_space(5.0);
                 for c in draft.categories() {
                     let label = draft.category_label(c);
                     row_icon(ui, &p, Icon::for_category(c), p.category(c), &label, |ui| {
@@ -599,7 +599,7 @@ impl StewardGetApp {
                     ui.horizontal_wrapped(|ui| {
                         widgets::segmented(ui, &mut self.setup_browser, &Browser::ALL, &p);
                     });
-                    ui.add_space(10.0);
+                    ui.add_space(6.0);
                     self.browser_steps(ui);
                 });
                 section(ui, &p, "Browser integration", |ui| {
@@ -785,7 +785,7 @@ fn row(ui: &mut Ui, p: &Palette, label: &str, help: &str, add: impl FnOnce(&mut 
                 ui.add(egui::Label::new(RichText::new(help).size(12.0).color(p.text_dim)).wrap());
             }
         });
-        ui.add_space(12.0);
+        ui.add_space(6.0);
         add(ui);
     });
 }
@@ -804,10 +804,10 @@ fn row_icon(ui: &mut Ui, p: &Palette, icon: Icon, color: Color32, label: &str, a
 }
 
 fn divider(ui: &mut Ui, p: &Palette, width: f32) {
-    ui.add_space(8.0);
+    ui.add_space(5.0);
     let (r, _) = ui.allocate_exact_size(vec2(width, 1.0), Sense::hover());
     ui.painter().rect_filled(r, CornerRadius::ZERO, p.border.gamma_multiply(0.6));
-    ui.add_space(8.0);
+    ui.add_space(5.0);
 }
 
 /// A miniature preview of a theme.
@@ -1243,5 +1243,5 @@ fn step(ui: &mut Ui, p: &Palette, n: &mut usize, text: &str, add: impl FnOnce(&m
             add(ui);
         });
     });
-    ui.add_space(8.0);
+    ui.add_space(5.0);
 }

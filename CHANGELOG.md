@@ -21,6 +21,10 @@ All notable changes to StewardGet are listed here. The format follows
   source slower or faster than usual — and offers a one-click fix.
 - A six-month calendar heat-map on the Statistics page.
 
+### Changed
+- A tighter, more compact interface: less padding and spacing in the sidebar,
+  toolbar, tables, cards and pages, so more of each screen shows content.
+
 ## [0.7.4] - 2026-10-28
 
 ### Fixed

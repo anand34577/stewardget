@@ -28,7 +28,7 @@ impl StewardGetApp {
         let week: u64 = snap.stats.recent_days(7, now).iter().map(|d| d.bytes).sum();
 
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-            egui::Frame::new().inner_margin(Margin::symmetric(18, 14)).show(ui, |ui| {
+            egui::Frame::new().inner_margin(Margin::symmetric(12, 8)).show(ui, |ui| {
                 // Hero: the live speed over its own graph.
                 card(&p).show(ui, |ui| {
                     ui.set_min_width(ui.available_width());
@@ -40,7 +40,7 @@ impl StewardGetApp {
                             } else {
                                 ("Idle".to_owned(), p.text_dim)
                             };
-                            ui.label(RichText::new(value).size(34.0).family(crate::theme::semi()).color(color));
+                            ui.label(RichText::new(value).size(28.0).family(crate::theme::semi()).color(color));
                             let line = match (active.len(), eta) {
                                 (0, _) if waiting > 0 => format!("{waiting} waiting to start"),
                                 (0, _) => "Nothing is downloading. Paste a link to begin.".to_owned(),
@@ -54,7 +54,7 @@ impl StewardGetApp {
                                 (n, None) => format!("{n} downloading"),
                             };
                             ui.label(RichText::new(line).color(p.text_dim));
-                            ui.add_space(8.0);
+                            ui.add_space(5.0);
                             ui.horizontal(|ui| {
                                 if widgets::button(ui, ButtonKind::Primary, Some(Icon::Plus), "Add download", true, &p)
                                     .clicked()
@@ -70,13 +70,13 @@ impl StewardGetApp {
                         });
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             let w = (ui.available_width() - 20.0).clamp(120.0, 520.0);
-                            widgets::area_chart(ui, &snap.history, vec2(w, 110.0), p.accent2, &p);
+                            widgets::area_chart(ui, &snap.history, vec2(w, 84.0), p.accent2, &p);
                         });
                     });
                 });
-                ui.add_space(8.0);
+                ui.add_space(5.0);
 
-                let per_row = if ui.available_width() > 640.0 { 4 } else { 2 };
+                let per_row = if ui.available_width() > 480.0 { 4 } else { 2 };
                 let tiles = [
                     ("Today", format_bytes(snap.stats.today(now)), p.accent),
                     ("Last 7 days", format_bytes(week), p.accent2),
@@ -103,10 +103,10 @@ impl StewardGetApp {
                     });
                 } else {
                     now_block(self, ui);
-                    ui.add_space(8.0);
+                    ui.add_space(5.0);
                     recent_block(self, ui);
                 }
-                ui.add_space(8.0);
+                ui.add_space(5.0);
                 self.overview_habits(ui);
             });
         });
@@ -274,7 +274,7 @@ impl StewardGetApp {
                 .color(p.text_dim),
             );
             if !hosts.is_empty() {
-                ui.add_space(8.0);
+                ui.add_space(5.0);
                 widgets::caption(ui, "FASTEST SOURCES", &p);
                 let max = hosts.iter().map(|h| h.average_speed()).fold(1.0, f64::max);
                 for h in &hosts {

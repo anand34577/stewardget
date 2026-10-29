@@ -9,7 +9,7 @@ use stewardget_core::{Accent, Category, Status, Theme};
 
 /// Height shared by buttons, text fields, combo boxes and sliders, so rows of
 /// mixed controls line up.
-pub const CONTROL_H: f32 = 30.0;
+pub const CONTROL_H: f32 = 28.0;
 
 #[derive(Clone, Copy)]
 pub struct Palette {
@@ -241,11 +241,11 @@ impl Palette {
             ]
             .into();
             let s = &mut style.spacing;
-            s.item_spacing = egui::vec2(8.0, 6.0);
-            s.button_padding = egui::vec2(12.0, 5.0);
+            s.item_spacing = egui::vec2(8.0, 4.0);
+            s.button_padding = egui::vec2(10.0, 4.0);
             s.interact_size = egui::vec2(40.0, CONTROL_H);
             s.combo_height = 320.0;
-            s.window_margin = Margin::same(18);
+            s.window_margin = Margin::same(14);
             s.menu_margin = Margin::same(6);
             s.slider_width = 180.0;
             s.icon_width = 16.0;

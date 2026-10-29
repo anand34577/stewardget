@@ -10,7 +10,7 @@ use crate::app::StewardGetApp;
 use crate::icons::Icon;
 use crate::widgets::{self, ButtonKind};
 
-const ROW_H: f32 = 52.0;
+const ROW_H: f32 = 44.0;
 
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub enum StatusFilter {
@@ -187,7 +187,7 @@ impl StewardGetApp {
         }
         let mean = if secs > 0 { bytes as f64 / secs as f64 } else { 0.0 };
 
-        egui::Frame::new().inner_margin(Margin::symmetric(18, 14)).show(ui, |ui| {
+        egui::Frame::new().inner_margin(Margin::symmetric(12, 8)).show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(RichText::new("History").size(18.0).family(crate::theme::semi()).color(p.text));
                 ui.label(
@@ -207,7 +207,7 @@ impl StewardGetApp {
                     }
                 });
             });
-            ui.add_space(8.0);
+            ui.add_space(5.0);
 
             ui.horizontal_wrapped(|ui| {
                 let search = ui.add_sized(
@@ -248,9 +248,9 @@ impl StewardGetApp {
                     }
                 });
             });
-            ui.add_space(8.0);
+            ui.add_space(5.0);
 
-            let per_row = if ui.available_width() > 560.0 { 4 } else { 2 };
+            let per_row = if ui.available_width() > 480.0 { 4 } else { 2 };
             let tiles = [
                 ("Finished", ok.to_string(), p.green),
                 ("Total size", format_bytes(bytes), p.accent),
@@ -306,7 +306,7 @@ impl StewardGetApp {
         ui.vertical_centered(|ui| {
             ui.add_space((ui.available_height() * 0.28).max(20.0));
             widgets::icon(ui, icon, 34.0, p.text_dim);
-            ui.add_space(8.0);
+            ui.add_space(5.0);
             ui.label(RichText::new(title).size(16.0).family(crate::theme::semi()).color(p.text));
             ui.label(RichText::new(text).color(p.text_dim));
         });
@@ -373,7 +373,7 @@ impl StewardGetApp {
             .open(&mut open)
             .show(ctx, |ui| {
                 ui.label("Every entry will be forgotten. Downloaded files and the download list are not touched.");
-                ui.add_space(8.0);
+                ui.add_space(5.0);
                 ui.horizontal(|ui| {
                     if widgets::button(ui, ButtonKind::Danger, Some(Icon::Trash), "Clear history", true, &p).clicked() {
                         self.engine.clear_history();
@@ -421,19 +421,19 @@ fn history_row(
     painter.rect(rect, CornerRadius::same(10), fill, Stroke::new(1.0, p.border), egui::StrokeKind::Inside);
 
     let color = p.category(e.category);
-    let ic = egui::Rect::from_center_size(rect.left_center() + vec2(26.0, 0.0), vec2(30.0, 30.0));
+    let ic = egui::Rect::from_center_size(rect.left_center() + vec2(22.0, 0.0), vec2(26.0, 26.0));
     painter.rect_filled(ic, CornerRadius::same(8), color.gamma_multiply(0.14));
-    crate::icons::paint(painter, ic.shrink(7.0), Icon::for_category(e.category), color);
+    crate::icons::paint(painter, ic.shrink(6.0), Icon::for_category(e.category), color);
 
     let missing = e.status == Status::Completed && !crate::table::file_exists(&e.path);
     // Five 30 px buttons at the right edge, then the size/speed and date columns.
     let wide = rect.width() > 700.0;
     let meta_x = rect.right() - 12.0 - 150.0 - 16.0 - 190.0;
-    let text_left = rect.left() + 52.0;
+    let text_left = rect.left() + 44.0;
     let text_right = if wide { meta_x - 14.0 } else { rect.right() - 12.0 - 150.0 - 8.0 }.max(text_left + 80.0);
     let name = ellipsize(painter, &e.file_name, egui::FontId::new(13.5, crate::theme::semi()), text_right - text_left);
     painter.text(
-        egui::pos2(text_left, rect.top() + 16.0),
+        egui::pos2(text_left, rect.top() + 13.0),
         egui::Align2::LEFT_CENTER,
         name,
         egui::FontId::new(13.5, crate::theme::semi()),
@@ -460,7 +460,7 @@ fn history_row(
     };
     let sub = ellipsize(painter, &sub, egui::FontId::proportional(12.0), text_right - text_left);
     painter.text(
-        egui::pos2(text_left, rect.top() + 35.0),
+        egui::pos2(text_left, rect.top() + 31.0),
         egui::Align2::LEFT_CENTER,
         sub,
         egui::FontId::proportional(12.0),
@@ -470,7 +470,7 @@ fn history_row(
     // Size and speed, then when.
     if wide {
         painter.text(
-            egui::pos2(meta_x, rect.top() + 16.0),
+            egui::pos2(meta_x, rect.top() + 13.0),
             egui::Align2::LEFT_CENTER,
             e.size.map_or("—".into(), format_bytes),
             egui::FontId::proportional(12.5),
@@ -478,7 +478,7 @@ fn history_row(
         );
         let speed = if e.average_speed() > 0.0 { format_speed(e.average_speed()) } else { String::new() };
         painter.text(
-            egui::pos2(meta_x, rect.top() + 35.0),
+            egui::pos2(meta_x, rect.top() + 31.0),
             egui::Align2::LEFT_CENTER,
             speed,
             egui::FontId::proportional(12.0),
@@ -486,7 +486,7 @@ fn history_row(
         );
         let when = format_relative(e.finished_at, now);
         painter.text(
-            egui::pos2(meta_x + 84.0, rect.top() + 16.0),
+            egui::pos2(meta_x + 84.0, rect.top() + 13.0),
             egui::Align2::LEFT_CENTER,
             when,
             egui::FontId::proportional(12.5),
