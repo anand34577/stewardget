@@ -80,6 +80,10 @@ impl StewardGetApp {
             });
         });
         self.problem_bar(ui, &d);
+        if d.status.is_active() {
+            ui.add_space(4.0);
+            self.insight_card(ui, &d);
+        }
         ui.add_space(6.0);
 
         let wide = ui.available_width() > 760.0;

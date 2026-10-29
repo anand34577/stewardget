@@ -44,7 +44,9 @@ mod error;
 pub mod extension;
 mod filename;
 mod fsio;
+mod history;
 mod hls;
+mod insight;
 mod limiter;
 pub mod mcp;
 mod model;
@@ -65,6 +67,8 @@ pub use config::{
 pub use crawl::{GrabOptions, GrabResult};
 pub use engine::{Engine, EngineOptions};
 pub use error::Error;
+pub use history::{History, HistoryEntry, HostSummary, host_of};
+pub use insight::{Fix, Insight, InsightContext, Kind as InsightKind, Tone as InsightTone, explain as explain_speed};
 pub use model::{
     ApiState, Capture, CaptureAction, DownloadId, DownloadOptions, DownloadView, EngineSnapshot, Event, ExtensionInfo,
     LinkInfo, NewDownload, SegmentView, Status,

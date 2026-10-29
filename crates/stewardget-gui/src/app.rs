@@ -69,7 +69,9 @@ impl ListFilter {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Page {
+    Overview,
     Downloads,
+    History,
     Stats,
     Settings,
 }
@@ -114,6 +116,7 @@ pub struct StewardGetApp {
     pub cfg: Config,
     pub palette: Palette,
     pub page: Page,
+    pub history: crate::history::HistoryView,
     pub filter: ListFilter,
     pub search: String,
     pub focus_search: bool,
@@ -268,7 +271,8 @@ impl StewardGetApp {
             rows_cache: std::cell::RefCell::new(None),
             cfg: config.clone(),
             palette,
-            page: Page::Downloads,
+            page: Page::Overview,
+            history: Default::default(),
             filter: ListFilter::All,
             search: String::new(),
             focus_search: false,
@@ -817,7 +821,9 @@ impl StewardGetApp {
             self.open_settings(crate::settings::Tab::General);
         }
         if keys.find {
-            self.page = Page::Downloads;
+            if self.page != Page::History {
+                self.page = Page::Downloads;
+            }
             self.focus_search = true;
         }
         if typing || self.page != Page::Downloads {
@@ -1070,6 +1076,15 @@ impl StewardGetApp {
                 fn count(all: &[DownloadView], f: ListFilter) -> usize {
                     all.iter().filter(|d| f.matches(d)).count()
                 }
+                if nav_item(ui, Icon::Gauge, None, "Overview", 0, self.page == Page::Overview, collapsed, &p).clicked()
+                {
+                    self.page = Page::Overview;
+                }
+                if nav_item(ui, Icon::History, None, "History", 0, self.page == Page::History, collapsed, &p).clicked()
+                {
+                    self.page = Page::History;
+                }
+                ui.add_space(10.0);
                 let open = collapsed || widgets::section(ui, "DOWNLOADS", &p);
                 if !collapsed {
                     ui.add_space(2.0);
@@ -1833,7 +1848,9 @@ impl eframe::App for StewardGetApp {
 
         egui::CentralPanel::no_frame().frame(Frame::new().fill(p.bg).inner_margin(Margin::ZERO)).show(ui, |ui| {
             ui.push_id("central", |ui| match self.page {
+                Page::Overview => self.overview_page(ui),
                 Page::Downloads => self.downloads_page(ui),
+                Page::History => self.history_page(ui),
                 Page::Stats => self.stats_page(ui),
                 Page::Settings => self.settings_page(ui),
             })

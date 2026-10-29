@@ -73,7 +73,7 @@ pub fn day_index(unix_secs: u64) -> i64 {
 }
 
 /// The local time zone's offset from UTC at that instant, in seconds.
-fn local_offset_secs(unix_secs: u64) -> i64 {
+pub fn local_offset_secs(unix_secs: u64) -> i64 {
     use chrono::{Offset, TimeZone};
     chrono::Local
         .timestamp_opt(unix_secs as i64, 0)

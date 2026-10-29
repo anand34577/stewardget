@@ -96,6 +96,16 @@ impl StewardGetApp {
                 }
                 ui.add_space(8.0);
 
+                card(&p).show(ui, |ui| {
+                    ui.set_min_width(ui.available_width());
+                    widgets::caption(ui, "THE LAST 6 MONTHS", &p);
+                    ui.add_space(4.0);
+                    egui::ScrollArea::horizontal().id_salt("heatmap").show(ui, |ui| {
+                        widgets::heatmap(ui, &s.recent_days(182, now), &p);
+                    });
+                });
+                ui.add_space(8.0);
+
                 let categories = self.category_rows();
                 let hosts = self.host_rows();
                 let breakdown = |ui: &mut Ui, title: &str, rows: &[(String, Option<Category>, usize, u64)]| {

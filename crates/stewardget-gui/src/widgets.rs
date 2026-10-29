@@ -254,6 +254,81 @@ pub fn day_bars(ui: &mut Ui, days: &[DayTotal], p: &Palette, height: f32) {
     }
 }
 
+/// Counts per hour of the day as bars; the busiest hour is highlighted.
+pub fn hour_bars(ui: &mut Ui, hours: &[u32; 24], p: &Palette, height: f32) {
+    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
+    let painter = ui.painter_at(rect.expand(4.0));
+    let chart = Rect::from_min_max(rect.min + vec2(4.0, 14.0), pos2(rect.max.x - 4.0, rect.max.y - 14.0));
+    let max = (*hours.iter().max().unwrap_or(&0)).max(1) as f32;
+    let slot = chart.width() / 24.0;
+    let hovered = response.hover_pos().map(|h| ((h.x - chart.left()) / slot).floor() as usize);
+    let busiest = hours.iter().enumerate().max_by_key(|(_, n)| **n).map(|(h, _)| h);
+    for (h, &n) in hours.iter().enumerate() {
+        let x = chart.left() + slot * (h as f32 + 0.5);
+        let bar_h = (n as f32 / max * chart.height()).max(if n > 0 { 3.0 } else { 1.0 });
+        let bar = Rect::from_center_size(pos2(x, chart.bottom() - bar_h / 2.0), vec2((slot * 0.7).max(2.0), bar_h));
+        let color =
+            if hovered == Some(h) || (busiest == Some(h) && n > 0) { p.accent2 } else { p.accent.gamma_multiply(0.7) };
+        painter.rect_filled(bar, CornerRadius::same(2), if n == 0 { p.track } else { color });
+        if h % 6 == 0 {
+            painter.text(
+                pos2(x, rect.bottom()),
+                Align2::CENTER_BOTTOM,
+                format!("{h:02}"),
+                FontId::proportional(10.5),
+                p.text_dim,
+            );
+        }
+        if hovered == Some(h) {
+            painter.text(
+                pos2(x, bar.top() - 3.0),
+                Align2::CENTER_BOTTOM,
+                format!("{n} · {h:02}:00"),
+                FontId::proportional(11.0),
+                p.text,
+            );
+        }
+    }
+}
+
+/// GitHub-style calendar: one column per week, one cell per day, shaded by
+/// bytes. `days` is oldest first and should end today.
+pub fn heatmap(ui: &mut Ui, days: &[DayTotal], p: &Palette) {
+    const GAP: f32 = 3.0;
+    // Weeks fill the card; cells stay square between 9 and 20 points.
+    let weeks = days.len().div_ceil(7) + 1;
+    let cell_size = ((ui.available_width() - 4.0) / weeks as f32 - GAP).clamp(9.0, 20.0);
+    let size = vec2(weeks as f32 * (cell_size + GAP), 7.0 * (cell_size + GAP));
+    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width().max(size.x), size.y), Sense::hover());
+    let painter = ui.painter_at(rect);
+    let max = days.iter().map(|d| d.bytes).max().unwrap_or(0).max(1) as f32;
+    // Weekday of the first day: day 0 of the epoch was a Thursday.
+    let first_dow = days.first().map_or(0, |d| (d.day + 3).rem_euclid(7)) as usize;
+    let hover = response.hover_pos();
+    let mut tip = None;
+    for (i, d) in days.iter().enumerate() {
+        let slot = first_dow + i;
+        let (col, row) = (slot / 7, slot % 7);
+        let cell = Rect::from_min_size(
+            rect.min + vec2(col as f32 * (cell_size + GAP), row as f32 * (cell_size + GAP)),
+            Vec2::splat(cell_size),
+        );
+        let color = if d.bytes == 0 {
+            p.track
+        } else {
+            lerp_color(p.accent.gamma_multiply(0.35), p.accent2, (d.bytes as f32 / max).sqrt())
+        };
+        painter.rect_filled(cell, CornerRadius::same(3), color);
+        if hover.is_some_and(|h| cell.expand(GAP / 2.0).contains(h)) {
+            painter.rect_stroke(cell, CornerRadius::same(3), Stroke::new(1.5, p.text), StrokeKind::Outside);
+            tip = Some(format!("{}  ·  {}", d.label(), format_bytes(d.bytes)));
+        }
+    }
+    if let Some(tip) = tip {
+        response.on_hover_text(tip);
+    }
+}
+
 /// Horizontal share bar.
 pub fn share_bar(ui: &mut Ui, fraction: f32, color: Color32, p: &Palette) {
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 6.0), Sense::hover());

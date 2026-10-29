@@ -935,3 +935,44 @@ async fn pausing_wins_over_an_automatic_retry() {
     let d = engine.download(id).unwrap();
     assert_eq!(d.status, Status::Paused, "{:?}", d.error);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn finished_downloads_stay_in_the_history_after_leaving_the_list() {
+    let server = serve(2 * 1024 * 1024, ServerOpts { ranges: true, ..Default::default() }).await;
+    let dir = temp_dir("history");
+    let data_dir = dir.join("state");
+    let downloads = dir.join("files");
+    let options = || EngineOptions { data_dir: Some(data_dir.clone()), config: Some(config(&downloads)) };
+
+    let engine = Engine::start(options()).unwrap();
+    assert!(engine.history().is_empty());
+    let generation = engine.history_generation();
+    let id = engine.add(NewDownload::new(&server.url)).unwrap();
+    assert_eq!(wait_for(&engine, id, Status::Completed, 30).await, Status::Completed);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    let log = engine.history();
+    assert_eq!(log.len(), 1);
+    assert_eq!(log[0].id, id);
+    assert_eq!(log[0].file_name, "test file.bin");
+    assert_eq!(log[0].host, "127.0.0.1");
+    assert_eq!(log[0].size, Some(server.data.len() as u64));
+    assert_eq!(log[0].status, Status::Completed);
+    assert!(engine.history_generation() > generation);
+
+    // Clearing the list does not clear the history…
+    engine.clear_completed();
+    assert!(engine.download(id).is_none());
+    assert_eq!(engine.history().len(), 1);
+    assert!(engine.tag_history(id, vec!["work".into()]));
+
+    // …which is stored and comes back after a restart.
+    engine.shutdown().await;
+    drop(engine);
+    let engine = Engine::start(options()).unwrap();
+    let log = engine.history();
+    assert_eq!(log.len(), 1);
+    assert_eq!(log[0].tags, ["work"]);
+    assert_eq!(engine.remove_history(&[id]), 1);
+    assert!(engine.history().is_empty());
+}

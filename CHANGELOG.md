@@ -4,6 +4,23 @@ All notable changes to StewardGet are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- **History**: every finished or failed download is kept in a permanent,
+  searchable log that outlives the download list. Filter by status, period
+  and type; open, reveal, re-download, copy the link or forget an entry;
+  export to CSV. Stored locally in `history.json`; lists from earlier
+  versions seed it from their completed downloads.
+- **Overview** page: live speed over its graph, what is downloading with the
+  reason for its speed, recently finished files, when you download and which
+  sources have been fastest.
+- **"Why this speed?"** explainer for running downloads (details pane and
+  Overview): names the cause — your own limits, the server allowing fewer
+  connections or no ranges, dropping connections, sharing the line, or a
+  source slower or faster than usual — and offers a one-click fix.
+- A six-month calendar heat-map on the Statistics page.
+
 ## [0.7.4] - 2026-10-28
 
 ### Fixed

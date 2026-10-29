@@ -8,11 +8,12 @@ use std::path::{Path, PathBuf};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
-use crate::{Category, Config, DownloadOptions, Error, QueueId, Stats, Status, fsio};
+use crate::{Category, Config, DownloadOptions, Error, History, QueueId, Stats, Status, fsio};
 
 const SETTINGS: &str = "settings.json";
 const DOWNLOADS: &str = "downloads.json";
 const STATS: &str = "stats.json";
+const HISTORY: &str = "history.json";
 const LOCK: &str = "stewardget.lock";
 /// The lock file of Velox, as the app was called before 0.7.
 const LEGACY_LOCK: &str = "velox.lock";
@@ -125,6 +126,14 @@ impl Store {
         self.write(STATS, stats)
     }
 
+    pub fn load_history(&self) -> Option<History> {
+        self.read(HISTORY)
+    }
+
+    pub fn save_history(&self, history: &History) -> Result<(), Error> {
+        self.write(HISTORY, history)
+    }
+
     /// Reads a state file. A damaged file is set aside (never overwritten)
     /// and the most recent backup is used instead.
     fn read<T: DeserializeOwned>(&self, name: &str) -> Option<T> {
@@ -178,6 +187,10 @@ pub(crate) fn peek_downloads(dir: &Path) -> Option<DownloadList> {
 
 pub(crate) fn peek_stats(dir: &Path) -> Option<Stats> {
     peek(dir, STATS)
+}
+
+pub(crate) fn peek_history(dir: &Path) -> Option<History> {
+    peek(dir, HISTORY)
 }
 
 pub(crate) fn peek_config(dir: &Path) -> Option<Config> {

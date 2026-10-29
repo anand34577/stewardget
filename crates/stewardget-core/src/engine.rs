@@ -24,8 +24,8 @@ use crate::probe::Probe;
 use crate::store::{self, DownloadList, Record, Store};
 use crate::task::{self, Hooks, Job, Outcome, Shared};
 use crate::{
-    Category, Config, DownloadId, DownloadOptions, Error, ExistingFile, HISTORY_LEN, MAIN_QUEUE, QueueId,
-    SAMPLE_INTERVAL_MS, Stats, Status,
+    Category, Config, DownloadId, DownloadOptions, Error, ExistingFile, HISTORY_LEN, History, HistoryEntry, MAIN_QUEUE,
+    QueueId, SAMPLE_INTERVAL_MS, Stats, Status,
 };
 use crate::{filename, fsio, util};
 
@@ -161,6 +161,11 @@ struct State {
     /// Only the statistics changed (bytes counted); saved less often.
     stats_dirty: bool,
     stats: Stats,
+    /// Permanent log of finished downloads.
+    log: History,
+    log_dirty: bool,
+    /// Bumped whenever `log` changes, so front-ends can cache what they show.
+    log_gen: u64,
     speed: f64,
     history: VecDeque<f32>,
     /// Last local `(day, minute)` the scheduler looked at.
@@ -309,6 +314,20 @@ impl Engine {
             rec.category = config.categorize(&rec.file_name);
         }
         let stats = store.load_stats().unwrap_or_default();
+        // Lists from before the history existed: start it from what they hold.
+        let (log, log_dirty) = match store.load_history() {
+            Some(log) => (log, false),
+            None => {
+                let mut log = History::default();
+                let mut done: Vec<_> = list.downloads.iter().filter(|r| r.status == Status::Completed).collect();
+                done.sort_by_key(|r| r.finished_at.unwrap_or(r.added_at));
+                for rec in done {
+                    log.record(history_entry(rec, config.connections));
+                }
+                let seeded = !log.entries.is_empty();
+                (log, seeded)
+            }
+        };
 
         let items: Vec<Item> = list
             .downloads
@@ -339,6 +358,9 @@ impl Engine {
                 dirty: false,
                 stats_dirty: false,
                 stats,
+                log,
+                log_dirty,
+                log_gen: 1,
                 speed: 0.0,
                 history: VecDeque::with_capacity(HISTORY_LEN),
                 schedule_minute: None,
@@ -944,6 +966,50 @@ impl Engine {
         }
     }
 
+    /// The permanent log of finished downloads, oldest first.
+    pub fn history(&self) -> Vec<HistoryEntry> {
+        self.inner.lock().log.entries.clone()
+    }
+
+    /// Changes whenever [`Engine::history`] would return something different.
+    pub fn history_generation(&self) -> u64 {
+        self.inner.lock().log_gen
+    }
+
+    /// Forgets history entries (files stay). Returns how many were removed.
+    pub fn remove_history(&self, ids: &[DownloadId]) -> usize {
+        let mut st = self.inner.lock();
+        let n = st.log.remove(ids);
+        if n > 0 {
+            st.log_dirty = true;
+            st.log_gen += 1;
+        }
+        n
+    }
+
+    pub fn clear_history(&self) {
+        let mut st = self.inner.lock();
+        st.log.clear();
+        st.log_dirty = true;
+        st.log_gen += 1;
+    }
+
+    /// Replaces the tags of a history entry.
+    pub fn tag_history(&self, id: DownloadId, tags: Vec<String>) -> bool {
+        let mut st = self.inner.lock();
+        let ok = st.log.set_tags(id, tags);
+        if ok {
+            st.log_dirty = true;
+            st.log_gen += 1;
+        }
+        ok
+    }
+
+    /// Reads the history without starting an engine or taking the lock.
+    pub fn peek_history(dir: &Path) -> Vec<HistoryEntry> {
+        store::peek_history(dir).map(|h| h.entries).unwrap_or_default()
+    }
+
     /// True when StewardGet runs for the first time with this data directory (no
     /// settings were saved yet).
     pub fn first_run(&self) -> bool {
@@ -1267,6 +1333,12 @@ impl Inner {
                 }
             }
 
+            if completed || failed {
+                let entry = history_entry(&st.items[pos].rec, config.connections);
+                st.log.record(entry);
+                st.log_dirty = true;
+                st.log_gen += 1;
+            }
             st.stats.record_bytes(late, now);
             st.stats.completed += u64::from(completed);
             st.stats.failed += u64::from(failed);
@@ -1393,7 +1465,7 @@ impl Inner {
     /// the statistics. Does file I/O: call it off the async threads when busy.
     fn persist_parts(&self, force: bool, stats: bool) {
         let _one_at_a_time = self.persist_lock.lock().unwrap();
-        let (list, stats) = {
+        let (list, stats, log) = {
             let mut st = self.lock();
             let list = (st.dirty || force).then(|| {
                 st.dirty = false;
@@ -1403,7 +1475,11 @@ impl Inner {
                 st.stats_dirty = false;
                 st.stats.clone()
             });
-            (list, stats)
+            let log = st.log_dirty.then(|| {
+                st.log_dirty = false;
+                st.log.clone()
+            });
+            (list, stats, log)
         };
         // Persisting is best-effort; the next cycle retries.
         if let Some(list) = list {
@@ -1411,6 +1487,9 @@ impl Inner {
         }
         if let Some(stats) = stats {
             let _ = self.store.save_stats(&stats);
+        }
+        if let Some(log) = log {
+            let _ = self.store.save_history(&log);
         }
     }
 }
@@ -1680,6 +1759,26 @@ fn build_client(config: &Config) -> Result<Client, Error> {
         builder = builder.proxy(proxy);
     }
     builder.build().map_err(|e| Error::Network(e.to_string()))
+}
+
+fn history_entry(rec: &Record, default_connections: usize) -> HistoryEntry {
+    HistoryEntry {
+        id: rec.id,
+        url: rec.url.clone(),
+        host: crate::host_of(&rec.url),
+        file_name: rec.file_name.clone(),
+        path: rec.path.clone(),
+        category: rec.category,
+        size: rec.total.or((rec.downloaded > 0).then_some(rec.downloaded)),
+        status: rec.status,
+        error: rec.error.clone(),
+        added_at: rec.added_at,
+        finished_at: rec.finished_at.unwrap_or_else(util::now_unix),
+        active_secs: rec.active_secs as u64,
+        connections: rec.options.connections.unwrap_or(default_connections),
+        checksum_verified: rec.checksum_verified,
+        tags: Vec::new(),
+    }
 }
 
 #[cfg(test)]
