@@ -10,7 +10,8 @@ use stewardget_core::util::{expand_pattern, format_bytes, parse_size};
 
 use crate::table::free_space;
 use stewardget_core::{
-    Checksum, Config, DownloadId, DownloadOptions, DownloadView, ExistingFile, LinkInfo, MAIN_QUEUE, NewDownload, QueueId, Status,
+    Checksum, Config, DownloadId, DownloadOptions, DownloadView, ExistingFile, LinkInfo, MAIN_QUEUE, NewDownload,
+    QueueId, Status,
 };
 
 use crate::app::{AfterAll, ListFilter, Page, StewardGetApp, capitalize};
