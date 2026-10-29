@@ -6,6 +6,8 @@ All notable changes to StewardGet are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-30
+
 - Adding a link whose file is already downloaded now offers three choices: open the existing file in its folder, save with another name, or replace it (a per-download choice; the setting stays the default).
 - The Add dialog is more compact, and the Statistics cards are the same height side by side.
 
