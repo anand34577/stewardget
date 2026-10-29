@@ -150,6 +150,10 @@ impl StewardGetApp {
             self.open_queue_dialog(None);
             ui.close();
         }
+        if menu_item(ui, &p, Icon::Sliders, "Utilities (duplicates, cleanup, link check, backup)…", true) {
+            self.page = Page::Tools;
+            ui.close();
+        }
         if menu_item(ui, &p, Icon::Chart, "Statistics", true) {
             self.page = Page::Stats;
             ui.close();

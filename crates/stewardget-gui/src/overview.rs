@@ -93,6 +93,7 @@ impl StewardGetApp {
                 }
                 ui.add_space(4.0);
 
+                self.data_cap_card(ui);
                 self.links_card(ui);
                 ui.add_space(5.0);
                 let wide = ui.available_width() > 880.0;
@@ -296,6 +297,43 @@ impl StewardGetApp {
 }
 
 impl StewardGetApp {
+    /// This month's data against the limit, when there is one.
+    fn data_cap_card(&mut self, ui: &mut Ui) {
+        let p = self.palette;
+        let (used, cap, hit) = self.engine.month_usage();
+        if cap == 0 {
+            return;
+        }
+        let color = if hit {
+            p.red
+        } else if used * 10 >= cap * 8 {
+            p.yellow
+        } else {
+            p.accent2
+        };
+        card(&p).show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            ui.horizontal(|ui| {
+                widgets::caption(ui, "DATA THIS MONTH", &p);
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if hit && widgets::button(ui, ButtonKind::Tool, Some(Icon::Gear), "Change the limit", true, &p).clicked() {
+                        self.open_settings(crate::settings::Tab::Connection);
+                    }
+                    ui.label(RichText::new(format!("{} of {}", format_bytes(used), format_bytes(cap))).color(color));
+                });
+            });
+            widgets::share_bar(ui, (used as f64 / cap as f64) as f32, color, &p);
+            if hit {
+                ui.label(
+                    RichText::new("The monthly limit is used up, so downloads are paused. They continue next month, or when you raise the limit.")
+                        .size(12.0)
+                        .color(p.red),
+                );
+            }
+        });
+        ui.add_space(5.0);
+    }
+
     /// Offers a queue that runs in the hours the connection is least used.
     fn overnight_suggestion(&mut self, ui: &mut Ui, hours: &[u32; 24]) {
         let p = self.palette;

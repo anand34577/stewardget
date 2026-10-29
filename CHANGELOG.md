@@ -16,7 +16,13 @@ All notable changes to StewardGet are listed here. The format follows
 - **MCP**: `search_history`, `history_summary`, `tag_download`, `add_downloads` and `grab_page` tools.
 - **Headless mode**: `stewardget serve` runs downloads, queues, schedules, the browser API and MCP without a window.
 
+### Added (tools)
+- **Tools page**: duplicate-file finder (by content), leftover partial-file cleanup, link checker, backup and restore of settings, diagnostics report (no links or tokens).
+- **Monthly data limit** for metered or hotspot connections, with a usage bar on the Overview.
+- **yt-dlp and ffmpeg setup**: found automatically (also in winget, Scoop and Chocolatey folders), file picker with a real version check, one-click install through winget, and an advanced path field.
+
 ### Fixed
+- The menu bar was too short.
 - Settings controls are aligned to the right edge and the page uses the full width.
 
 ### Added (speed and automation)

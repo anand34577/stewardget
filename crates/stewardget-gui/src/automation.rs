@@ -110,35 +110,40 @@ impl StewardGetApp {
         });
     }
 
-    /// Where yt-dlp and ffmpeg are, and whether they were found.
+    /// yt-dlp and ffmpeg: found automatically, or picked with a file chooser,
+    /// or installed with one click; typing a path stays available for experts.
     pub fn media_tools_section(&mut self, ui: &mut Ui, draft: &mut Config) {
         let p = self.palette;
-        let (ytdlp, ffmpeg) = self.engine.media_tools();
         section(ui, &p, "Video and audio tools", |ui| {
-            for (name, found, path, help) in [
-                (
-                    "yt-dlp",
-                    ytdlp,
-                    &mut draft.ytdlp_path,
-                    "Finds the video and audio files behind a page (Tools › Video or audio from a page). StewardGet doesn't include it.",
-                ),
-                (
-                    "ffmpeg",
-                    ffmpeg,
-                    &mut draft.ffmpeg_path,
-                    "Joins separate picture and sound files into one video, without re-encoding.",
-                ),
-            ] {
-                row(ui, &p, name, help, |ui| {
-                    match &found {
-                        Some(f) => widgets::pill(ui, &format!("found: {}", f.display()), p.green),
-                        None => widgets::pill(ui, "not found", p.yellow),
-                    };
-                    let mut text = path.as_ref().map(|d| d.display().to_string()).unwrap_or_default();
-                    ui.add(widgets::input(&mut text).hint_text("location (optional)").desired_width(220.0));
-                    *path = Some(std::path::PathBuf::from(text.trim())).filter(|d| !d.as_os_str().is_empty());
-                });
-            }
+            ui.label(
+                RichText::new(
+                    "StewardGet finds these programs by itself. If they are missing, install them with one click, or point to a copy you already have.",
+                )
+                .size(12.0)
+                .color(p.text_dim),
+            );
+            tool_block(
+                ui,
+                &p,
+                &ToolInfo {
+                    name: "yt-dlp",
+                    help: "Finds the video and audio files behind a page (File › Video or audio from a page). StewardGet doesn't include it.",
+                    winget: "yt-dlp.yt-dlp",
+                    page: "https://github.com/yt-dlp/yt-dlp#installation",
+                },
+                &mut draft.ytdlp_path,
+            );
+            tool_block(
+                ui,
+                &p,
+                &ToolInfo {
+                    name: "ffmpeg",
+                    help: "Joins separate picture and sound files into one video, without re-encoding.",
+                    winget: "Gyan.FFmpeg",
+                    page: "https://ffmpeg.org/download.html",
+                },
+                &mut draft.ffmpeg_path,
+            );
         });
     }
 
@@ -371,5 +376,167 @@ fn action_params(ui: &mut Ui, p: &crate::theme::Palette, rule: &mut PostRule) {
         PostAction::Tag { tag } => {
             ui.add(widgets::input(tag).hint_text("tag").desired_width(180.0));
         }
+    }
+}
+
+struct ToolInfo {
+    name: &'static str,
+    help: &'static str,
+    /// Package id for the Windows Package Manager.
+    winget: &'static str,
+    page: &'static str,
+}
+
+type Check = std::sync::Arc<std::sync::Mutex<Option<Result<String, String>>>>;
+type Install = std::sync::Arc<std::sync::Mutex<Option<Result<(), String>>>>;
+
+/// The version check of `path`, started once per path and remembered.
+fn checked(ui: &Ui, name: &str, path: &std::path::Path) -> Option<Result<String, String>> {
+    let id = egui::Id::unique(("tool-check", name, path.to_string_lossy().into_owned()));
+    let slot: Option<Check> = ui.data(|d| d.get_temp(id));
+    let slot = match slot {
+        Some(s) => s,
+        None => {
+            let slot: Check = Check::default();
+            ui.data_mut(|d| d.insert_temp(id, std::sync::Arc::clone(&slot)));
+            let (out, path, name, ctx) =
+                (std::sync::Arc::clone(&slot), path.to_path_buf(), name.to_owned(), ui.ctx().clone());
+            std::thread::spawn(move || {
+                *out.lock().unwrap() = Some(stewardget_core::tool_version(&path, &name));
+                ctx.request_repaint();
+            });
+            slot
+        }
+    };
+    let result = slot.lock().unwrap().clone();
+    if result.is_none() {
+        ui.ctx().request_repaint_after(Duration::from_millis(200));
+    }
+    result
+}
+
+fn tool_block(ui: &mut Ui, p: &crate::theme::Palette, tool: &ToolInfo, chosen: &mut Option<std::path::PathBuf>) {
+    let found = stewardget_core::find_tool(chosen.as_deref(), tool.name);
+    let version = found.as_deref().and_then(|f| checked(ui, tool.name, f));
+    let install_id = egui::Id::unique(("tool-install", tool.name));
+    let install: Option<Install> = ui.data(|d| d.get_temp(install_id));
+    let installing = install.as_ref().is_some_and(|i| i.lock().unwrap().is_none());
+    let can_winget = cfg!(windows) && stewardget_core::find_tool(None, "winget").is_some();
+
+    row(ui, p, tool.name, tool.help, |ui| {
+        match (&found, &version) {
+            (None, _) => widgets::pill(ui, "not found", p.yellow),
+            (Some(_), None) => widgets::pill(ui, "checking…", p.text_dim),
+            (Some(_), Some(Ok(v))) => widgets::pill(ui, &format!("ready · {v}"), p.green),
+            (Some(_), Some(Err(_))) => widgets::pill(ui, "not working", p.red),
+        };
+        if widgets::button(ui, ButtonKind::Ghost, Some(Icon::FolderOpen), "Choose file…", !installing, p)
+            .on_hover_text("Pick the program on your computer")
+            .clicked()
+        {
+            let mut dialog = rfd::FileDialog::new().set_title(format!("Select {}", tool.name));
+            if cfg!(windows) {
+                dialog = dialog.add_filter("Program", &["exe"]);
+            }
+            if let Some(file) = dialog.pick_file() {
+                *chosen = Some(file);
+            }
+        }
+        if found.is_none() {
+            let label = if can_winget { "Install for me" } else { "Get it…" };
+            if widgets::button(ui, ButtonKind::Primary, Some(Icon::Download), label, !installing, p).clicked() {
+                if can_winget {
+                    let state: Install = Install::default();
+                    ui.data_mut(|d| d.insert_temp(install_id, std::sync::Arc::clone(&state)));
+                    let (out, id, ctx) = (state, tool.winget, ui.ctx().clone());
+                    std::thread::spawn(move || {
+                        *out.lock().unwrap() = Some(winget_install(id));
+                        ctx.request_repaint();
+                    });
+                } else {
+                    let _ = stewardget_core::util::open_url(tool.page);
+                }
+            }
+        }
+    });
+
+    // What happened, in plain words.
+    let mut note: Option<(String, egui::Color32)> = None;
+    if installing {
+        ctx_repaint(ui);
+        note = Some((
+            format!("Installing {} with the Windows Package Manager… approve any prompt that appears.", tool.name),
+            p.accent2,
+        ));
+    } else if let Some(Some(result)) = install.as_ref().map(|i| i.lock().unwrap().clone()) {
+        note = Some(match result {
+            Ok(()) if found.is_some() => (format!("{} was installed and found.", tool.name), p.green),
+            Ok(()) => (
+                format!(
+                    "{} was installed, but isn't visible to StewardGet yet. Restart StewardGet, or choose the file.",
+                    tool.name
+                ),
+                p.yellow,
+            ),
+            Err(e) => (
+                format!("The installation didn't work ({e}). You can download it yourself and choose the file."),
+                p.red,
+            ),
+        });
+    } else if let (Some(f), Some(Err(why))) = (&found, &version) {
+        note = Some((format!("{} {}", f.display(), why), p.red));
+    } else if let Some(f) = &found {
+        let how = if chosen
+            .as_deref()
+            .is_some_and(|c| stewardget_core::find_tool(Some(c), tool.name).as_deref() == Some(f.as_path()))
+        {
+            "your choice"
+        } else {
+            "found automatically"
+        };
+        note = Some((format!("{}  ·  {how}", f.display()), p.text_dim));
+    } else if let Some(c) = chosen.as_ref() {
+        note = Some((format!("Nothing usable at {}. Choose the program file, or its folder.", c.display()), p.red));
+    }
+    if let Some((text, color)) = note {
+        ui.add(egui::Label::new(RichText::new(text).size(11.5).color(color)).wrap());
+    }
+
+    // For people who know where it is.
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("Location (advanced)").size(12.0).color(p.text_dim));
+        let mut text = chosen.as_ref().map(|d| d.display().to_string()).unwrap_or_default();
+        let r = ui.add(widgets::input(&mut text).hint_text("automatic").desired_width(300.0));
+        if r.changed() {
+            *chosen = Some(std::path::PathBuf::from(text.trim())).filter(|d| !d.as_os_str().is_empty());
+        }
+        if chosen.is_some()
+            && widgets::button(ui, ButtonKind::Tool, Some(Icon::Retry), "Use automatic", true, p).clicked()
+        {
+            *chosen = None;
+        }
+    });
+    ui.add_space(4.0);
+}
+
+fn ctx_repaint(ui: &Ui) {
+    ui.ctx().request_repaint_after(Duration::from_millis(500));
+}
+
+fn winget_install(id: &str) -> Result<(), String> {
+    let mut cmd = std::process::Command::new("winget");
+    cmd.args(["install", "-e", "--id", id, "--accept-source-agreements", "--accept-package-agreements"]);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000);
+    }
+    let out = cmd.stdin(std::process::Stdio::null()).output().map_err(|e| e.to_string())?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        let text = String::from_utf8_lossy(&out.stdout);
+        let last = text.lines().rev().map(str::trim).find(|l| !l.is_empty()).unwrap_or("winget failed");
+        Err(last.chars().take(120).collect())
     }
 }

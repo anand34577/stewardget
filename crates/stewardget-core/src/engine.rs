@@ -125,6 +125,8 @@ pub(crate) struct Inner {
     link_stats: Mutex<Vec<LinkStat>>,
     /// Video/audio groups being joined right now.
     muxing: Mutex<HashSet<String>>,
+    /// The monthly data cap stopped the downloads.
+    cap_hit: AtomicBool,
     global_limiter: Arc<RateLimiter>,
     /// Bandwidth shared by each queue's downloads ([`crate::Queue::speed_limit`]).
     queue_limiters: Mutex<HashMap<QueueId, Arc<RateLimiter>>>,
@@ -393,6 +395,7 @@ impl Engine {
             links: RwLock::new(Arc::new(build_pool(&config, &build_client(&config)?))),
             link_stats: Mutex::new(Vec::new()),
             muxing: Mutex::new(HashSet::new()),
+            cap_hit: AtomicBool::new(false),
             global_limiter: Arc::new(RateLimiter::new(config.speed_limit)),
             queue_limiters: Mutex::new(HashMap::new()),
             scheduled_limit: AtomicBool::new(false),
@@ -1047,6 +1050,111 @@ impl Engine {
             .collect()
     }
 
+    /// Data downloaded this month, the cap (`0` = none) and whether it stopped the downloads.
+    pub fn month_usage(&self) -> (u64, u64, bool) {
+        let used = self.inner.lock().stats.month_total(util::now_unix());
+        (used, self.config().monthly_cap, self.inner.cap_hit.load(Ordering::Relaxed))
+    }
+
+    /// Partial-download files that no download in the list owns, in the
+    /// download folders (they pile up after removing unfinished downloads).
+    pub fn leftovers(&self) -> Vec<crate::Leftover> {
+        let config = self.config();
+        let st = self.inner.lock();
+        let mut dirs: Vec<PathBuf> = vec![config.download_dir.clone()];
+        dirs.extend(config.category_dirs.values().cloned());
+        let mut owned = HashSet::new();
+        for item in &st.items {
+            if let Some(dir) = item.rec.path.parent() {
+                dirs.push(dir.to_path_buf());
+            }
+            if item.rec.status != Status::Completed {
+                owned.insert(part_path(&item.rec.path));
+                owned.insert(meta_path(&item.rec.path));
+            }
+        }
+        drop(st);
+        dirs.sort();
+        dirs.dedup();
+        // A folder inside another is read with it.
+        let roots: Vec<PathBuf> =
+            dirs.iter().filter(|d| !dirs.iter().any(|o| o != *d && d.starts_with(o))).cloned().collect();
+        crate::tools::find_leftovers(&roots, &owned)
+    }
+
+    /// Folders worth scanning for duplicates.
+    pub fn download_folders(&self) -> Vec<PathBuf> {
+        let config = self.config();
+        let mut dirs = vec![config.download_dir.clone()];
+        dirs.extend(config.category_dirs.values().cloned());
+        dirs.sort();
+        dirs.dedup();
+        dirs.iter().filter(|d| !dirs.iter().any(|o| o != *d && d.starts_with(o))).cloned().collect()
+    }
+
+    /// Writes a backup of settings (without access tokens), history, statistics and the list.
+    pub fn export_backup(&self, dest: &Path) -> Result<(), Error> {
+        let dir = self.data_dir().ok_or_else(|| Error::Unsupported("this engine keeps nothing on disk".into()))?;
+        // Make sure the files are current.
+        self.inner.persist_parts(true, true);
+        crate::tools::export_backup(&dir, &self.config(), dest)
+    }
+
+    /// Applies the settings of a backup; this computer's access tokens and
+    /// the folders' existence are left as they are.
+    pub fn import_settings(&self, src: &Path) -> Result<(), Error> {
+        let mut config = crate::tools::read_backup_settings(src)?;
+        let mine = self.config();
+        config.api_token = mine.api_token;
+        config.mcp_token = mine.mcp_token;
+        config.control_token = mine.control_token;
+        self.update_config(config)
+    }
+
+    /// A report for bug reports: versions, settings that matter, adapters,
+    /// tools and free space. No links, names or tokens.
+    pub fn diagnostics(&self) -> String {
+        let c = self.config();
+        let (ytdlp, ffmpeg) = self.media_tools();
+        let tool = |name: &str, p: Option<PathBuf>| match p {
+            Some(p) => format!("{name}: {} ({})", p.display(), crate::tool_version(&p, name).unwrap_or_else(|e| e)),
+            None => format!("{name}: not found"),
+        };
+        let adapters =
+            crate::adapters().iter().map(|a| format!("{} {}", a.name, a.address)).collect::<Vec<_>>().join(", ");
+        let (used, cap, hit) = self.month_usage();
+        let snap = self.snapshot();
+        let free = util::free_space(&c.download_dir).map_or("unknown".into(), util::format_bytes);
+        [
+            format!("StewardGet {} on {} {}", env!("CARGO_PKG_VERSION"), std::env::consts::OS, std::env::consts::ARCH),
+            format!("Downloads: {} in the list, {} active", snap.downloads.len(), snap.count(Status::is_active)),
+            format!("Free space in the download folder: {free}"),
+            format!(
+                "Connections {} (auto-tune {}), simultaneous {}, retries {}, HTTP/1.1 only {}",
+                c.connections, c.auto_tune, c.max_concurrent, c.max_retries, c.http1_only
+            ),
+            format!("Proxy: {}", if c.proxy.is_some() { "set" } else { "none" }),
+            format!(
+                "Several networks: {} ({} chosen)",
+                c.multi_link,
+                c.interfaces.iter().filter(|l| l.enabled).count()
+            ),
+            format!("Adapters: {}", if adapters.is_empty() { "none found".into() } else { adapters }),
+            format!("Links in use: {}", self.links().iter().map(|l| l.label.clone()).collect::<Vec<_>>().join(", ")),
+            tool("yt-dlp", ytdlp),
+            tool("ffmpeg", ffmpeg),
+            format!("Steps after download: {}", c.post_actions.iter().filter(|r| r.enabled).count()),
+            format!(
+                "Monthly cap: {} used of {}{}",
+                util::format_bytes(used),
+                if cap == 0 { "no cap".into() } else { util::format_bytes(cap) },
+                if hit { " (reached)" } else { "" }
+            ),
+            format!("Browser API: {} on port {}", if c.api_enabled { "on" } else { "off" }, c.api_port),
+        ]
+        .join("\n")
+    }
+
     /// Asks yt-dlp (or reads a DASH manifest) for what a page offers.
     pub async fn inspect_media(&self, url: &str) -> Result<crate::MediaInfo, Error> {
         let config = self.config();
@@ -1345,6 +1453,9 @@ impl Inner {
     fn schedule(self: &Arc<Self>) {
         if self.shutting_down.load(Ordering::SeqCst) {
             return;
+        }
+        if self.cap_hit.load(Ordering::Relaxed) {
+            return; // the monthly data cap is used up
         }
         let (max, caps): (usize, HashMap<QueueId, usize>) = {
             let config = self.config.read().unwrap();
@@ -1669,6 +1780,20 @@ impl Inner {
         self.persist(false);
     }
 
+    /// Pauses everything once the month's data cap is used up, and lets
+    /// downloads start again when the cap is raised or a new month begins.
+    fn enforce_cap(self: &Arc<Self>) {
+        let cap = self.config.read().unwrap().monthly_cap;
+        let used = self.lock().stats.month_total(util::now_unix());
+        if cap > 0 && used >= cap {
+            if !self.cap_hit.swap(true, Ordering::Relaxed) {
+                Engine::from_inner(Arc::clone(self)).pause_all();
+            }
+        } else if self.cap_hit.swap(false, Ordering::Relaxed) {
+            self.schedule();
+        }
+    }
+
     /// Updates speeds, histories and statistics. Called every sample interval.
     fn sample(&self, dt: f64) {
         let now = util::now_unix();
@@ -1912,6 +2037,7 @@ async fn sampler(inner: std::sync::Weak<Inner>) {
         let now = Instant::now();
         inner.sample(now.duration_since(last).as_secs_f64().max(0.001));
         last = now;
+        inner.enforce_cap();
         inner.run_scheduler();
         // Picks up downloads whose automatic-retry pause is over.
         inner.schedule();

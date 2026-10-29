@@ -60,6 +60,7 @@ mod segment;
 mod stats;
 mod store;
 mod task;
+mod tools;
 pub mod util;
 
 pub use actions::{
@@ -76,13 +77,16 @@ pub use engine::{Engine, EngineOptions};
 pub use error::Error;
 pub use history::{History, HistoryEntry, HostSummary, host_of, quietest_in};
 pub use insight::{Fix, Insight, InsightContext, Kind as InsightKind, Tone as InsightTone, explain as explain_speed};
-pub use media::{MediaInfo, MediaOption, MediaPart, Mux, Stream as MuxStream, find_tool, merge as merge_media};
+pub use media::{
+    MediaInfo, MediaOption, MediaPart, Mux, Stream as MuxStream, find_tool, merge as merge_media, tool_version,
+};
 pub use model::{
     ApiState, Capture, CaptureAction, DownloadId, DownloadOptions, DownloadView, EngineSnapshot, Event, ExtensionInfo,
     LinkInfo, NewDownload, SegmentView, Status,
 };
 pub use net::{Adapter, LaneView, LinkView, NetworkLink, adapters};
 pub use stats::{DayTotal, Stats};
+pub use tools::{DupGroup, Leftover, delete_leftovers, export_backup, find_duplicates, read_backup_settings};
 
 /// Number of speed samples kept per download and globally (one every 500 ms).
 pub const HISTORY_LEN: usize = 120;

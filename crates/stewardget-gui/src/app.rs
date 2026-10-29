@@ -73,6 +73,7 @@ pub enum Page {
     Downloads,
     History,
     Stats,
+    Tools,
     Settings,
 }
 
@@ -167,6 +168,7 @@ pub struct StewardGetApp {
     /// The "find files on a web page" window.
     pub grab_dialog: Option<crate::grab::GrabDialog>,
     pub media_dialog: Option<crate::media::MediaDialog>,
+    pub tools: crate::toolbox::ToolsState,
     /// Queue whose deletion is being confirmed.
     pub delete_queue: Option<QueueId>,
     /// "Keep running?" prompt after the close button; holds "remember my choice".
@@ -310,6 +312,7 @@ impl StewardGetApp {
             category_dialog: None,
             grab_dialog: None,
             media_dialog: None,
+            tools: Default::default(),
             delete_queue: None,
             close_prompt: None,
             quitting: false,
@@ -1069,8 +1072,8 @@ impl StewardGetApp {
         ui.add_space(8.0);
 
         // The lists scroll when the window is short; Statistics and Settings stay pinned.
-        // Two pinned entries, plus the version line when the sidebar is open.
-        let list_h = (ui.available_height() - 2.0 * 34.0 - 10.0 - if collapsed { 0.0 } else { 24.0 }).max(60.0);
+        // Three pinned entries, plus the version line when the sidebar is open.
+        let list_h = (ui.available_height() - 3.0 * 34.0 - 10.0 - if collapsed { 0.0 } else { 24.0 }).max(60.0);
         ui.allocate_ui(vec2(ui.available_width(), list_h), |ui| {
             egui::ScrollArea::vertical().id_salt("nav-scroll").auto_shrink([false, false]).show(ui, |ui| {
                 // Keep clear of the scroll bar, which floats over the right edge.
@@ -1158,6 +1161,9 @@ impl StewardGetApp {
             }
             if nav_item(ui, Icon::Chart, None, "Statistics", 0, self.page == Page::Stats, collapsed, &p).clicked() {
                 self.page = Page::Stats;
+            }
+            if nav_item(ui, Icon::Sliders, None, "Tools", 0, self.page == Page::Tools, collapsed, &p).clicked() {
+                self.page = Page::Tools;
             }
         });
     }
@@ -1808,8 +1814,8 @@ impl eframe::App for StewardGetApp {
         let collapsed = self.sidebar_pref.unwrap_or(width < 940.0);
 
         egui::Panel::top("stewardget-menubar")
-            .exact_size(26.0)
-            .frame(Frame::new().fill(p.sidebar).inner_margin(Margin { left: 8, right: 8, top: 2, bottom: 0 }))
+            .exact_size(34.0)
+            .frame(Frame::new().fill(p.sidebar).inner_margin(Margin::symmetric(8, 3)))
             .show(ui, |ui| ui.push_id("menubar", |ui| self.menu_bar(ui)));
 
         egui::Panel::top("stewardget-toolbar")
@@ -1854,6 +1860,7 @@ impl eframe::App for StewardGetApp {
                 Page::Downloads => self.downloads_page(ui),
                 Page::History => self.history_page(ui),
                 Page::Stats => self.stats_page(ui),
+                Page::Tools => self.tools_page(ui),
                 Page::Settings => self.settings_page(ui),
             })
         });

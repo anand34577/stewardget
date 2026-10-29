@@ -24,6 +24,7 @@ mod settings;
 mod stats;
 mod table;
 mod theme;
+mod toolbox;
 mod tray;
 mod widgets;
 

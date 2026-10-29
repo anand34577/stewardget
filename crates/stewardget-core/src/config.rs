@@ -320,6 +320,9 @@ pub struct Config {
     pub ytdlp_path: Option<PathBuf>,
     /// Where ffmpeg is, when it isn't on `PATH`; used to join video and audio.
     pub ffmpeg_path: Option<PathBuf>,
+    /// Stop downloading for the rest of the calendar month once this many
+    /// bytes have been downloaded in it (a metered or hotspot connection); `0` = no cap.
+    pub monthly_cap: u64,
 }
 
 fn look_zero() -> u8 {
@@ -395,6 +398,7 @@ impl Default for Config {
             post_actions: Vec::new(),
             ytdlp_path: None,
             ffmpeg_path: None,
+            monthly_cap: 0,
         }
     }
 }

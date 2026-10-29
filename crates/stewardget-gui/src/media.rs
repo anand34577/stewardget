@@ -81,6 +81,7 @@ impl StewardGetApp {
         let mut close = false;
         let mut start = false;
         let mut download = false;
+        let mut setup = false;
         let modal = crate::dialogs::modal("stewardget-media", &p).show(ctx, |ui| {
             ui.set_width(560.0);
             crate::dialogs::title(ui, &p, Icon::Video, "Video and audio from a page");
@@ -96,9 +97,12 @@ impl StewardGetApp {
             if ytdlp.is_none() {
                 crate::dialogs::note(
                     ui,
-                    "yt-dlp isn't installed, so only DASH manifests (.mpd) can be read. For video pages, install it (for example: winget install yt-dlp) or set its location in Settings › AI & automation.",
+                    "yt-dlp isn't installed, so only DASH manifests (.mpd) can be read. Video pages need it.",
                     p.yellow,
                 );
+                if widgets::button(ui, ButtonKind::Tool, Some(Icon::Download), "Set up yt-dlp…", true, &p).clicked() {
+                    setup = true;
+                }
             }
             if let Some(info) = &d.info
                 && !info.options.is_empty()
@@ -160,6 +164,10 @@ impl StewardGetApp {
             });
         });
         close |= modal.should_close();
+        if setup {
+            self.open_settings(crate::settings::Tab::Integrations);
+            return;
+        }
         if close {
             return;
         }

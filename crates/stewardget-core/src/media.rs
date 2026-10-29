@@ -76,13 +76,96 @@ pub struct MediaInfo {
     pub options: Vec<MediaOption>,
 }
 
-/// An executable named `name`: the configured path, else the first one on `PATH`.
+/// An executable named `name`. The path the user chose comes first (a folder
+/// holding the program is fine too), then `PATH`, then the places installers
+/// and package managers put programs, which a running app often doesn't see
+/// in its `PATH` until it is restarted.
 pub fn find_tool(configured: Option<&Path>, name: &str) -> Option<PathBuf> {
-    if let Some(p) = configured.filter(|p| p.is_file()) {
-        return Some(p.to_path_buf());
-    }
     let exe = if cfg!(windows) { format!("{name}.exe") } else { name.to_owned() };
-    std::env::var_os("PATH").and_then(|paths| std::env::split_paths(&paths).map(|d| d.join(&exe)).find(|p| p.is_file()))
+    if let Some(p) = configured {
+        if p.is_file() {
+            return Some(p.to_path_buf());
+        }
+        if let Some(inside) = [p.join(&exe), p.join("bin").join(&exe)].into_iter().find(|c| c.is_file()) {
+            return Some(inside);
+        }
+    }
+    let on_path =
+        std::env::var_os("PATH").map(|paths| std::env::split_paths(&paths).collect::<Vec<_>>()).unwrap_or_default();
+    on_path.into_iter().chain(common_dirs()).map(|d| d.join(&exe)).find(|p| p.is_file())
+}
+
+fn common_dirs() -> Vec<PathBuf> {
+    let var = |k: &str| std::env::var_os(k).map(PathBuf::from);
+    let mut dirs = Vec::new();
+    if cfg!(windows) {
+        if let Some(local) = var("LOCALAPPDATA") {
+            dirs.push(local.join("Microsoft").join("WinGet").join("Links"));
+        }
+        if let Some(home) = var("USERPROFILE") {
+            dirs.push(home.join("scoop").join("shims"));
+        }
+        if let Some(data) = var("ProgramData") {
+            dirs.push(data.join("chocolatey").join("bin"));
+        }
+        if let Some(pf) = var("ProgramFiles") {
+            dirs.push(pf.join("ffmpeg").join("bin"));
+        }
+    } else {
+        dirs.extend(["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/snap/bin"].map(PathBuf::from));
+        if let Some(home) = var("HOME") {
+            dirs.push(home.join(".local").join("bin"));
+        }
+    }
+    dirs
+}
+
+/// Runs the program with its version option and checks that it really is
+/// `name`; returns the version. Blocking (a few seconds at most).
+pub fn tool_version(path: &Path, name: &str) -> Result<String, String> {
+    let arg = if name == "ffmpeg" { "-version" } else { "--version" };
+    let mut cmd = std::process::Command::new(path);
+    cmd.arg(arg)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000);
+    }
+    let mut child = cmd.spawn().map_err(|e| format!("could not start it: {e}"))?;
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        if child.try_wait().map_err(|e| e.to_string())?.is_some() {
+            break;
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            return Err("it didn't answer in time".into());
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let mut out = String::new();
+    if let Some(mut stdout) = child.stdout.take() {
+        use std::io::Read;
+        let _ = stdout.by_ref().take(4096).read_to_string(&mut out);
+    }
+    let first = out.lines().next().unwrap_or("").trim();
+    parse_version(name, first).ok_or_else(|| format!("that file doesn't look like {name}"))
+}
+
+fn parse_version(name: &str, first_line: &str) -> Option<String> {
+    if name == "ffmpeg" {
+        // "ffmpeg version 7.1-full_build-www.gyan.dev Copyright …"
+        let rest = first_line.strip_prefix("ffmpeg version ")?;
+        return rest.split_whitespace().next().map(str::to_owned);
+    }
+    // yt-dlp prints a date such as 2025.09.26.
+    let looks_like_date = first_line.len() >= 8
+        && first_line.split('.').count() >= 3
+        && first_line.split('.').all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()));
+    looks_like_date.then(|| first_line.to_owned())
 }
 
 /// What a page or manifest offers.
@@ -416,6 +499,29 @@ mod tests {
         assert_eq!(info.options[0].parts[0].url, "https://x.test/dir/v1080.mp4");
         assert_eq!(info.options[0].parts[1].url, "https://x.test/dir/a.m4a");
         assert!(info.options[2].label.starts_with("Audio only"));
+    }
+
+    #[test]
+    fn versions_are_recognised_and_other_programs_are_not() {
+        assert_eq!(
+            parse_version("ffmpeg", "ffmpeg version 7.1-full_build Copyright (c)").as_deref(),
+            Some("7.1-full_build")
+        );
+        assert_eq!(parse_version("yt-dlp", "2025.09.26").as_deref(), Some("2025.09.26"));
+        assert!(parse_version("yt-dlp", "Python 3.12.1").is_none());
+        assert!(parse_version("ffmpeg", "usage: something").is_none());
+    }
+
+    #[test]
+    fn a_folder_holding_the_program_counts() {
+        let dir = std::env::temp_dir().join(format!("stewardget-tool-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("bin")).unwrap();
+        let exe = dir.join("bin").join(if cfg!(windows) { "faketool.exe" } else { "faketool" });
+        std::fs::write(&exe, b"x").unwrap();
+        assert_eq!(find_tool(Some(&dir), "faketool"), Some(exe.clone()));
+        assert_eq!(find_tool(Some(&exe), "faketool"), Some(exe));
+        assert!(find_tool(Some(&dir.join("nope")), "definitely-not-installed-xyz").is_none());
     }
 
     #[test]

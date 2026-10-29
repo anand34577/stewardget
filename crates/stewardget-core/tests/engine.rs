@@ -1181,3 +1181,27 @@ async fn video_and_audio_halves_are_downloaded_and_a_failed_join_keeps_both_file
     }
     assert!(dir.join("Demo clip.video.mp4").exists() && dir.join("Demo clip.audio.m4a").exists());
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_monthly_cap_stops_downloads_until_it_is_raised() {
+    let server =
+        serve(8 * 1024 * 1024, ServerOpts { ranges: true, throttle: 2 * 1024 * 1024, ..Default::default() }).await;
+    let dir = temp_dir("cap");
+    let cfg = Config { monthly_cap: 1024 * 1024, ..config(&dir) };
+    let engine = Engine::start(EngineOptions::in_memory().with_config(cfg)).unwrap();
+    let first = engine.add(NewDownload::new(&server.url)).unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    while !engine.month_usage().2 {
+        assert!(tokio::time::Instant::now() < deadline, "the cap never stopped the download");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(wait_for(&engine, first, Status::Paused, 10).await, Status::Paused);
+    // Anything new waits while the cap is used up.
+    let second = engine.add(NewDownload::new(&server.url)).unwrap();
+    tokio::time::sleep(Duration::from_millis(700)).await;
+    assert_eq!(engine.download(second).unwrap().status, Status::Queued);
+    // Raising the cap lets it go on.
+    engine.update_config(Config { monthly_cap: 0, ..engine.config() }).unwrap();
+    assert_eq!(wait_for(&engine, second, Status::Completed, 60).await, Status::Completed);
+    assert!(!engine.month_usage().2);
+}

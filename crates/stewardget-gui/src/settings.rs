@@ -339,6 +339,15 @@ impl StewardGetApp {
                     row(
                         ui,
                         &p,
+                        "Monthly data limit",
+                        "For a metered or phone connection: downloads pause when this much has been downloaded in the calendar month, and start again next month or when you raise it. Empty for none.",
+                        |ui| {
+                            widgets::speed_input(ui, "monthly-cap", &mut draft.monthly_cap, 150.0);
+                        },
+                    );
+                    row(
+                        ui,
+                        &p,
                         "Different limit during set hours",
                         "For example slower during work hours, so the connection stays usable. Overrides the limit above while it runs.",
                         |ui| {
