@@ -187,13 +187,14 @@ impl StewardGetApp {
         }
         let mean = if secs > 0 { bytes as f64 / secs as f64 } else { 0.0 };
 
-        egui::Frame::new().inner_margin(Margin::symmetric(12, 8)).show(ui, |ui| {
+        egui::Frame::new().inner_margin(Margin { left: 24, right: 24, top: 20, bottom: 10 }).show(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = 6.0;
             ui.horizontal(|ui| {
-                ui.label(RichText::new("History").size(18.0).family(crate::theme::semi()).color(p.text));
                 ui.label(
-                    RichText::new(format!("{} of {}", shown.len(), self.history.entries.len()))
-                        .size(12.5)
-                        .color(p.text_dim),
+                    RichText::new("History")
+                        .size(crate::theme::size::XL + 2.0)
+                        .family(crate::theme::semi())
+                        .color(p.text),
                 );
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     let any = !self.history.entries.is_empty();
@@ -207,7 +208,24 @@ impl StewardGetApp {
                     }
                 });
             });
-            ui.add_space(5.0);
+            // What the filters show, in one line instead of a row of tiles.
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                let dim = |t: String| RichText::new(t).size(crate::theme::size::SM).color(p.text_dim);
+                let failed = shown.len().saturating_sub(ok);
+                ui.label(dim(format!(
+                    "{} of {} shown  \u{00b7}  {ok} finished  \u{00b7}  {}  \u{00b7}  average {}",
+                    shown.len(),
+                    self.history.entries.len(),
+                    format_bytes(bytes),
+                    format_speed(mean)
+                )));
+                if failed > 0 {
+                    ui.label(dim("  \u{00b7}  ".to_owned()));
+                    ui.label(RichText::new(format!("{failed} failed")).size(crate::theme::size::SM).color(p.red));
+                }
+            });
+            ui.add_space(8.0);
 
             ui.horizontal_wrapped(|ui| {
                 let search = ui.add_sized(
@@ -240,7 +258,7 @@ impl StewardGetApp {
                     &p,
                 );
                 let label = self.history.category.map_or("All types".to_owned(), |c| self.cfg.category_label(c));
-                egui::ComboBox::from_id_salt("history-category").selected_text(label).width(130.0).show_ui(ui, |ui| {
+                widgets::dropdown(&p, "history-category").selected_text(label).width(130.0).show_ui(ui, |ui| {
                     ui.selectable_value(&mut self.history.category, None, "All types");
                     for c in self.cfg.categories() {
                         let name = self.cfg.category_label(c);
@@ -248,23 +266,7 @@ impl StewardGetApp {
                     }
                 });
             });
-            ui.add_space(5.0);
-
-            let per_row = if ui.available_width() > 480.0 { 4 } else { 2 };
-            let tiles = [
-                ("Finished", ok.to_string(), p.green),
-                ("Total size", format_bytes(bytes), p.accent),
-                ("Average speed", format_speed(mean), p.accent2),
-                ("Failed", shown.len().saturating_sub(ok).to_string(), p.red),
-            ];
-            for chunk in tiles.chunks(per_row) {
-                ui.columns(per_row, |cols| {
-                    for (col, (label, value, color)) in cols.iter_mut().zip(chunk) {
-                        widgets::stat_tile(col, &p, label, value, "", *color);
-                    }
-                });
-                ui.add_space(6.0);
-            }
+            ui.add_space(4.0);
         });
 
         if self.history.entries.is_empty() {
@@ -284,7 +286,7 @@ impl StewardGetApp {
         }
 
         let mut action: Option<RowAction> = None;
-        egui::Frame::new().inner_margin(Margin::symmetric(18, 0)).show(ui, |ui| {
+        egui::Frame::new().inner_margin(Margin::symmetric(24, 0)).show(ui, |ui| {
             egui::ScrollArea::vertical().auto_shrink([false, false]).show_rows(ui, ROW_H, shown.len(), |ui, range| {
                 for &i in &shown[range] {
                     let e = &self.history.entries[i];
@@ -418,11 +420,17 @@ fn history_row(
     } else {
         p.card
     };
-    painter.rect(rect, CornerRadius::same(10), fill, Stroke::new(1.0, p.border), egui::StrokeKind::Inside);
+    painter.rect(
+        rect,
+        CornerRadius::same(crate::theme::radius::LG),
+        fill,
+        Stroke::new(1.0, p.border),
+        egui::StrokeKind::Inside,
+    );
 
     let color = p.category(e.category);
     let ic = egui::Rect::from_center_size(rect.left_center() + vec2(22.0, 0.0), vec2(26.0, 26.0));
-    painter.rect_filled(ic, CornerRadius::same(8), color.gamma_multiply(0.14));
+    painter.rect_filled(ic, CornerRadius::same(crate::theme::radius::MD), color.gamma_multiply(0.14));
     crate::icons::paint(painter, ic.shrink(6.0), Icon::for_category(e.category), color);
 
     let missing = e.status == Status::Completed && !crate::table::file_exists(&e.path);
@@ -503,7 +511,7 @@ fn history_row(
         let c = if !enabled {
             p.text_dim.gamma_multiply(0.4)
         } else if resp.hovered() {
-            ui.painter().rect_filled(r, CornerRadius::same(7), p.track);
+            ui.painter().rect_filled(r, CornerRadius::same(crate::theme::radius::SM), p.track);
             p.accent
         } else {
             p.text_dim

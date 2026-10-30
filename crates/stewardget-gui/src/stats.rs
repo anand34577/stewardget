@@ -43,48 +43,86 @@ impl StewardGetApp {
         let s = self.snap.stats.clone();
         let now = now_unix();
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-            egui::Frame::new().inner_margin(Margin::symmetric(12, 8)).show(ui, |ui| {
+            egui::Frame::new().inner_margin(Margin { left: 24, right: 24, top: 20, bottom: 20 }).show(ui, |ui| {
+                ui.spacing_mut().item_spacing = vec2(12.0, 6.0);
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("Statistics").size(18.0).family(crate::theme::semi()).color(p.text));
+                    ui.label(
+                        RichText::new("Statistics")
+                            .size(crate::theme::size::XL + 2.0)
+                            .family(crate::theme::semi())
+                            .color(p.text),
+                    );
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         ui.label(
-                            RichText::new("Stored only on this device — never sent anywhere.")
-                                .size(12.0)
+                            RichText::new("Stored only on this device, never sent anywhere")
+                                .size(crate::theme::size::SM)
                                 .color(p.text_dim),
                         );
                         widgets::icon(ui, Icon::Lock, 13.0, p.green);
                     });
                 });
-                ui.add_space(6.0);
+                let since = if s.first_seen > 0 {
+                    format!("Counting since {}", &format_timestamp(s.first_seen)[..10])
+                } else {
+                    "Nothing downloaded yet".to_owned()
+                };
+                ui.label(RichText::new(since).size(crate::theme::size::SM).color(p.text_dim));
+                ui.add_space(12.0);
 
+                // Four tiles, one row when there is room: never squeezed until values wrap.
+                let volume: Vec<f32> = s.recent_days(30, now).iter().map(|d| d.bytes as f32).collect();
+                let success = s.success_rate();
                 let tiles = [
-                    ("Total downloaded", format_bytes(s.total_bytes), String::new(), p.accent),
-                    ("Today", format_bytes(s.today(now)), String::new(), p.accent2),
-                    ("Completed", s.completed.to_string(), format!("{} failed", s.failed), p.green),
                     (
-                        "Success rate",
-                        s.success_rate().map_or("—".into(), |r| format!("{:.1}%", r * 100.0)),
-                        String::new(),
-                        p.green,
+                        Icon::Download,
+                        "Total downloaded",
+                        format_bytes(s.total_bytes),
+                        format!("{} this month", format_bytes(s.month_total(now))),
+                        p.accent,
+                        widgets::KpiExtra::Spark(&volume),
                     ),
-                    ("Peak speed", format_speed(s.peak_speed), String::new(), p.accent2),
-                    ("Average speed", format_speed(s.average_speed()), "while downloading".into(), p.accent),
-                    ("Time downloading", format_duration(s.active_secs as u64), String::new(), p.yellow),
                     (
-                        "Since",
-                        if s.first_seen > 0 { format_timestamp(s.first_seen)[..10].to_owned() } else { "—".into() },
-                        String::new(),
-                        p.text,
+                        Icon::Calendar,
+                        "Today",
+                        format_bytes(s.today(now)),
+                        "The graph shows the last 7 days".to_owned(),
+                        p.accent2,
+                        widgets::KpiExtra::Spark(&volume[volume.len().saturating_sub(7)..]),
+                    ),
+                    (
+                        Icon::CheckCircle,
+                        "Completed",
+                        s.completed.to_string(),
+                        match success {
+                            Some(r) => format!("{:.1}% succeed \u{00b7} {} failed", r * 100.0, s.failed),
+                            None => format!("{} failed", s.failed),
+                        },
+                        p.green,
+                        widgets::KpiExtra::Meter(success.unwrap_or(0.0) as f32),
+                    ),
+                    (
+                        Icon::Bolt,
+                        "Peak speed",
+                        format_speed(s.peak_speed),
+                        format!(
+                            "avg {} \u{00b7} {} active",
+                            format_speed(s.average_speed()),
+                            format_duration(s.active_secs as u64)
+                        ),
+                        p.yellow,
+                        widgets::KpiExtra::None,
                     ),
                 ];
-                let per_row = ((ui.available_width() / 150.0).floor() as usize).clamp(2, 8);
-                for chunk in tiles.chunks(per_row) {
-                    ui.columns(per_row, |cols| {
-                        for (col, (label, value, caption, color)) in cols.iter_mut().zip(chunk) {
-                            widgets::stat_tile(col, &p, label, value, caption, *color);
+                let per_row = if ui.available_width() > 860.0 { 4 } else { 2 };
+                let tile_w = (ui.available_width() - 12.0 * (per_row - 1) as f32) / per_row as f32;
+                let mut tiles = tiles.into_iter().peekable();
+                while tiles.peek().is_some() {
+                    ui.horizontal(|ui| {
+                        for (icon, label, value, sub, color, extra) in tiles.by_ref().take(per_row) {
+                            widgets::kpi_tile(ui, tile_w, icon, color, label, &value, &sub, extra, &p);
                         }
                     });
-                    ui.add_space(5.0);
+                    ui.add_space(12.0);
                 }
 
                 let wide = ui.available_width() > 900.0;
@@ -120,10 +158,10 @@ impl StewardGetApp {
                     });
                 } else {
                     days_chart(ui);
-                    ui.add_space(5.0);
+                    ui.add_space(12.0);
                     live_chart(ui);
                 }
-                ui.add_space(5.0);
+                ui.add_space(12.0);
 
                 card(&p).show(ui, |ui| {
                     ui.set_min_width(ui.available_width());
@@ -133,7 +171,7 @@ impl StewardGetApp {
                         widgets::heatmap(ui, &s.recent_days(182, now), &p);
                     });
                 });
-                ui.add_space(5.0);
+                ui.add_space(12.0);
 
                 let categories = self.category_rows();
                 let hosts = self.host_rows();
@@ -147,19 +185,22 @@ impl StewardGetApp {
                         let max = rows.iter().map(|r| r.3).max().unwrap_or(1).max(1);
                         for (name, cat, n, bytes) in rows {
                             let color = cat.map_or(p.accent, |c| p.category(c));
-                            ui.horizontal(|ui| {
-                                if let Some(c) = cat {
-                                    widgets::icon(ui, Icon::for_category(*c), 14.0, color);
-                                }
-                                ui.add(egui::Label::new(RichText::new(name).color(p.text)).truncate());
-                                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            widgets::split_row(
+                                ui,
+                                |ui| {
+                                    if let Some(c) = cat {
+                                        widgets::icon(ui, Icon::for_category(*c), 14.0, color);
+                                    }
+                                    ui.add(egui::Label::new(RichText::new(name).color(p.text)).truncate());
+                                },
+                                |ui| {
                                     ui.label(
                                         RichText::new(format!("{n} · {}", format_bytes(*bytes)))
                                             .size(12.0)
                                             .color(p.text_dim),
                                     );
-                                });
-                            });
+                                },
+                            );
                             widgets::share_bar(ui, *bytes as f32 / max as f32, color, &p);
                             ui.add_space(3.0);
                         }
@@ -172,7 +213,7 @@ impl StewardGetApp {
                     });
                 } else {
                     breakdown(ui, "BY CATEGORY", &categories);
-                    ui.add_space(5.0);
+                    ui.add_space(12.0);
                     breakdown(ui, "TOP SOURCES", &hosts);
                 }
             });

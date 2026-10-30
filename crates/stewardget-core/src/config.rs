@@ -245,6 +245,12 @@ pub struct Config {
     pub accent: Accent,
     /// Interface zoom of the desktop app (1.0 = 100 %).
     pub ui_scale: f32,
+    /// Use the operating system's window title bar instead of StewardGet's
+    /// own (which holds the menus, search and window buttons). Takes effect
+    /// on the next start.
+    pub system_title_bar: bool,
+    /// Messages to other devices (Gotify, ntfy, email) when downloads finish or fail.
+    pub remote_notify: crate::notifiers::RemoteNotify,
     /// How often a failed download is retried automatically (network
     /// problems and server errors only). `0` disables it.
     pub auto_retry: u32,
@@ -296,6 +302,9 @@ pub struct Config {
     pub minimize_to_tray: bool,
     /// One-line rows in the download list instead of name plus details (desktop app).
     pub compact_rows: bool,
+    /// Show downloads as cards with live figures instead of the list (desktop
+    /// app). Off by default; a separate setting so `compact_rows` keeps its meaning.
+    pub card_view: bool,
     /// Optional columns of the download list the user switched off: `size`,
     /// `speed`, `eta`, `added` (desktop app).
     pub hidden_columns: Vec<String>,
@@ -372,6 +381,8 @@ impl Default for Config {
             check_updates: false,
             accent: Accent::Teal,
             ui_scale: 1.0,
+            system_title_bar: false,
+            remote_notify: crate::notifiers::RemoteNotify::default(),
             auto_retry: 3,
             auto_retry_delay_secs: 20,
             schedule: Schedule::default(),
@@ -392,6 +403,7 @@ impl Default for Config {
             completion_sound: true,
             minimize_to_tray: true,
             compact_rows: false,
+            card_view: false,
             hidden_columns: Vec::new(),
             progress_window: true,
             look_version: 1,

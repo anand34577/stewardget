@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use egui::{Align, Layout, Margin, RichText, Ui};
+use egui::{Margin, RichText, Ui};
 use stewardget_core::util::format_bytes;
 use stewardget_core::{DupGroup, Leftover, LinkInfo, NewDownload};
 
@@ -71,23 +71,29 @@ impl StewardGetApp {
         }
 
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-            egui::Frame::new().inner_margin(Margin::symmetric(12, 8)).show(ui, |ui| {
-                ui.label(RichText::new("Tools").size(19.0).family(crate::theme::semi()).color(p.text));
+            egui::Frame::new().inner_margin(Margin { left: 24, right: 24, top: 20, bottom: 20 }).show(ui, |ui| {
+                ui.label(
+                    RichText::new("Tools")
+                        .size(crate::theme::size::XL + 2.0)
+                        .family(crate::theme::semi())
+                        .color(p.text),
+                );
                 ui.label(
                     RichText::new("Keep your downloads tidy, check links before downloading, and keep a backup.")
+                        .size(crate::theme::size::SM)
                         .color(p.text_dim),
                 );
                 if let Some((text, ok)) = t.message.clone() {
                     ui.add_space(4.0);
                     ui.label(RichText::new(text).color(if ok { p.green } else { p.red }));
                 }
-                ui.add_space(6.0);
+                ui.add_space(12.0);
                 self.dup_card(ui, &mut t);
-                ui.add_space(6.0);
+                ui.add_space(12.0);
                 self.leftover_card(ui, &mut t);
-                ui.add_space(6.0);
+                ui.add_space(12.0);
                 self.link_check_card(ui, &mut t);
-                ui.add_space(6.0);
+                ui.add_space(12.0);
                 self.backup_card(ui, &mut t);
             });
         });
@@ -119,7 +125,7 @@ impl StewardGetApp {
                     }
                     ui.spinner();
                     ui.label(RichText::new("Scanning…").color(p.text_dim));
-                } else if widgets::button(ui, ButtonKind::Primary, Some(Icon::Search), "Scan download folders", true, &p)
+                } else if widgets::button(ui, ButtonKind::Ghost, Some(Icon::Search), "Scan download folders", true, &p)
                     .clicked()
                 {
                     let (slot, cancel) = (Slot::default(), Arc::new(AtomicBool::new(false)));
@@ -151,9 +157,8 @@ impl StewardGetApp {
                 ui.add_space(3.0);
                 ui.label(RichText::new(format!("{} each", format_bytes(g.size))).size(12.0).color(p.text_dim));
                 for f in &g.files {
-                    ui.horizontal(|ui| {
-                        ui.add(egui::Label::new(RichText::new(f.display().to_string()).size(12.5).color(p.text)).truncate());
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    widgets::file_row(ui, f, &p, |ui| {
+                        {
                             let key = format!("dup:{}", f.display());
                             let armed = t.confirm.as_deref() == Some(key.as_str());
                             let (label, kind) = if armed { ("Really delete?", ButtonKind::Danger) } else { ("Delete", ButtonKind::Tool) };
@@ -167,7 +172,7 @@ impl StewardGetApp {
                             if widgets::icon_button(ui, Icon::FolderOpen, "Show in folder", &p).clicked() {
                                 let _ = stewardget_core::util::reveal_in_file_manager(f);
                             }
-                        });
+                        }
                     });
                 }
             }
@@ -205,7 +210,7 @@ impl StewardGetApp {
             ui.add_space(4.0);
             let running = t.left_job.is_some();
             ui.horizontal(|ui| {
-                if widgets::button(ui, ButtonKind::Primary, Some(Icon::Search), "Look for leftovers", !running, &p).clicked() {
+                if widgets::button(ui, ButtonKind::Ghost, Some(Icon::Search), "Look for leftovers", !running, &p).clicked() {
                     let slot = Slot::default();
                     let (engine, out, ctx) = (self.engine.clone(), Arc::clone(&slot), ui.ctx().clone());
                     std::thread::spawn(move || {
@@ -231,12 +236,12 @@ impl StewardGetApp {
                 RichText::new(format!("{} files · {}", found.len(), format_bytes(total))).family(crate::theme::semi()).color(p.text),
             );
             for l in found.iter().take(30) {
-                ui.horizontal(|ui| {
-                    ui.add(egui::Label::new(RichText::new(l.path.display().to_string()).size(12.5).color(p.text)).truncate());
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        ui.label(RichText::new(format_bytes(l.size)).size(12.0).color(p.text_dim));
-                    });
+                widgets::file_row(ui, &l.path, &p, |ui| {
+                    ui.label(RichText::new(format_bytes(l.size)).size(12.0).color(p.text_dim));
                 });
+            }
+            if found.len() > 30 {
+                ui.label(RichText::new(format!("\u{2026}and {} more", found.len() - 30)).size(12.0).color(p.text_dim));
             }
             let armed = t.confirm.as_deref() == Some("leftovers");
             let (label, kind) = if armed { ("Really delete them all?", ButtonKind::Danger) } else { ("Delete them all", ButtonKind::Tool) };
@@ -278,7 +283,7 @@ impl StewardGetApp {
                 .take(200)
                 .collect::<Vec<_>>();
             ui.horizontal(|ui| {
-                if widgets::button(ui, ButtonKind::Primary, Some(Icon::CheckCircle), "Check", !links.is_empty(), &p).clicked() {
+                if widgets::button(ui, ButtonKind::Ghost, Some(Icon::CheckCircle), "Check", !links.is_empty(), &p).clicked() {
                     let results = Arc::new(Mutex::new(links.iter().map(|l| (l.clone(), None)).collect::<Vec<_>>()));
                     let gate = Arc::new(tokio::sync::Semaphore::new(4));
                     for (i, link) in links.iter().cloned().enumerate() {

@@ -54,6 +54,7 @@ pub mod mcp;
 mod media;
 mod model;
 mod net;
+pub mod notifiers;
 mod probe;
 pub mod remote;
 mod segment;

@@ -9,6 +9,7 @@ mod capture;
 mod categories;
 mod details;
 mod dialogs;
+mod frame;
 mod grab;
 mod history;
 mod icons;
@@ -20,6 +21,7 @@ mod notify;
 mod overview;
 mod palette;
 mod progress;
+mod push;
 mod queues;
 mod settings;
 mod stats;
@@ -95,16 +97,26 @@ fn main() -> eframe::Result {
     // A login start must never flash a window: create it hidden when the tray
     // is there to bring it back (`App::park` shows it minimised when it isn't).
     let start_hidden = launch.background && cfg!(any(windows, target_os = "macos")) && engine.config().minimize_to_tray;
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_visible(!start_hidden)
+        .with_title("StewardGet")
+        .with_app_id("dev.stewardget.StewardGet")
+        .with_inner_size([1180.0, 720.0])
+        .with_min_inner_size([680.0, 460.0])
+        .with_icon(app_icon());
+    if !engine.config().system_title_bar {
+        // StewardGet's header is the title bar: it holds the menus, search and
+        // window buttons. macOS keeps its own traffic lights over the sidebar.
+        viewport = if cfg!(target_os = "macos") {
+            viewport.with_fullsize_content_view(true).with_titlebar_shown(false).with_title_shown(false)
+        } else {
+            viewport.with_decorations(false)
+        };
+    }
     let options = eframe::NativeOptions {
         // Window size and position are remembered next to the other data.
         persistence_path: engine.data_dir().map(|d| d.join("window.ron")),
-        viewport: egui::ViewportBuilder::default()
-            .with_visible(!start_hidden)
-            .with_title("StewardGet")
-            .with_app_id("dev.stewardget.StewardGet")
-            .with_inner_size([1180.0, 720.0])
-            .with_min_inner_size([680.0, 460.0])
-            .with_icon(app_icon()),
+        viewport,
         ..Default::default()
     };
     eframe::run_native(

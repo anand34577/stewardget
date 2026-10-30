@@ -12,12 +12,13 @@ use crate::icons::{self, Icon};
 use crate::theme::Palette;
 use crate::widgets::{self, ButtonKind};
 
-/// Row height of the list view.
+/// Row height of the list in compact mode, and with name plus details.
 const ROW_H_COMPACT: f32 = 34.0;
+const ROW_H_COMFORTABLE: f32 = 52.0;
 const HEADER_H: f32 = 34.0;
 /// Card view: card height, the gap below each card and the side margin.
-const CARD_H: f32 = 90.0;
-const CARD_GAP: f32 = 10.0;
+const CARD_H: f32 = 80.0;
+const CARD_GAP: f32 = 8.0;
 const CARD_X: f32 = 20.0;
 /// Rows are drawn as rounded bands this far in from the canvas edge.
 const ROW_INSET: f32 = 10.0;
@@ -154,8 +155,12 @@ impl StewardGetApp {
         let rows = self.visible_rows();
         let full = ui.available_rect_before_wrap();
         let (name_w, cols) = layout_columns(full.width(), &self.cfg.hidden_columns);
-        let cards = !self.cfg.compact_rows;
-        let row_h = if cards { CARD_H + CARD_GAP } else { ROW_H_COMPACT };
+        let cards = self.cfg.card_view;
+        let row_h = match (cards, self.cfg.compact_rows) {
+            (true, _) => CARD_H + CARD_GAP,
+            (false, true) => ROW_H_COMPACT,
+            (false, false) => ROW_H_COMFORTABLE,
+        };
 
         // Page header: title and summary, and on the right what can be done
         // with the selection (or with everything in view when nothing is selected).
@@ -206,7 +211,7 @@ impl StewardGetApp {
         );
 
         // Live figures for everything in the list; skipped when the window is short.
-        if cards && full.height() > 600.0 {
+        if cards && full.height() > 600.0 && summary_shown(ui.ctx()) {
             self.kpi_strip(ui, full.width());
             ui.add_space(14.0);
         }
@@ -328,7 +333,7 @@ impl StewardGetApp {
         response.on_hover_cursor(egui::CursorIcon::PointingHand);
     }
 
-    /// Right-click menu of the header: which optional columns to show, and cards or list.
+    /// Right-click menu of the header: which optional columns to show, and row density.
     fn columns_menu(&mut self, ui: &mut Ui) {
         ui.set_min_width(200.0);
         let mut config = self.engine.config();
@@ -345,7 +350,7 @@ impl StewardGetApp {
             }
         }
         ui.separator();
-        changed |= ui.checkbox(&mut config.compact_rows, "List view").changed();
+        changed |= ui.checkbox(&mut config.compact_rows, "Compact rows").changed();
         if changed {
             // An open Settings page must not put the old columns back when saved.
             if let Some(draft) = &mut self.settings_draft {
@@ -404,7 +409,8 @@ impl StewardGetApp {
 
         // Name cell
         let mut x = rect.left() + PAD_X;
-        let tile = 22.0;
+        let compact = row_h <= ROW_H_COMPACT;
+        let tile = if compact { 22.0 } else { 34.0 };
         let icon_rect = Rect::from_min_size(pos2(x, rect.center().y - tile / 2.0), vec2(tile, tile));
         widgets::paint_icon_tile(&painter, icon_rect, Icon::for_category(d.category), p.category(d.category), &p);
         let text_x = x + tile + 12.0;
@@ -413,13 +419,27 @@ impl StewardGetApp {
             crate::theme::size::MD,
             if selected { crate::theme::semi() } else { egui::FontFamily::Proportional },
         );
-        painter.with_clip_rect(name_rect).text(
-            name_rect.left_center(),
-            Align2::LEFT_CENTER,
-            &d.file_name,
-            name_font,
-            p.text,
-        );
+        // Names that don't fit end in an ellipsis; the full name is in the tooltip.
+        let room = name_rect.width();
+        let name = widgets::fit_text(&painter, &d.file_name, &name_font, room);
+        if name != d.file_name && response.hovered() {
+            response.clone().on_hover_text(&d.file_name);
+        }
+        if compact {
+            painter.text(name_rect.left_center(), Align2::LEFT_CENTER, name, name_font, p.text);
+        } else {
+            // Name, and below it what kind of file it is and where it comes from.
+            let c = name_rect.left_center();
+            painter.text(c - vec2(0.0, 9.0), Align2::LEFT_CENTER, name, name_font, p.text);
+            let host = crate::capture::host_of(&d.url);
+            let mut sub = self.cfg.category_label(d.category);
+            if !host.is_empty() {
+                sub = format!("{sub}  \u{00b7}  {host}");
+            }
+            let small = FontId::proportional(12.0);
+            let sub = widgets::fit_text(&painter, &sub, &small, room);
+            painter.text(c + vec2(0.0, 10.0), Align2::LEFT_CENTER, sub, small, p.text_dim);
+        }
         x += name_w;
 
         for col in cols {
@@ -539,17 +559,17 @@ impl StewardGetApp {
         response.context_menu(|ui| self.context_menu(ui, &d));
     }
 
-    /// Cards or a dense list; remembered in the configuration.
+    /// The list (the default) or cards; remembered in the configuration.
     fn view_toggle(&mut self, ui: &mut Ui) {
         let p = self.palette;
-        let mut compact = self.cfg.compact_rows;
-        let r = widgets::segmented(ui, &mut compact, &[(false, "Cards"), (true, "List")], &p)
-            .on_hover_text("Rich cards, or a dense sortable list with columns");
-        if r.changed() || compact != self.cfg.compact_rows {
+        let mut cards = self.cfg.card_view;
+        let r = widgets::segmented(ui, &mut cards, &[(false, "List"), (true, "Cards")], &p)
+            .on_hover_text("A sortable list with columns, or cards with live figures");
+        if r.changed() || cards != self.cfg.card_view {
             let mut config = self.engine.config();
-            config.compact_rows = compact;
+            config.card_view = cards;
             if let Some(draft) = &mut self.settings_draft {
-                draft.compact_rows = compact;
+                draft.card_view = cards;
             }
             let r = self.engine.update_config(config);
             self.report(r);
@@ -588,8 +608,10 @@ impl StewardGetApp {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = gap;
             ui.add_space(CARD_X - gap);
-            let speed_sub = if active > 0 {
+            let speed_sub = if speed > 1.0 {
                 format!("peak {} \u{00b7} {connections} connections", format_speed(peak as f64))
+            } else if active > 0 {
+                "Connecting\u{2026}".to_owned()
             } else {
                 "Nothing downloading".to_owned()
             };
@@ -701,6 +723,11 @@ impl StewardGetApp {
                     (SortKey::Status, "Status"),
                 ];
                 let dir_icon = if self.table.ascending { Icon::ArrowUp } else { Icon::ArrowDown };
+                let shown = summary_shown(ui.ctx());
+                let tip = if shown { "Hide the summary tiles" } else { "Show the summary tiles" };
+                if widgets::icon_button(ui, Icon::Gauge, tip, &p).clicked() {
+                    ui.ctx().data_mut(|d| d.insert_persisted(summary_id(), !shown));
+                }
                 if self.table.sort != SortKey::Queue
                     && widgets::icon_button(
                         ui,
@@ -714,7 +741,7 @@ impl StewardGetApp {
                 }
                 let current = KEYS.iter().find(|(k, _)| *k == self.table.sort).map_or("Queue order", |(_, t)| t);
                 let mut chosen = self.table.sort;
-                egui::ComboBox::from_id_salt("card-sort")
+                widgets::dropdown(&p, "card-sort")
                     .width(130.0)
                     .selected_text(RichText::new(current).size(12.5))
                     .show_ui(ui, |ui| {
@@ -747,7 +774,7 @@ impl StewardGetApp {
         let selected = self.selection.contains(&d.id);
         let hovered = response.hovered();
         let painter = ui.painter().clone();
-        let corner = CornerRadius::same(crate::theme::radius::LG + 2);
+        let corner = CornerRadius::same(crate::theme::radius::LG);
         if !p.dark {
             painter.add(p.shadow(if hovered { 4 } else { 1 }, if hovered { 14 } else { 6 }).as_shape(card, corner));
         }
@@ -764,12 +791,12 @@ impl StewardGetApp {
         painter.rect(card, corner, fill, stroke, egui::StrokeKind::Inside);
         // Live downloads carry a thin accent edge on the left.
         if d.status.is_active() {
-            let edge = Rect::from_min_size(card.left_top() + vec2(0.0, 18.0), vec2(3.0, card.height() - 36.0));
+            let edge = Rect::from_min_size(card.left_top() + vec2(0.0, 16.0), vec2(3.0, card.height() - 32.0));
             let (a, b) = widgets::status_gradient(d.status, &p);
             widgets::paint_gradient_rect(&painter, edge, 1.5, a, b, true);
         }
 
-        let tile = Rect::from_center_size(card.left_center() + vec2(16.0 + 26.0, 0.0), vec2(52.0, 52.0));
+        let tile = Rect::from_center_size(card.left_center() + vec2(16.0 + 24.0, 0.0), vec2(48.0, 48.0));
         widgets::paint_file_tile(
             &painter,
             tile,
@@ -789,15 +816,13 @@ impl StewardGetApp {
         let pill_w =
             painter.layout_no_wrap(label.clone(), FontId::new(12.0, crate::theme::semi()), color).size().x + 26.0;
         let pill_w = pill_w.min((x1 - x0) * 0.45);
-        widgets::paint_pill(&painter, pos2(x1 - pill_w, top + 21.0), &label, color, pill_w, &p);
-        let name_clip = Rect::from_min_max(pos2(x0, top), pos2(x1 - pill_w - 12.0, card.bottom()));
-        painter.with_clip_rect(name_clip.intersect(painter.clip_rect())).text(
-            pos2(x0, top + 21.0),
-            Align2::LEFT_CENTER,
-            &d.file_name,
-            FontId::new(crate::theme::size::MD + 0.5, crate::theme::semi()),
-            p.text,
-        );
+        widgets::paint_pill(&painter, pos2(x1 - pill_w, top + 19.0), &label, color, pill_w, &p);
+        let name_font = FontId::new(crate::theme::size::MD + 0.5, crate::theme::semi());
+        let name = widgets::fit_text(&painter, &d.file_name, &name_font, x1 - pill_w - 12.0 - x0);
+        if name != d.file_name && response.hovered() {
+            response.clone().on_hover_text(&d.file_name);
+        }
+        painter.text(pos2(x0, top + 19.0), Align2::LEFT_CENTER, name, name_font, p.text);
 
         // Line 2: where it comes from.
         let host = crate::capture::host_of(&d.url);
@@ -810,24 +835,18 @@ impl StewardGetApp {
         if self.engine.config().queues.len() > 1 {
             meta.push(self.engine.config().queue(d.queue).name.clone());
         }
-        painter
-            .with_clip_rect(Rect::from_min_max(pos2(x0, top), pos2(x1, card.bottom())).intersect(painter.clip_rect()))
-            .text(
-                pos2(x0, top + 41.0),
-                Align2::LEFT_CENTER,
-                meta.join("  \u{00b7}  "),
-                FontId::proportional(crate::theme::size::SM),
-                p.text_dim,
-            );
+        let meta_font = FontId::proportional(crate::theme::size::SM);
+        let meta = widgets::fit_text(&painter, &meta.join("  \u{00b7}  "), &meta_font, x1 - x0);
+        painter.text(pos2(x0, top + 37.0), Align2::LEFT_CENTER, meta, meta_font, p.text_dim);
 
         // Line 3: progress.
-        let bar = Rect::from_min_max(pos2(x0, top + 55.0), pos2(x1, top + 61.0));
+        let bar = Rect::from_min_max(pos2(x0, top + 49.0), pos2(x1, top + 55.0));
         widgets::paint_progress(ui, bar, d, &p);
 
         // Line 4: figures.
         let small = FontId::proportional(12.5);
         let strong = FontId::new(12.5, crate::theme::semi());
-        let figures_y = top + 75.0;
+        let figures_y = top + 66.0;
         let pct = d
             .fraction()
             .map(|f| if f >= 1.0 { "100%".to_owned() } else { format!("{:.1}%", (f * 1000.0).floor() / 10.0) });
@@ -869,10 +888,8 @@ impl StewardGetApp {
             _ => None,
         };
         if let Some((text, color, font)) = right_text {
-            let clip = Rect::from_min_max(pos2(lg.right() + 16.0, top), pos2(x1, card.bottom()));
-            let g = painter.layout_no_wrap(text, font, color);
-            let pos = pos2((x1 - g.size().x).max(clip.left()), figures_y - g.size().y / 2.0);
-            painter.with_clip_rect(clip.intersect(painter.clip_rect())).galley(pos, g, color);
+            let text = widgets::fit_text(&painter, &text, &font, x1 - lg.right() - 16.0);
+            painter.text(pos2(x1, figures_y), Align2::RIGHT_CENTER, text, font, color);
         }
 
         // Actions: the main one first, filled; then the folder and a menu.
@@ -1150,6 +1167,15 @@ pub fn free_space(path: &std::path::Path) -> Option<u64> {
         seen.insert(path.to_path_buf(), (Instant::now(), free));
         free
     })
+}
+
+fn summary_id() -> egui::Id {
+    egui::Id::unique("stewardget-summary-shown")
+}
+
+/// Whether the summary tiles above the cards are shown; remembered across starts.
+fn summary_shown(ctx: &egui::Context) -> bool {
+    ctx.data_mut(|d| *d.get_persisted_mut_or(summary_id(), true))
 }
 
 /// The last folder name of a path, for tight spaces ("Downloads").

@@ -203,7 +203,11 @@ impl StewardGetApp {
                 let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 58.0), Sense::click());
                 let painter = ui.painter();
                 if response.hovered() {
-                    painter.rect_filled(rect.expand2(vec2(6.0, 0.0)), egui::CornerRadius::same(10), p.card_hover);
+                    painter.rect_filled(
+                        rect.expand2(vec2(6.0, 0.0)),
+                        egui::CornerRadius::same(crate::theme::radius::MD),
+                        p.card_hover,
+                    );
                 }
                 let color = p.category(d.category);
                 widgets::paint_file_tile(
@@ -216,7 +220,12 @@ impl StewardGetApp {
                 );
                 let text_x = 46.0;
                 let name_w = rect.width() - 170.0;
-                let name = shorten(&d.file_name, (name_w / 7.0) as usize);
+                let name = widgets::fit_text(
+                    painter,
+                    &d.file_name,
+                    &egui::FontId::new(13.5, crate::theme::semi()),
+                    name_w - text_x,
+                );
                 painter.text(
                     rect.left_top() + vec2(text_x, 14.0),
                     egui::Align2::LEFT_CENTER,
@@ -281,7 +290,11 @@ impl StewardGetApp {
                 let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 44.0), Sense::click());
                 let painter = ui.painter();
                 if response.hovered() {
-                    painter.rect_filled(rect.expand2(vec2(6.0, 0.0)), egui::CornerRadius::same(10), p.card_hover);
+                    painter.rect_filled(
+                        rect.expand2(vec2(6.0, 0.0)),
+                        egui::CornerRadius::same(crate::theme::radius::MD),
+                        p.card_hover,
+                    );
                 }
                 let color = if ok { p.category(e.category) } else { p.red };
                 widgets::paint_file_tile(
@@ -295,7 +308,7 @@ impl StewardGetApp {
                 painter.text(
                     rect.left_center() + vec2(42.0, 0.0),
                     egui::Align2::LEFT_CENTER,
-                    shorten(&e.file_name, ((rect.width() - 190.0) / 7.0) as usize),
+                    widgets::fit_text(painter, &e.file_name, &egui::FontId::proportional(13.5), rect.width() - 190.0),
                     egui::FontId::proportional(13.5),
                     p.text,
                 );
@@ -346,12 +359,15 @@ impl StewardGetApp {
                 widgets::caption(ui, "FASTEST SOURCES", &p);
                 let max = hosts.iter().map(|h| h.average_speed()).fold(1.0, f64::max);
                 for h in &hosts {
-                    ui.horizontal(|ui| {
-                        ui.add(egui::Label::new(RichText::new(&h.host).color(p.text)).truncate());
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    widgets::split_row(
+                        ui,
+                        |ui| {
+                            ui.add(egui::Label::new(RichText::new(&h.host).color(p.text)).truncate());
+                        },
+                        |ui| {
                             ui.label(RichText::new(format_speed(h.average_speed())).size(12.0).color(p.text_dim));
-                        });
-                    });
+                        },
+                    );
                     widgets::share_bar(ui, (h.average_speed() / max) as f32, p.accent2, &p);
                     ui.add_space(2.0);
                 }
@@ -474,13 +490,4 @@ fn empty_line(ui: &mut Ui, p: &crate::theme::Palette, icon: Icon, text: &str) {
         ui.label(RichText::new(text).color(p.text_dim));
     });
     ui.add_space(6.0);
-}
-
-fn shorten(s: &str, max_chars: usize) -> String {
-    let max_chars = max_chars.max(8);
-    if s.chars().count() <= max_chars {
-        s.to_owned()
-    } else {
-        s.chars().take(max_chars - 1).collect::<String>() + "…"
-    }
 }

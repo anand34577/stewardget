@@ -17,16 +17,21 @@ pub mod size {
     pub const MD: f32 = 14.0;
     pub const LG: f32 = 16.0;
     pub const XL: f32 = 20.0;
-    pub const XXL: f32 = 26.0;
     pub const DISPLAY: f32 = 34.0;
 }
 
 /// Corner radii.
+/// Corner radii. One step per kind of thing, so the same kind of element is
+/// rounded the same way everywhere: `XS` tags and key caps, `SM` items inside
+/// menus and lists, `MD` controls (buttons, fields, drop-downs, nav entries),
+/// `LG` cards and tiles, `XL` large surfaces (the canvas, dialogs, the window).
+/// Pills, toggles and round buttons stay fully round.
 pub mod radius {
+    pub const XS: u8 = 4;
     pub const SM: u8 = 6;
-    pub const MD: u8 = 9;
-    pub const LG: u8 = 12;
-    pub const XL: u8 = 16;
+    pub const MD: u8 = 8;
+    pub const LG: u8 = 10;
+    pub const XL: u8 = 12;
 }
 
 /// Letter spacing for short upper-case labels (about 7% of their size).
@@ -284,6 +289,12 @@ impl Palette {
         }
         // Slider rails and checkbox boxes use the inactive fill.
         w.inactive.bg_fill = self.track;
+        // Drop-down boxes (and the few stock buttons) use the weak fill: make them
+        // look like the text fields, outlined, with a stronger edge on hover.
+        w.inactive.weak_bg_fill = self.input_bg;
+        w.hovered.weak_bg_fill = self.input_bg;
+        w.hovered.bg_stroke = Stroke::new(1.0, self.text_dim.gamma_multiply(0.7));
+        w.open.weak_bg_fill = self.input_bg;
 
         // Both slots: `set_theme` only takes effect on a later frame, so the
         // "current" theme may still be the other one right now.
@@ -309,7 +320,12 @@ impl Palette {
             s.icon_width = 18.0;
             s.icon_width_inner = 10.0;
             s.icon_spacing = 8.0;
-            s.scroll = egui::style::ScrollStyle::floating();
+            // Thin, quiet scroll bars in the theme's own colours (not the text colour).
+            s.scroll = egui::style::ScrollStyle {
+                bar_width: 6.0,
+                foreground_color: false,
+                ..egui::style::ScrollStyle::floating()
+            };
             style.interaction.selectable_labels = false;
         });
     }

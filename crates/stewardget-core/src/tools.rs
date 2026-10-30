@@ -132,6 +132,7 @@ pub fn shareable_settings(config: &Config) -> Result<String, Error> {
     c.api_token = None;
     c.mcp_token = None;
     c.control_token = None;
+    c.remote_notify = c.remote_notify.without_secrets();
     serde_json::to_string_pretty(&c).map_err(|e| Error::Io(e.to_string()))
 }
 

@@ -1110,6 +1110,7 @@ impl Engine {
         config.api_token = mine.api_token;
         config.mcp_token = mine.mcp_token;
         config.control_token = mine.control_token;
+        config.remote_notify.keep_secrets_of(&mine.remote_notify);
         self.update_config(config)
     }
 
@@ -1625,6 +1626,16 @@ impl Inner {
                 }
             }
 
+            if (completed || failed) && !config.remote_notify.targets.is_empty() {
+                let events = notify_events(&st.items, pos, failed, &config);
+                let plan = config.remote_notify.plan(&events);
+                if !plan.is_empty() {
+                    // Best effort, in the background: a slow mail server mustn't hold anything up.
+                    self.runtime.spawn(async move {
+                        let _ = crate::notifiers::send_planned(plan).await;
+                    });
+                }
+            }
             if completed || failed {
                 let entry = history_entry(&st.items[pos].rec, config.connections);
                 st.log.record(entry);
@@ -2279,6 +2290,91 @@ fn history_entry(rec: &Record, default_connections: usize) -> HistoryEntry {
         tags: Vec::new(),
         notes: Vec::new(),
     }
+}
+
+/// What other devices may hear about now that `items[pos]` finished (or failed
+/// for good): the download itself, its queue running dry, everything done.
+fn notify_events(
+    items: &[Item],
+    pos: usize,
+    failed: bool,
+    config: &Config,
+) -> Vec<(crate::notifiers::Event, crate::notifiers::Message)> {
+    use crate::notifiers::{Event, Message};
+    let rec = &items[pos].rec;
+    let queue = rec.queue;
+    let waiting = |i: &Item| i.rec.status == Status::Queued || i.rec.status.is_active();
+    let mut events = Vec::new();
+
+    let host = crate::history::host_of(&rec.url);
+    let from = if host.is_empty() { String::new() } else { format!(" from {host}") };
+    if failed {
+        let error = rec.error.clone().unwrap_or_else(|| "unknown error".to_owned());
+        events.push((
+            Event::Failed { queue },
+            Message {
+                title: format!("Download failed: {}", rec.file_name),
+                body: format!("{}{from} stopped: {error}.", rec.file_name),
+                problem: true,
+            },
+        ));
+    } else {
+        let size = rec.total.map_or(String::new(), |t| format!(" ({})", util::format_bytes(t)));
+        let folder = rec.path.parent().map(|d| d.display().to_string()).unwrap_or_default();
+        events.push((
+            Event::Finished { queue },
+            Message {
+                title: format!("Downloaded {}", rec.file_name),
+                body: format!("{}{size}{from} is ready in {folder}.", rec.file_name),
+                problem: false,
+            },
+        ));
+    }
+
+    // How a set of downloads ended, e.g. "5 downloaded, 1 failed, 2 paused".
+    let tally = |of: &mut dyn Iterator<Item = &Item>| {
+        let (mut done, mut bad, mut paused) = (0, 0, 0);
+        for i in of {
+            match i.rec.status {
+                Status::Completed => done += 1,
+                Status::Failed => bad += 1,
+                Status::Paused => paused += 1,
+                _ => {}
+            }
+        }
+        let mut parts = vec![format!("{done} downloaded")];
+        if bad > 0 {
+            parts.push(format!("{bad} failed"));
+        }
+        if paused > 0 {
+            parts.push(format!("{paused} paused"));
+        }
+        (parts.join(", "), bad > 0)
+    };
+    if !items.iter().any(|i| i.rec.queue == queue && waiting(i)) {
+        let name = &config.queue(queue).name;
+        let (summary, problem) = tally(&mut items.iter().filter(|i| i.rec.queue == queue));
+        events.push((
+            Event::QueueFinished { queue },
+            Message {
+                title: format!("Queue finished: {name}"),
+                body: format!("Nothing left to download in {name}: {summary}."),
+                problem,
+            },
+        ));
+    }
+    if !items.iter().any(waiting) {
+        let (summary, problem) = tally(&mut items.iter());
+        events.push((
+            Event::AllFinished,
+            Message {
+                title: "All downloads finished".to_owned(),
+                body: format!("Nothing left to download: {summary}."),
+                problem,
+            },
+        ));
+    }
+    events
 }
 
 #[cfg(test)]

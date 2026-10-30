@@ -22,6 +22,9 @@ pub struct QueueDialog {
     schedule: Schedule,
     /// Downloads to move into the new queue once it exists.
     move_ids: Vec<DownloadId>,
+    /// Notification destinations and whether they cover this queue (id, label,
+    /// on); filled in when the window first draws.
+    notify: Option<Vec<(u32, String, bool)>>,
     error: Option<String>,
     focus: bool,
 }
@@ -35,6 +38,7 @@ impl QueueDialog {
             speed_limit: queue.speed_limit,
             schedule: queue.schedule.clone(),
             move_ids: Vec::new(),
+            notify: None,
             error: None,
             focus: false,
         }
@@ -48,6 +52,7 @@ impl QueueDialog {
             speed_limit: 0,
             schedule: Schedule::default(),
             move_ids,
+            notify: None,
             error: None,
             focus: true,
         }
@@ -122,10 +127,13 @@ impl StewardGetApp {
                 }
             });
             widgets::form_row(ui, LABEL_W, "At the same time", &p, |ui| {
-                ui.add(
-                    egui::Slider::new(&mut d.max_concurrent, 0..=16)
-                        .clamping(egui::SliderClamping::Edits)
-                        .custom_formatter(|v, _| if v == 0.0 { "Global limit".into() } else { format!("{v}") }),
+                widgets::slider(
+                    ui,
+                    &mut d.max_concurrent,
+                    0..=16,
+                    "",
+                    Some(|v| if v == 0.0 { "Global limit".into() } else { format!("{v}") }),
+                    &p,
                 );
             });
             ui.horizontal(|ui| {
@@ -145,6 +153,46 @@ impl StewardGetApp {
             widgets::caption(ui, "SCHEDULE", &p);
             ui.add_space(4.0);
             schedule_editor(ui, &p, "queue", &mut d.schedule);
+            let notify = d.notify.get_or_insert_with(|| {
+                let config = self.engine.config();
+                config
+                    .remote_notify
+                    .targets
+                    .iter()
+                    .map(|t| {
+                        let label = format!("{} ({})", t.name.trim(), t.service.kind().name());
+                        let on = t.queues.is_empty() || d.id.is_some_and(|id| t.queues.contains(&id));
+                        (t.id, label, on)
+                    })
+                    .collect()
+            });
+            ui.add_space(6.0);
+            widgets::caption(ui, "NOTIFICATIONS", &p);
+            ui.add_space(4.0);
+            if notify.is_empty() {
+                ui.horizontal_wrapped(|ui| {
+                    crate::dialogs::note(ui, "No phone or email destinations yet.", p.text_dim);
+                    if widgets::button(ui, ButtonKind::Tool, Some(Icon::Plus), "Add one in Settings", true, &p).clicked() {
+                        close = true;
+                        self.open_settings(crate::settings::Tab::General);
+                    }
+                });
+            } else {
+                crate::dialogs::note(
+                    ui,
+                    "Destinations that hear about this queue's downloads. Events and services are set in Settings > General.",
+                    p.text_dim,
+                );
+                ui.add_space(2.0);
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+                    for (_, label, on) in notify.iter_mut() {
+                        if widgets::chip(ui, label, *on, &p).clicked() {
+                            *on = !*on;
+                        }
+                    }
+                });
+            }
             if let Some(e) = &d.error {
                 ui.add_space(6.0);
                 crate::dialogs::note(ui, e.as_str(), p.red);
@@ -192,6 +240,7 @@ impl StewardGetApp {
                     None => queues.push(queue),
                 }) {
                     Ok(()) => {
+                        self.save_queue_destinations(id, d.notify.as_deref().unwrap_or_default());
                         if !d.move_ids.is_empty() {
                             let r = self.engine.set_queue(&d.move_ids, id);
                             self.report(r);
@@ -214,6 +263,25 @@ impl StewardGetApp {
         if !close {
             self.queue_dialog = Some(d);
         }
+    }
+
+    /// Applies the destination chips of the queue window to the notification settings.
+    fn save_queue_destinations(&mut self, queue: QueueId, chosen: &[(u32, String, bool)]) {
+        let mut config = self.engine.config();
+        let all: Vec<QueueId> = config.queues.iter().map(|q| q.id).collect();
+        let mut changed = false;
+        for (id, _, on) in chosen {
+            let Some(t) = config.remote_notify.targets.iter_mut().find(|t| t.id == *id) else { continue };
+            changed |= cover_queue(t, queue, *on, &all);
+        }
+        if !changed {
+            return;
+        }
+        if let Some(draft) = &mut self.settings_draft {
+            draft.remote_notify = config.remote_notify.clone();
+        }
+        let r = self.engine.update_config(config);
+        self.report(r);
     }
 
     /// Confirms deleting a queue; its downloads join the main queue.
@@ -383,7 +451,7 @@ pub fn queue_card(ui: &mut Ui, p: &Palette, q: &Queue, count: usize) -> QueueCar
     Frame::new()
         .fill(p.card)
         .stroke(Stroke::new(1.0, p.border))
-        .corner_radius(CornerRadius::same(10))
+        .corner_radius(CornerRadius::same(crate::theme::radius::LG))
         .inner_margin(Margin::symmetric(14, 10))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
@@ -421,6 +489,33 @@ pub enum QueueCardAction {
     Delete,
 }
 
+/// Makes `t` cover `queue` or not. An empty queue list means every queue, so
+/// leaving one out lists all the others; a destination left with no queue at
+/// all is switched off rather than falling back to every queue. Returns
+/// whether anything changed.
+fn cover_queue(t: &mut stewardget_core::notifiers::Target, queue: QueueId, on: bool, all: &[QueueId]) -> bool {
+    let covered = t.queues.is_empty() || t.queues.contains(&queue);
+    if covered == on {
+        return false;
+    }
+    if on {
+        t.queues.push(queue);
+        if all.iter().all(|q| t.queues.contains(q)) {
+            t.queues.clear();
+        }
+    } else {
+        if t.queues.is_empty() {
+            t.queues = all.to_vec();
+        }
+        t.queues.retain(|q| *q != queue);
+        if t.queues.is_empty() {
+            t.enabled = false;
+            t.queues = vec![queue];
+        }
+    }
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -437,5 +532,28 @@ mod tests {
         q.speed_limit = 2 << 20;
         q.schedule.enabled = false;
         assert_eq!(summary(&q), "2 at a time · 2.00 MiB/s · no schedule");
+    }
+}
+
+#[cfg(test)]
+mod destination_tests {
+    use stewardget_core::notifiers::{Kind, Target};
+
+    use super::cover_queue;
+
+    #[test]
+    fn covering_queues_from_the_queue_window() {
+        let mut t = Target::new(1, Kind::Ntfy.service());
+        // Every queue (empty list): leaving queue 2 out lists the others.
+        assert!(cover_queue(&mut t, 2, false, &[0, 2, 5]));
+        assert_eq!(t.queues, vec![0, 5]);
+        // Adding it back covers all of them again: back to the empty list.
+        assert!(cover_queue(&mut t, 2, true, &[0, 2, 5]));
+        assert!(t.queues.is_empty());
+        // The only queue it covered goes: switched off, not "every queue".
+        t.queues = vec![5];
+        assert!(cover_queue(&mut t, 5, false, &[0, 5]));
+        assert!(!t.enabled);
+        assert!(!cover_queue(&mut t, 0, false, &[0, 5]), "already not covered");
     }
 }
