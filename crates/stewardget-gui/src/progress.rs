@@ -436,7 +436,8 @@ fn facts(ui: &mut Ui, p: &Palette, d: &DownloadView) {
     {
         ui.add_space(4.0);
         ui.add(egui::Label::new(RichText::new(crate::app::capitalize(error)).size(12.5).color(p.red)).wrap());
-        let hint = crate::table::problem_hint(crate::table::problem_of(d).unwrap_or(crate::table::Problem::Other), error);
+        let hint =
+            crate::table::problem_hint(crate::table::problem_of(d).unwrap_or(crate::table::Problem::Other), error);
         if !hint.is_empty() {
             ui.add(egui::Label::new(RichText::new(hint).size(12.5).color(p.text_dim)).wrap());
         }

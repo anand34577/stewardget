@@ -575,7 +575,8 @@ impl StewardGetApp {
             for d in &views {
                 self.selection.remove(&d.id);
             }
-            self.pending_removal = Some(PendingRemoval { ids: views.iter().map(|d| d.id).collect(), since: Instant::now() });
+            self.pending_removal =
+                Some(PendingRemoval { ids: views.iter().map(|d| d.id).collect(), since: Instant::now() });
             self.hidden_gen += 1;
         } else {
             self.confirm = Some(ConfirmRemove::new(&views, delete_files));
@@ -1421,7 +1422,8 @@ impl StewardGetApp {
                     .shadow(p.shadow(4, 18))
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
-                            let what = if n == 1 { "Download removed".to_owned() } else { format!("{n} downloads removed") };
+                            let what =
+                                if n == 1 { "Download removed".to_owned() } else { format!("{n} downloads removed") };
                             ui.label(RichText::new(what).color(p.text));
                             if widgets::button(ui, ButtonKind::Ghost, Some(Icon::Retry), "Undo", true, &p).clicked() {
                                 undo = true;
@@ -2040,7 +2042,7 @@ impl eframe::App for StewardGetApp {
         let wait = match (busy, away) {
             (true, false) => 120,
             (true, true) => 500,
-            (false, false) => 600,
+            (false, false) => 1500,
             (false, true) if self.cfg.clipboard_monitor => 1000,
             (false, true) => 5000,
         };

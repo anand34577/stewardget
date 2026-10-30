@@ -385,7 +385,7 @@ fn running_config() -> stewardget_core::Config {
 fn api_call(method: &str, path: &str, body: &str) -> anyhow::Result<String> {
     stewardget_core::remote::api(&running_config(), method, path, body).map_err(|e| match e {
         stewardget_core::remote::RemoteError::NotRunning(_) => {
-            anyhow::anyhow!("{e}. Start `stewardget` or `stewardget-gui` first.")
+            anyhow::anyhow!("{e}. Start `stewardget-gui`, `stewardget` or `stewardget serve` (no window) first.")
         }
         e => e.into(),
     })

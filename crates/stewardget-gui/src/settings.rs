@@ -834,10 +834,13 @@ fn tab_button(ui: &mut Ui, icon: Icon, label: &str, selected: bool, p: &Palette,
     response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
+/// The tab being collected and the (tab, title, help) rows found so far.
+type Collected = Option<(Tab, Vec<(Tab, String, String)>)>;
+
 thread_local! {
     /// While set, [`row`] only records (tab, title, help) instead of drawing: how
     /// the settings search learns what exists without a second list to maintain.
-    static COLLECT: std::cell::RefCell<Option<(Tab, Vec<(Tab, String, String)>)>> = const { std::cell::RefCell::new(None) };
+    static COLLECT: std::cell::RefCell<Collected> = const { std::cell::RefCell::new(None) };
 }
 
 /// A setting: title and help on the left, the control on the right.
