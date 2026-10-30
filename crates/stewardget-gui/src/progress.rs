@@ -208,7 +208,7 @@ fn header(ui: &mut Ui, p: &Palette, d: &DownloadView) {
             ui.add(
                 egui::Label::new(RichText::new(&d.file_name).size(15.0).family(theme::semi()).color(p.text)).truncate(),
             );
-            ui.add(egui::Label::new(RichText::new(&d.url).size(11.5).color(p.text_dim)).truncate())
+            ui.add(egui::Label::new(RichText::new(&d.url).size(12.0).color(p.text_dim)).truncate())
                 .on_hover_text(&d.url);
         });
     });
@@ -228,7 +228,7 @@ fn running_body(
     big_bar(ui, p, d);
     if d.segments.len() > 1 && d.total.is_some() {
         ui.add_space(5.0);
-        ui.label(RichText::new("Download progress by connection").size(11.5).color(p.text_dim));
+        ui.label(RichText::new("Download progress by connection").size(12.0).color(p.text_dim));
         connection_bars(ui, p, d);
     }
     if *details && !d.segments.is_empty() {
@@ -379,7 +379,7 @@ fn complete_body(ui: &mut Ui, p: &Palette, d: &DownloadView, w: &ProgressWindow)
             .add(
                 egui::Label::new(
                     RichText::new("Don't show this window for finished downloads")
-                        .size(11.5)
+                        .size(12.0)
                         .color(p.text_dim)
                         .underline(),
                 )
@@ -499,7 +499,7 @@ fn parts_table(ui: &mut Ui, p: &Palette, d: &DownloadView) {
             .spacing([GAP, 4.0])
             .show(ui, |ui| {
                 for title in ["N.", "Downloaded", "Part size", "Info"] {
-                    ui.label(RichText::new(title).size(11.5).color(p.text_dim));
+                    ui.label(RichText::new(title).size(12.0).color(p.text_dim));
                 }
                 ui.end_row();
                 for (i, s) in d.segments.iter().enumerate() {

@@ -499,7 +499,7 @@ fn tool_block(ui: &mut Ui, p: &crate::theme::Palette, tool: &ToolInfo, chosen: &
         note = Some((format!("Nothing usable at {}. Choose the program file, or its folder.", c.display()), p.red));
     }
     if let Some((text, color)) = note {
-        ui.add(egui::Label::new(RichText::new(text).size(11.5).color(color)).wrap());
+        ui.add(egui::Label::new(RichText::new(text).size(12.0).color(color)).wrap());
     }
 
     // For people who know where it is.

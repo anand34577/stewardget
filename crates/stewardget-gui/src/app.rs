@@ -148,6 +148,7 @@ pub struct StewardGetApp {
     pub properties: Option<PropertiesDialog>,
     pub settings_draft: Option<Config>,
     pub settings_tab: crate::settings::Tab,
+    pub settings_search: String,
     pub limit_text: String,
     pub toasts: Vec<Toast>,
     pub pending_removal: Option<PendingRemoval>,
@@ -306,6 +307,7 @@ impl StewardGetApp {
             properties: None,
             settings_draft: None,
             settings_tab: crate::settings::Tab::General,
+            settings_search: String::new(),
             limit_text: String::new(),
             toasts: Vec::new(),
             pending_removal: None,
@@ -1076,7 +1078,7 @@ impl StewardGetApp {
         }
         ui.separator();
         ui.add_space(2.0);
-        ui.label(RichText::new("   When all downloads finish").size(11.5).color(p.text_dim));
+        ui.label(RichText::new("   When all downloads finish").size(12.0).color(p.text_dim));
         for action in AfterAll::ALL {
             if menu_row(ui, &p, None, action.label(), true, self.after_all == action) {
                 self.after_all = action;
@@ -1184,7 +1186,7 @@ impl StewardGetApp {
                     .add(
                         egui::Label::new(
                             RichText::new(concat!("StewardGet v", env!("CARGO_PKG_VERSION")))
-                                .size(11.5)
+                                .size(12.0)
                                 .color(p.text_dim),
                         )
                         .sense(Sense::click()),
@@ -1576,7 +1578,7 @@ fn menu_row(ui: &mut Ui, p: &Palette, icon: Option<Icon>, text: &str, enabled: b
             rect.right_center() - vec2(10.0, 0.0),
             Align2::RIGHT_CENTER,
             s,
-            FontId::proportional(11.5),
+            FontId::proportional(12.0),
             p.text_dim,
         );
     }
@@ -1629,7 +1631,7 @@ fn nav_item(
                 rect.right_center() - vec2(10.0, 0.0),
                 Align2::RIGHT_CENTER,
                 count.to_string(),
-                FontId::proportional(11.5),
+                FontId::proportional(12.0),
                 p.text_dim,
             );
         }

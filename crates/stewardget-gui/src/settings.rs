@@ -123,9 +123,20 @@ impl StewardGetApp {
                 });
             });
             ui.add_space(6.0);
+            ui.add(
+                egui::TextEdit::singleline(&mut self.settings_search)
+                    .hint_text("Search settings…")
+                    .desired_width(260.0),
+            );
+            ui.add_space(6.0);
+            let searching = !self.settings_search.trim().is_empty();
 
             let narrow = ui.available_width() < 760.0;
-            if narrow {
+            if searching {
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| self.settings_search_results(ui, &mut draft));
+            } else if narrow {
                 ui.horizontal_wrapped(|ui| {
                     for (tab, icon, label) in Tab::ALL {
                         if tab_button(ui, icon, label, self.settings_tab == tab, &p, false).clicked() {
@@ -160,6 +171,50 @@ impl StewardGetApp {
             }
         });
         self.settings_draft = Some(draft);
+    }
+
+    /// Lists the settings that match the search; clicking one opens its tab.
+    fn settings_search_results(&mut self, ui: &mut Ui, draft: &mut Config) {
+        let p = self.palette;
+        let needle = self.settings_search.trim().to_lowercase();
+        let real_tab = self.settings_tab;
+        let mut all = Vec::new();
+        ui.scope_builder(egui::UiBuilder::new().invisible(), |ui| {
+            for (tab, _, _) in Tab::ALL {
+                COLLECT.with_borrow_mut(|c| *c = Some((tab, Vec::new())));
+                self.settings_tab = tab;
+                self.settings_tab_body(ui, draft);
+                if let Some((_, found)) = COLLECT.with_borrow_mut(|c| c.take()) {
+                    all.extend(found);
+                }
+            }
+        });
+        self.settings_tab = real_tab;
+        let hits: Vec<_> = all
+            .into_iter()
+            .filter(|(_, label, help)| label.to_lowercase().contains(&needle) || help.to_lowercase().contains(&needle))
+            .collect();
+        if hits.is_empty() {
+            ui.label(RichText::new("No setting matches that.").color(p.text_dim));
+            return;
+        }
+        for (tab, label, help) in hits {
+            let tab_name = Tab::ALL.iter().find(|(t, _, _)| *t == tab).map_or("", |(_, _, n)| *n);
+            let r = ui
+                .scope(|ui| {
+                    ui.label(RichText::new(&label).color(p.text));
+                    ui.add(egui::Label::new(RichText::new(&help).size(12.0).color(p.text_dim)).wrap());
+                    ui.label(RichText::new(format!("in {tab_name}")).size(12.0).color(p.accent));
+                })
+                .response
+                .interact(Sense::click())
+                .on_hover_cursor(egui::CursorIcon::PointingHand);
+            if r.clicked() {
+                self.settings_tab = tab;
+                self.settings_search.clear();
+            }
+            ui.add_space(8.0);
+        }
     }
 
     fn settings_tab_body(&mut self, ui: &mut Ui, draft: &mut Config) {
@@ -585,7 +640,7 @@ impl StewardGetApp {
                             .unwrap_or_default();
                         ui.horizontal(|ui| {
                             ui.add_space(36.0);
-                            ui.add(egui::Label::new(RichText::new(exts).size(11.5).color(p.text_dim)).truncate());
+                            ui.add(egui::Label::new(RichText::new(exts).size(12.0).color(p.text_dim)).truncate());
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                 if widgets::button(ui, ButtonKind::Tool, Some(Icon::Trash), "", true, &p)
                                     .on_hover_text("Delete category")
@@ -779,8 +834,23 @@ fn tab_button(ui: &mut Ui, icon: Icon, label: &str, selected: bool, p: &Palette,
     response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
+thread_local! {
+    /// While set, [`row`] only records (tab, title, help) instead of drawing: how
+    /// the settings search learns what exists without a second list to maintain.
+    static COLLECT: std::cell::RefCell<Option<(Tab, Vec<(Tab, String, String)>)>> = const { std::cell::RefCell::new(None) };
+}
+
 /// A setting: title and help on the left, the control on the right.
 pub(crate) fn row(ui: &mut Ui, p: &Palette, label: &str, help: &str, add: impl FnOnce(&mut Ui)) {
+    if COLLECT.with_borrow_mut(|c| match c {
+        Some((tab, found)) => {
+            found.push((*tab, label.to_owned(), help.to_owned()));
+            true
+        }
+        None => false,
+    }) {
+        return;
+    }
     let width = ui.available_width();
     let label_w = (width * 0.5).clamp(180.0, 520.0);
     // Dividers go between rows only, never after the last one in a card.

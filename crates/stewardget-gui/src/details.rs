@@ -362,7 +362,7 @@ impl StewardGetApp {
         } else {
             format!("{} segments · {} active connections", d.segments.len(), d.connections)
         };
-        ui.label(RichText::new(text).size(11.5).color(p.text_dim));
+        ui.label(RichText::new(text).size(12.0).color(p.text_dim));
     }
 
     fn speed_block(&mut self, ui: &mut Ui, d: &DownloadView, height: f32) {
@@ -373,7 +373,7 @@ impl StewardGetApp {
                 // Nothing sampled this session: no peak to show, rather than "peak 0 B/s".
                 let peak = d.history.iter().copied().fold(0.0f32, f32::max);
                 if peak > 0.0 {
-                    ui.label(RichText::new(format!("peak {}", format_speed(peak as f64))).size(11.5).color(p.text_dim));
+                    ui.label(RichText::new(format!("peak {}", format_speed(peak as f64))).size(12.0).color(p.text_dim));
                 }
             });
         });

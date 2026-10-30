@@ -179,6 +179,28 @@ impl StewardGetApp {
             p.text_dim,
         );
 
+        if self.filter == ListFilter::Failed {
+            let retryable: Vec<DownloadId> = rows
+                .iter()
+                .map(|&i| &self.snap.downloads[i])
+                .filter(|d| matches!(problem_of(d), Some(Problem::Other | Problem::DiskFull)))
+                .map(|d| d.id)
+                .collect();
+            if !retryable.is_empty() {
+                ui.horizontal(|ui| {
+                    ui.add_space(PAD_X);
+                    let label = format!("Retry {} that can be retried", retryable.len());
+                    if widgets::button(ui, ButtonKind::Tool, Some(Icon::Retry), &label, true, &p).clicked() {
+                        for id in retryable {
+                            let r = self.engine.resume(id);
+                            self.report(r);
+                        }
+                    }
+                });
+                ui.add_space(4.0);
+            }
+        }
+
         // Header
         let (header, header_r) = ui.allocate_exact_size(vec2(full.width(), HEADER_H), Sense::click());
         ui.painter().rect_filled(header, CornerRadius::ZERO, p.sidebar);
@@ -266,7 +288,7 @@ impl StewardGetApp {
         ui.set_min_width(200.0);
         let mut config = self.engine.config();
         let mut changed = false;
-        ui.label(RichText::new("Columns").size(11.5).color(self.palette.text_dim));
+        ui.label(RichText::new("Columns").size(12.0).color(self.palette.text_dim));
         for (key, title) in OPTIONAL_COLUMNS {
             let mut shown = !config.hidden_columns.iter().any(|h| h == key);
             if ui.checkbox(&mut shown, title).changed() {
@@ -340,7 +362,7 @@ impl StewardGetApp {
             if !host.is_empty() {
                 sub = format!("{sub} \u{00b7} {host}");
             }
-            clip.text(c + vec2(0.0, 9.5), Align2::LEFT_CENTER, sub, FontId::proportional(11.5), p.text_dim);
+            clip.text(c + vec2(0.0, 9.5), Align2::LEFT_CENTER, sub, FontId::proportional(12.0), p.text_dim);
         }
         x += name_w;
 
@@ -579,16 +601,39 @@ impl StewardGetApp {
                     "This queue is empty",
                     "Drag downloads onto it in the sidebar, choose Move to queue in their menu, or pick it when you add a download.",
                 )
+            } else if self.filter == ListFilter::Failed {
+                ("Nothing has failed", "Downloads that stop with an error show up here, with a way to fix them.")
+            } else if self.filter == ListFilter::Completed {
+                ("Nothing finished yet", "Finished downloads stay here until you clear them. History keeps a permanent log.")
+            } else if self.filter == ListFilter::Active {
+                ("Nothing is downloading", "Queued and paused downloads are under Queued & paused.")
             } else {
                 ("Nothing here", "Downloads in this view will appear here.")
             };
             ui.label(RichText::new(title).size(16.0).family(crate::theme::semi()).color(p.text));
             ui.add(egui::Label::new(RichText::new(sub).color(p.text_dim)).wrap());
+            ui.add_space(6.0);
             if self.snap.downloads.is_empty() {
-                ui.add_space(6.0);
-                if widgets::button(ui, ButtonKind::Primary, Some(Icon::Plus), "Add URL", true, &p).clicked() {
-                    self.open_add(None);
+                ui.horizontal(|ui| {
+                    ui.add_space(((ui.available_width() - 420.0) / 2.0).max(0.0));
+                    if widgets::button(ui, ButtonKind::Primary, Some(Icon::Plus), "Add URL", true, &p).clicked() {
+                        self.open_add(None);
+                    }
+                    if widgets::button(ui, ButtonKind::Ghost, Some(Icon::Link), "Connect browser", true, &p).clicked() {
+                        self.open_settings(crate::settings::Tab::Browser);
+                    }
+                    if widgets::button(ui, ButtonKind::Ghost, Some(Icon::FolderOpen), "Import links", true, &p).clicked() {
+                        self.import_links();
+                    }
+                });
+            } else if !self.search.is_empty() {
+                if widgets::button(ui, ButtonKind::Ghost, None, "Clear search", true, &p).clicked() {
+                    self.search.clear();
                 }
+            } else if self.filter != ListFilter::All
+                && widgets::button(ui, ButtonKind::Ghost, None, "Show all downloads", true, &p).clicked()
+            {
+                self.filter = ListFilter::All;
             }
         });
     }

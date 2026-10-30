@@ -312,7 +312,7 @@ impl StewardGetApp {
                 });
                 ui.horizontal(|ui| {
                     let url = &w.items[0].new.url;
-                    ui.add(egui::Label::new(RichText::new(url).size(11.0).color(p.accent2)).truncate())
+                    ui.add(egui::Label::new(RichText::new(url).size(12.0).color(p.accent2)).truncate())
                         .on_hover_text(url);
                 });
             });
@@ -627,7 +627,7 @@ fn footer(ui: &mut Ui, p: &Palette, w: &CaptureWindow, waiting: usize) -> Option
     ui.horizontal(|ui| {
         let r = ui
             .add(
-                egui::Label::new(RichText::new("Don't ask again").size(11.5).color(p.text_dim).underline())
+                egui::Label::new(RichText::new("Don't ask again").size(12.0).color(p.text_dim).underline())
                     .sense(egui::Sense::click()),
             )
             .on_hover_text(

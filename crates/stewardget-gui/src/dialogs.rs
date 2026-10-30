@@ -1100,7 +1100,7 @@ impl StewardGetApp {
                     if r.page.is_none() {
                         ui.label(
                             RichText::new("No source page is known, so the original link is opened instead.")
-                                .size(11.5)
+                                .size(12.0)
                                 .color(p.text_dim),
                         );
                     }
