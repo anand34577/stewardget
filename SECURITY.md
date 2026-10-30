@@ -24,5 +24,5 @@ Areas that matter most:
 - Handling of untrusted input from servers: file names, headers, and redirects.
 - Anything that could write outside the chosen download folder.
 
-StewardGet has no telemetry and makes no network requests besides the downloads you start. If you
+StewardGet has no telemetry and makes no network requests besides the downloads you start, unless you turn on the optional update check (Settings › Privacy & data), which asks GitHub's public release page for the newest version number and sends nothing about you. If you
 find any other traffic, please report it.

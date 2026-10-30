@@ -49,7 +49,7 @@ StewardGet keeps everything that made IDM great and fixes the rest.
 | Statistics | Minimal | **Live graphs, per-download speed history, 30-day history, sources and categories** |
 | Automation | Limited | **CLI, scriptable local API, terminal dashboard** |
 | Look | Windows 98 era | **Five themes (System, Light, Dark, Midnight, Ocean), six accents, Inter font, interface zoom** |
-| Privacy | Phones home | **No telemetry, no analytics, no update pings** |
+| Privacy | Phones home | **No telemetry, no analytics; an update check exists but is off until you turn it on** |
 
 ## Screenshots
 

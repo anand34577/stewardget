@@ -714,8 +714,9 @@ impl StewardGetApp {
             Tab::About => self.about_tab(ui),
             Tab::Privacy => {
                 section(ui, &p, "Privacy", |ui| {
-                    ui.add(egui::Label::new(RichText::new("StewardGet has no telemetry, analytics, crash reporting, ads or update pings. The only network traffic is the downloads you start, and the browser API listens on 127.0.0.1 only.").color(p.text)).wrap());
+                    ui.add(egui::Label::new(RichText::new("StewardGet has no telemetry, analytics, crash reporting or ads. Unless you turn on the update check below, the only network traffic is the downloads you start, and the browser API listens on 127.0.0.1 only.").color(p.text)).wrap());
                 });
+                section(ui, &p, "Updates", |ui| self.updates_section(ui, &mut draft.check_updates));
                 section(ui, &p, "Your data", |ui| {
                     if let Some(dir) = self.engine.data_dir() {
                         row(

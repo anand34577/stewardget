@@ -7,6 +7,7 @@ All notable changes to StewardGet are listed here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Optional update check** (Settings › Privacy & data), off by default. When on, StewardGet asks the project's public release page for the newest version number once at startup, or when you press *Check now*; it sends no identifiers and installs nothing.
 - **Command palette** (Ctrl+K): jump to any page, setting, action or download from one box.
 - **Settings search**: type in the box at the top of Settings to find an option in any tab.
 - **Undo for Remove**: removing idle downloads no longer asks; an Undo bar stays for 8 seconds. Running downloads and deleting files still ask first.

@@ -27,6 +27,7 @@ mod table;
 mod theme;
 mod toolbox;
 mod tray;
+mod updates;
 mod widgets;
 
 use std::time::Duration;

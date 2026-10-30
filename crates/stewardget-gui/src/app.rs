@@ -149,6 +149,7 @@ pub struct StewardGetApp {
     pub settings_draft: Option<Config>,
     pub settings_tab: crate::settings::Tab,
     pub settings_search: String,
+    pub updates: crate::updates::Updates,
     pub palette_box: Option<crate::palette::Palette>,
     pub limit_text: String,
     pub toasts: Vec<Toast>,
@@ -309,6 +310,7 @@ impl StewardGetApp {
             settings_draft: None,
             settings_tab: crate::settings::Tab::General,
             settings_search: String::new(),
+            updates: Default::default(),
             palette_box: None,
             limit_text: String::new(),
             toasts: Vec::new(),
@@ -1898,6 +1900,7 @@ impl eframe::App for StewardGetApp {
             self.apply_appearance(&ctx);
         }
         self.handle_close(&ctx);
+        self.poll_updates(&ctx);
         self.dropped_files(&ctx);
         self.shortcuts(&ctx);
         let p = self.palette;
