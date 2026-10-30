@@ -570,8 +570,16 @@ async fn relocate_moves_finished_and_partial_files() {
     tokio::time::sleep(Duration::from_millis(1000)).await;
     assert!(engine.relocate(id, elsewhere.clone(), "busy.bin").is_err(), "running downloads can't move");
     engine.pause(id).unwrap();
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    engine.relocate(id, elsewhere.clone(), "partial.bin").unwrap();
+    // The worker winds down asynchronously; slow CI runners need a moment.
+    let mut moved = engine.relocate(id, elsewhere.clone(), "partial.bin");
+    for _ in 0..100 {
+        if moved.is_ok() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        moved = engine.relocate(id, elsewhere.clone(), "partial.bin");
+    }
+    moved.unwrap();
     assert!(elsewhere.join("partial.bin.vxpart").exists());
     engine.resume(id).unwrap();
     assert_eq!(wait_for(&engine, id, Status::Completed, 60).await, Status::Completed);
