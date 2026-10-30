@@ -12,11 +12,16 @@ use crate::icons::{self, Icon};
 use crate::theme::Palette;
 use crate::widgets::{self, ButtonKind};
 
-/// Row height in compact mode, and with name plus details.
-const ROW_H_COMPACT: f32 = 28.0;
-const ROW_H_COMFORTABLE: f32 = 40.0;
-const HEADER_H: f32 = 30.0;
-const PAD_X: f32 = 14.0;
+/// Row height of the list view.
+const ROW_H_COMPACT: f32 = 34.0;
+const HEADER_H: f32 = 34.0;
+/// Card view: card height, the gap below each card and the side margin.
+const CARD_H: f32 = 90.0;
+const CARD_GAP: f32 = 10.0;
+const CARD_X: f32 = 20.0;
+/// Rows are drawn as rounded bands this far in from the canvas edge.
+const ROW_INSET: f32 = 10.0;
+const PAD_X: f32 = 14.0 + ROW_INSET;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SortKey {
@@ -112,7 +117,7 @@ fn layout_columns(width: f32, hidden: &[String]) -> (f32, Vec<Column>) {
         width: if width < 760.0 { 120.0 } else { 170.0 },
         right: false,
     };
-    let status = Column { key: SortKey::Status, title: "Status", width: 128.0, right: false };
+    let status = Column { key: SortKey::Status, title: "Status", width: 150.0, right: false };
     let optional = [
         Column { key: SortKey::Size, title: "Size", width: 86.0, right: true },
         Column { key: SortKey::Speed, title: "Speed", width: 96.0, right: true },
@@ -149,35 +154,62 @@ impl StewardGetApp {
         let rows = self.visible_rows();
         let full = ui.available_rect_before_wrap();
         let (name_w, cols) = layout_columns(full.width(), &self.cfg.hidden_columns);
-        let row_h = if self.cfg.compact_rows { ROW_H_COMPACT } else { ROW_H_COMFORTABLE };
+        let cards = !self.cfg.compact_rows;
+        let row_h = if cards { CARD_H + CARD_GAP } else { ROW_H_COMPACT };
 
-        // Title strip
-        let (strip, _) = ui.allocate_exact_size(vec2(full.width(), 40.0), Sense::hover());
-        let painter = ui.painter();
+        // Page header: title and summary, and on the right what can be done
+        // with the selection (or with everything in view when nothing is selected).
+        let (strip, _) = ui.allocate_exact_size(vec2(full.width(), 76.0), Sense::hover());
         let title = self.filter.title(&self.cfg);
-        painter.text(
-            strip.left_center() + vec2(PAD_X, 0.0),
-            Align2::LEFT_CENTER,
-            title,
-            FontId::new(16.0, crate::theme::semi()),
-            p.text,
-        );
         let summary = {
             let total: u64 = rows.iter().filter_map(|&i| self.snap.downloads[i].total).sum();
-            let noun = if rows.len() == 1 { "item" } else { "items" };
-            let mut s = format!("{} {noun} · {}", rows.len(), format_bytes(total));
-            if self.selection.len() > 1 {
-                s = format!("{} selected · {s}", self.selection.len());
+            let noun = if rows.len() == 1 { "download" } else { "downloads" };
+            let active = rows.iter().filter(|&&i| self.snap.downloads[i].status.is_active()).count();
+            let mut s = format!("{} {noun} \u{00b7} {}", rows.len(), format_bytes(total));
+            if active > 0 {
+                s = format!("{s} \u{00b7} {active} active");
             }
             s
         };
-        painter.text(
-            strip.right_center() - vec2(PAD_X, 0.0),
-            Align2::RIGHT_CENTER,
-            summary,
-            FontId::proportional(12.0),
-            p.text_dim,
+        let compact = full.width() < 860.0;
+        let title_w = {
+            let painter = ui.painter();
+            let left = strip.left() + CARD_X + 4.0;
+            let t = painter.text(
+                egui::pos2(left, strip.center().y - 10.0),
+                Align2::LEFT_CENTER,
+                title,
+                FontId::new(crate::theme::size::XL + 2.0, crate::theme::semi()),
+                p.text,
+            );
+            let s = painter.text(
+                egui::pos2(left, strip.center().y + 14.0),
+                Align2::LEFT_CENTER,
+                summary,
+                FontId::proportional(crate::theme::size::SM),
+                p.text_dim,
+            );
+            t.width().max(s.width()) + PAD_X + 30.0
+        };
+        let actions = egui::Rect::from_min_max(
+            egui::pos2(strip.left() + title_w, strip.top()),
+            egui::pos2(strip.right() - CARD_X, strip.bottom()),
         );
+        ui.scope_builder(
+            egui::UiBuilder::new().max_rect(actions).layout(egui::Layout::right_to_left(egui::Align::Center)),
+            |ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                self.view_toggle(ui);
+                ui.add_space(6.0);
+                self.selection_actions(ui, compact);
+            },
+        );
+
+        // Live figures for everything in the list; skipped when the window is short.
+        if cards && full.height() > 600.0 {
+            self.kpi_strip(ui, full.width());
+            ui.add_space(14.0);
+        }
 
         if self.filter == ListFilter::Failed {
             let retryable: Vec<DownloadId> = rows
@@ -201,24 +233,31 @@ impl StewardGetApp {
             }
         }
 
-        // Header
-        let (header, header_r) = ui.allocate_exact_size(vec2(full.width(), HEADER_H), Sense::click());
-        ui.painter().rect_filled(header, CornerRadius::ZERO, p.sidebar);
-        ui.painter().line_segment([header.left_bottom(), header.right_bottom()], Stroke::new(1.0, p.border));
-        let mut x = header.left() + PAD_X;
-        let name_col = Column { key: SortKey::Name, title: "Name", width: name_w, right: false };
-        for col in std::iter::once(name_col).chain(cols.iter().copied()) {
-            let cell = Rect::from_min_size(pos2(x, header.top()), vec2(col.width, HEADER_H));
-            self.header_cell(ui, cell, col);
-            x += col.width;
+        if cards {
+            self.sort_bar(ui, rows.len());
+        } else {
+            let (header, header_r) = ui.allocate_exact_size(vec2(full.width(), HEADER_H), Sense::click());
+            ui.painter().line_segment(
+                [header.left_bottom() + vec2(ROW_INSET, 0.0), header.right_bottom() - vec2(ROW_INSET, 0.0)],
+                Stroke::new(1.0, p.border),
+            );
+            let mut x = header.left() + PAD_X;
+            let name_col = Column { key: SortKey::Name, title: "Name", width: name_w, right: false };
+            for col in std::iter::once(name_col).chain(cols.iter().copied()) {
+                let cell = Rect::from_min_size(pos2(x, header.top()), vec2(col.width, HEADER_H));
+                self.header_cell(ui, cell, col);
+                x += col.width;
+            }
+            header_r.context_menu(|ui| self.columns_menu(ui));
         }
-        header_r.context_menu(|ui| self.columns_menu(ui));
 
         if rows.is_empty() {
             self.empty_state(ui);
             return;
         }
 
+        // Rows touch; their bands and hairlines do the separating.
+        ui.spacing_mut().item_spacing.y = 0.0;
         let order: Vec<DownloadId> = rows.iter().map(|&i| self.snap.downloads[i].id).collect();
         let mut area = egui::ScrollArea::vertical().id_salt("stewardget-table").auto_shrink([false, false]);
         // Keyboard navigation: bring the row with the cursor into view.
@@ -238,7 +277,11 @@ impl StewardGetApp {
             for i in range {
                 // Only the rows on screen are copied.
                 let d = self.snap.downloads[rows[i]].clone();
-                self.row(ui, &order, i, &d, name_w, &cols, row_h);
+                if cards {
+                    self.card_row(ui, &order, i, &d);
+                } else {
+                    self.row(ui, &order, i, &d, name_w, &cols, row_h);
+                }
             }
         });
         self.table_view = (out.state.clamped_offset().y, out.inner_rect.height());
@@ -254,7 +297,9 @@ impl StewardGetApp {
         } else {
             (Align2::LEFT_CENTER, cell.left_center())
         };
-        let text_rect = ui.painter().text(pos, anchor, col.title, FontId::proportional(12.0), color);
+        let galley = widgets::caps_galley(ui, &col.title.to_uppercase(), 10.5, color);
+        let text_rect = anchor.anchor_size(pos, galley.size());
+        ui.painter().galley(text_rect.min, galley, color);
         if active {
             let caret = if self.table.ascending { Icon::CaretUp } else { Icon::CaretDown };
             let at = if col.right {
@@ -283,7 +328,7 @@ impl StewardGetApp {
         response.on_hover_cursor(egui::CursorIcon::PointingHand);
     }
 
-    /// Right-click menu of the header: which optional columns to show, and row density.
+    /// Right-click menu of the header: which optional columns to show, and cards or list.
     fn columns_menu(&mut self, ui: &mut Ui) {
         ui.set_min_width(200.0);
         let mut config = self.engine.config();
@@ -300,7 +345,7 @@ impl StewardGetApp {
             }
         }
         ui.separator();
-        changed |= ui.checkbox(&mut config.compact_rows, "Compact rows").changed();
+        changed |= ui.checkbox(&mut config.compact_rows, "List view").changed();
         if changed {
             // An open Settings page must not put the old columns back when saved.
             if let Some(draft) = &mut self.settings_draft {
@@ -334,36 +379,47 @@ impl StewardGetApp {
         }
         let selected = self.selection.contains(&d.id);
         let painter = ui.painter().clone();
+        let band = rect.shrink2(vec2(ROW_INSET, 1.0));
+        let corner = CornerRadius::same(crate::theme::radius::MD);
+        let is_cursor = self.cursor == Some(d.id);
         if selected {
-            painter.rect_filled(rect, CornerRadius::ZERO, p.accent.gamma_multiply(0.17));
-            painter.rect_filled(Rect::from_min_size(rect.min, vec2(3.0, rect.height())), CornerRadius::ZERO, p.accent);
+            painter.rect_filled(band, corner, p.selected_fill());
+            if is_cursor && self.selection.len() > 1 {
+                painter.rect_stroke(
+                    band,
+                    corner,
+                    Stroke::new(1.0, p.accent.gamma_multiply(0.6)),
+                    egui::StrokeKind::Inside,
+                );
+            }
         } else if response.hovered() {
-            painter.rect_filled(rect, CornerRadius::ZERO, p.card_hover);
-        } else if index % 2 == 1 {
-            painter.rect_filled(rect, CornerRadius::ZERO, p.card.gamma_multiply(0.45));
+            painter.rect_filled(band, corner, p.card_hover);
+        } else if index > 0 && !self.selection.contains(&order[index - 1]) {
+            // Hairline between unselected rows, kept short of the edges.
+            painter.line_segment(
+                [band.left_top() + vec2(PAD_X - ROW_INSET + 40.0, -1.0), band.right_top() - vec2(12.0, 1.0)],
+                Stroke::new(1.0, p.border.gamma_multiply(0.55)),
+            );
         }
 
         // Name cell
         let mut x = rect.left() + PAD_X;
-        let compact = row_h <= ROW_H_COMPACT;
-        let icon_size = if compact { 16.0 } else { 20.0 };
-        let icon_rect = Rect::from_center_size(pos2(x + 9.0, rect.center().y), vec2(icon_size, icon_size));
-        icons::paint(&painter, icon_rect, Icon::for_category(d.category), p.category(d.category));
-        let name_rect = Rect::from_min_max(pos2(x + 30.0, rect.top()), pos2(x + name_w - 12.0, rect.bottom()));
-        let clip = painter.with_clip_rect(name_rect);
-        if compact {
-            clip.text(name_rect.left_center(), Align2::LEFT_CENTER, &d.file_name, FontId::proportional(13.5), p.text);
-        } else {
-            // Name, and below it what kind of file it is and where it comes from.
-            let c = name_rect.left_center();
-            clip.text(c - vec2(0.0, 8.5), Align2::LEFT_CENTER, &d.file_name, FontId::proportional(13.5), p.text);
-            let host = crate::capture::host_of(&d.url);
-            let mut sub = self.cfg.category_label(d.category);
-            if !host.is_empty() {
-                sub = format!("{sub} \u{00b7} {host}");
-            }
-            clip.text(c + vec2(0.0, 9.5), Align2::LEFT_CENTER, sub, FontId::proportional(12.0), p.text_dim);
-        }
+        let tile = 22.0;
+        let icon_rect = Rect::from_min_size(pos2(x, rect.center().y - tile / 2.0), vec2(tile, tile));
+        widgets::paint_icon_tile(&painter, icon_rect, Icon::for_category(d.category), p.category(d.category), &p);
+        let text_x = x + tile + 12.0;
+        let name_rect = Rect::from_min_max(pos2(text_x, rect.top()), pos2(x + name_w - 12.0, rect.bottom()));
+        let name_font = FontId::new(
+            crate::theme::size::MD,
+            if selected { crate::theme::semi() } else { egui::FontFamily::Proportional },
+        );
+        painter.with_clip_rect(name_rect).text(
+            name_rect.left_center(),
+            Align2::LEFT_CENTER,
+            &d.file_name,
+            name_font,
+            p.text,
+        );
         x += name_w;
 
         for col in cols {
@@ -384,16 +440,23 @@ impl StewardGetApp {
                 SortKey::Progress if untouched => {}
                 SortKey::Progress => {
                     let bar =
-                        Rect::from_min_size(pos2(cell.left(), cell.center().y - 2.5), vec2(cell.width() - 52.0, 5.0));
+                        Rect::from_min_size(pos2(cell.left(), cell.center().y - 3.0), vec2(cell.width() - 56.0, 6.0));
                     widgets::paint_progress(ui, bar, d, &p);
                     let pct = d.fraction().map_or("—".into(), |f| {
                         if f >= 1.0 { "100%".into() } else { format!("{:.1}%", (f * 1000.0).floor() / 10.0) }
                     });
-                    painter.text(cell.right_center() - vec2(4.0, 0.0), Align2::RIGHT_CENTER, pct, small, p.text);
+                    let pct_color = if d.status == Status::Completed { p.text_dim } else { p.text };
+                    painter.text(
+                        cell.right_center() - vec2(4.0, 0.0),
+                        Align2::RIGHT_CENTER,
+                        pct,
+                        FontId::new(12.5, crate::theme::semi()),
+                        pct_color,
+                    );
                 }
                 SortKey::Speed => {
                     if d.status == Status::Downloading {
-                        painter.text(right, Align2::RIGHT_CENTER, format_speed(d.speed), small, p.accent2);
+                        painter.text(right, Align2::RIGHT_CENTER, format_speed(d.speed), small, p.text);
                     }
                 }
                 SortKey::Eta => {
@@ -403,13 +466,13 @@ impl StewardGetApp {
                 }
                 SortKey::Status => {
                     let (label, color) = status_label(d, &p);
-                    widgets::dot(&painter, cell.left_center() + vec2(14.0, 0.0), color);
-                    painter.with_clip_rect(cell).text(
-                        cell.left_center() + vec2(24.0, 0.0),
-                        Align2::LEFT_CENTER,
-                        label,
-                        small,
+                    widgets::paint_pill(
+                        &painter,
+                        cell.left_center() + vec2(4.0, 0.0),
+                        &label,
                         color,
+                        cell.width() - 10.0,
+                        &p,
                     );
                 }
                 SortKey::Added => {
@@ -430,7 +493,19 @@ impl StewardGetApp {
             x += col.width;
         }
 
-        // Interaction
+        self.row_interaction(ui, &response, order, index, d, selected);
+    }
+
+    /// Click, Ctrl/Shift-click, double-click and context menu of a row or card.
+    fn row_interaction(
+        &mut self,
+        ui: &mut Ui,
+        response: &egui::Response,
+        order: &[DownloadId],
+        index: usize,
+        d: &DownloadView,
+        selected: bool,
+    ) {
         if response.clicked() || response.secondary_clicked() && !selected {
             self.cursor = Some(d.id);
             let (ctrl, shift) = ui.input(|i| (i.modifiers.command, i.modifiers.shift));
@@ -462,6 +537,395 @@ impl StewardGetApp {
         }
         let d = d.clone();
         response.context_menu(|ui| self.context_menu(ui, &d));
+    }
+
+    /// Cards or a dense list; remembered in the configuration.
+    fn view_toggle(&mut self, ui: &mut Ui) {
+        let p = self.palette;
+        let mut compact = self.cfg.compact_rows;
+        let r = widgets::segmented(ui, &mut compact, &[(false, "Cards"), (true, "List")], &p)
+            .on_hover_text("Rich cards, or a dense sortable list with columns");
+        if r.changed() || compact != self.cfg.compact_rows {
+            let mut config = self.engine.config();
+            config.compact_rows = compact;
+            if let Some(draft) = &mut self.settings_draft {
+                draft.compact_rows = compact;
+            }
+            let r = self.engine.update_config(config);
+            self.report(r);
+        }
+    }
+
+    /// Four live figures above the cards: speed, what is in progress, what
+    /// arrived today and the space left where downloads are saved.
+    fn kpi_strip(&mut self, ui: &mut Ui, width: f32) {
+        let p = self.palette;
+        let s = &self.snap;
+        let now = stewardget_core::util::now_unix();
+        let unfinished: Vec<&DownloadView> = s.downloads.iter().filter(|d| d.status != Status::Completed).collect();
+        let active = s.count(Status::is_active);
+        let waiting = s.count(|x| matches!(x, Status::Queued | Status::Paused));
+        let left: u64 = unfinished.iter().filter_map(|d| d.total.map(|t| t.saturating_sub(d.downloaded))).sum();
+        let (got, of): (u64, u64) = unfinished
+            .iter()
+            .filter_map(|d| d.total.map(|t| (d.downloaded, t)))
+            .fold((0, 0), |a, b| (a.0 + b.0, a.1 + b.1));
+        let connections: usize = s.downloads.iter().map(|d| d.connections).sum();
+        let peak = s.history.iter().copied().fold(0.0f32, f32::max);
+        let finished_today =
+            s.downloads.iter().filter(|d| d.finished_at.is_some_and(|t| now.saturating_sub(t) < 86_400)).count();
+        let dir = self.cfg.download_dir.clone();
+        let free = free_space(&dir);
+
+        let gap = 12.0;
+        let inner = width - CARD_X * 2.0;
+        let n = if inner > 760.0 { 4 } else { 2 };
+        let tile_w = (inner - gap * (n - 1) as f32) / n as f32;
+        let history = s.history.clone();
+        let speed = s.speed;
+        let today = s.stats.today(now);
+        let week: Vec<f32> = s.stats.recent_days(14, now).iter().map(|d| d.bytes as f32).collect();
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = gap;
+            ui.add_space(CARD_X - gap);
+            let speed_sub = if active > 0 {
+                format!("peak {} \u{00b7} {connections} connections", format_speed(peak as f64))
+            } else {
+                "Nothing downloading".to_owned()
+            };
+            let r = widgets::kpi_tile(
+                ui,
+                tile_w,
+                Icon::Bolt,
+                p.accent2,
+                "Speed",
+                &format_speed(speed),
+                &speed_sub,
+                widgets::KpiExtra::Spark(&history[history.len().saturating_sub(60)..]),
+                &p,
+            );
+            if r.on_hover_text("Speed over the last minute").on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                self.filter = ListFilter::Active;
+            }
+            let eta = if speed > 1.0 && left > 0 {
+                format!(" \u{00b7} ~{}", format_duration((left as f64 / speed) as u64))
+            } else {
+                String::new()
+            };
+            let r = widgets::kpi_tile(
+                ui,
+                tile_w,
+                Icon::Download,
+                p.accent,
+                "In progress",
+                &format!("{active} active"),
+                &format!("{waiting} waiting \u{00b7} {} left{eta}", format_bytes(left)),
+                widgets::KpiExtra::Meter(if of > 0 { got as f32 / of as f32 } else { 0.0 }),
+                &p,
+            );
+            if r.on_hover_text("Show what is downloading").on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                self.filter = ListFilter::Active;
+            }
+            if n == 4 {
+                let r = widgets::kpi_tile(
+                    ui,
+                    tile_w,
+                    Icon::CheckCircle,
+                    p.green,
+                    "Today",
+                    &format_bytes(today),
+                    &format!("{finished_today} finished in the last 24 hours"),
+                    widgets::KpiExtra::Spark(&week),
+                    &p,
+                );
+                if r.on_hover_text("Open the history").on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                    self.page = crate::app::Page::History;
+                }
+                let (value, sub, color) = match free {
+                    Some(f) if left > f => {
+                        (format_bytes(f), format!("{} short for what's left", format_bytes(left - f)), p.yellow)
+                    }
+                    Some(f) => (format_bytes(f), format!("free in {}", short_dir(&dir)), p.accent2),
+                    None => ("—".to_owned(), short_dir(&dir), p.text_dim),
+                };
+                let r = widgets::kpi_tile(
+                    ui,
+                    tile_w,
+                    Icon::Drive,
+                    color,
+                    "Disk space",
+                    &value,
+                    &sub,
+                    widgets::KpiExtra::Meter(match free {
+                        Some(f) if f > 0 => (left as f32 / f as f32).min(1.0),
+                        _ => 0.0,
+                    }),
+                    &p,
+                );
+                if r.on_hover_text(format!(
+                    "{}\nThe bar is how much of it the unfinished downloads still need.\nClick to open the folder.",
+                    dir.display()
+                ))
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .clicked()
+                {
+                    self.open_path(&dir);
+                }
+            }
+        });
+    }
+
+    /// Above the cards: how many are shown and the sort order.
+    fn sort_bar(&mut self, ui: &mut Ui, shown: usize) {
+        let p = self.palette;
+        let width = ui.available_width();
+        let (bar, _) = ui.allocate_exact_size(vec2(width, 30.0), Sense::hover());
+        let noun = if shown == 1 { "download" } else { "downloads" };
+        ui.painter().galley(
+            pos2(bar.left() + CARD_X + 4.0, bar.center().y - 6.0),
+            widgets::caps_galley(ui, &format!("{shown} {noun}").to_uppercase(), 10.5, p.text_dim),
+            p.text_dim,
+        );
+        let right = Rect::from_min_max(pos2(bar.center().x, bar.top()), pos2(bar.right() - CARD_X, bar.bottom()));
+        ui.scope_builder(
+            egui::UiBuilder::new().max_rect(right).layout(egui::Layout::right_to_left(egui::Align::Center)),
+            |ui| {
+                const KEYS: [(SortKey, &str); 8] = [
+                    (SortKey::Queue, "Queue order"),
+                    (SortKey::Added, "Date added"),
+                    (SortKey::Name, "Name"),
+                    (SortKey::Size, "Size"),
+                    (SortKey::Progress, "Progress"),
+                    (SortKey::Speed, "Speed"),
+                    (SortKey::Eta, "Time left"),
+                    (SortKey::Status, "Status"),
+                ];
+                let dir_icon = if self.table.ascending { Icon::ArrowUp } else { Icon::ArrowDown };
+                if self.table.sort != SortKey::Queue
+                    && widgets::icon_button(
+                        ui,
+                        dir_icon,
+                        if self.table.ascending { "Ascending" } else { "Descending" },
+                        &p,
+                    )
+                    .clicked()
+                {
+                    self.table.ascending = !self.table.ascending;
+                }
+                let current = KEYS.iter().find(|(k, _)| *k == self.table.sort).map_or("Queue order", |(_, t)| t);
+                let mut chosen = self.table.sort;
+                egui::ComboBox::from_id_salt("card-sort")
+                    .width(130.0)
+                    .selected_text(RichText::new(current).size(12.5))
+                    .show_ui(ui, |ui| {
+                        for (k, t) in KEYS {
+                            ui.selectable_value(&mut chosen, k, t);
+                        }
+                    });
+                if chosen != self.table.sort {
+                    self.table.sort = chosen;
+                    self.table.ascending = !matches!(chosen, SortKey::Size | SortKey::Speed | SortKey::Added);
+                }
+                ui.label(RichText::new("Sort by").size(12.5).color(p.text_dim));
+            },
+        );
+        ui.add_space(6.0);
+    }
+
+    /// One download as a card: file mark, name and source, status, a progress
+    /// bar with the figures that matter right now, and its main actions.
+    fn card_row(&mut self, ui: &mut Ui, order: &[DownloadId], index: usize, d: &DownloadView) {
+        let p = self.palette;
+        let (slot, _) = ui.allocate_exact_size(vec2(ui.available_width(), CARD_H + CARD_GAP), Sense::hover());
+        let card = Rect::from_min_size(slot.min + vec2(CARD_X, 0.0), vec2(slot.width() - CARD_X * 2.0, CARD_H));
+        let response = ui.interact(card, egui::Id::unique(("stewardget-card", d.id)), Sense::click_and_drag());
+        if response.drag_started() {
+            let ids =
+                if self.selection.contains(&d.id) { self.selection.iter().copied().collect() } else { vec![d.id] };
+            egui::DragAndDrop::set_payload(ui.ctx(), DraggedDownloads(ids));
+        }
+        let selected = self.selection.contains(&d.id);
+        let hovered = response.hovered();
+        let painter = ui.painter().clone();
+        let corner = CornerRadius::same(crate::theme::radius::LG + 2);
+        if !p.dark {
+            painter.add(p.shadow(if hovered { 4 } else { 1 }, if hovered { 14 } else { 6 }).as_shape(card, corner));
+        }
+        let (fill, stroke) = if selected {
+            (
+                widgets::lerp_color(p.card, p.accent, if p.dark { 0.10 } else { 0.06 }),
+                Stroke::new(1.5, p.accent.gamma_multiply(0.85)),
+            )
+        } else if hovered {
+            (p.card_hover, Stroke::new(1.0, p.control_border))
+        } else {
+            (p.card, Stroke::new(1.0, p.border))
+        };
+        painter.rect(card, corner, fill, stroke, egui::StrokeKind::Inside);
+        // Live downloads carry a thin accent edge on the left.
+        if d.status.is_active() {
+            let edge = Rect::from_min_size(card.left_top() + vec2(0.0, 18.0), vec2(3.0, card.height() - 36.0));
+            let (a, b) = widgets::status_gradient(d.status, &p);
+            widgets::paint_gradient_rect(&painter, edge, 1.5, a, b, true);
+        }
+
+        let tile = Rect::from_center_size(card.left_center() + vec2(16.0 + 26.0, 0.0), vec2(52.0, 52.0));
+        widgets::paint_file_tile(
+            &painter,
+            tile,
+            Icon::for_category(d.category),
+            widgets::extension(&d.file_name),
+            p.category(d.category),
+            &p,
+        );
+
+        let actions_w = 3.0 * crate::theme::CONTROL_H + 2.0 * 6.0;
+        let x0 = tile.right() + 16.0;
+        let x1 = card.right() - 16.0 - actions_w - 18.0;
+        let top = card.top();
+
+        // Line 1: name and status.
+        let (label, color) = status_label(d, &p);
+        let pill_w =
+            painter.layout_no_wrap(label.clone(), FontId::new(12.0, crate::theme::semi()), color).size().x + 26.0;
+        let pill_w = pill_w.min((x1 - x0) * 0.45);
+        widgets::paint_pill(&painter, pos2(x1 - pill_w, top + 21.0), &label, color, pill_w, &p);
+        let name_clip = Rect::from_min_max(pos2(x0, top), pos2(x1 - pill_w - 12.0, card.bottom()));
+        painter.with_clip_rect(name_clip.intersect(painter.clip_rect())).text(
+            pos2(x0, top + 21.0),
+            Align2::LEFT_CENTER,
+            &d.file_name,
+            FontId::new(crate::theme::size::MD + 0.5, crate::theme::semi()),
+            p.text,
+        );
+
+        // Line 2: where it comes from.
+        let host = crate::capture::host_of(&d.url);
+        let now = stewardget_core::util::now_unix();
+        let mut meta = vec![self.cfg.category_label(d.category)];
+        if !host.is_empty() {
+            meta.push(host);
+        }
+        meta.push(format!("added {}", stewardget_core::util::format_relative(d.added_at, now)));
+        if self.engine.config().queues.len() > 1 {
+            meta.push(self.engine.config().queue(d.queue).name.clone());
+        }
+        painter
+            .with_clip_rect(Rect::from_min_max(pos2(x0, top), pos2(x1, card.bottom())).intersect(painter.clip_rect()))
+            .text(
+                pos2(x0, top + 41.0),
+                Align2::LEFT_CENTER,
+                meta.join("  \u{00b7}  "),
+                FontId::proportional(crate::theme::size::SM),
+                p.text_dim,
+            );
+
+        // Line 3: progress.
+        let bar = Rect::from_min_max(pos2(x0, top + 55.0), pos2(x1, top + 61.0));
+        widgets::paint_progress(ui, bar, d, &p);
+
+        // Line 4: figures.
+        let small = FontId::proportional(12.5);
+        let strong = FontId::new(12.5, crate::theme::semi());
+        let figures_y = top + 75.0;
+        let pct = d
+            .fraction()
+            .map(|f| if f >= 1.0 { "100%".to_owned() } else { format!("{:.1}%", (f * 1000.0).floor() / 10.0) });
+        let amount = match (d.total, d.status) {
+            (Some(t), Status::Completed) => format_bytes(t),
+            (Some(t), _) => format!("{} of {}", format_bytes(d.downloaded), format_bytes(t)),
+            (None, _) if d.downloaded > 0 => format!("{} so far", format_bytes(d.downloaded)),
+            (None, _) => "Size not known yet".to_owned(),
+        };
+        let left_text = match &pct {
+            Some(pct) if d.status != Status::Completed => format!("{amount}  \u{00b7}  {pct}"),
+            _ => amount,
+        };
+        let lg = painter.text(pos2(x0, figures_y), Align2::LEFT_CENTER, left_text, small.clone(), p.text_dim);
+        let right_text = match d.status {
+            Status::Downloading => {
+                let mut parts = vec![format_speed(d.speed)];
+                if let Some(eta) = d.eta {
+                    parts.push(format!("{} left", format_duration(eta)));
+                }
+                if d.connections > 0 {
+                    parts.push(format!("\u{00d7}{}", d.connections));
+                }
+                Some((parts.join("  \u{00b7}  "), p.text, strong))
+            }
+            Status::Completed => d.finished_at.map(|t| {
+                let secs = if d.active_secs > 0 { d.active_secs } else { t.saturating_sub(d.added_at) }.max(1);
+                (
+                    format!(
+                        "Finished {}  \u{00b7}  avg {}",
+                        stewardget_core::util::format_relative(t, now),
+                        format_speed(d.downloaded as f64 / secs as f64)
+                    ),
+                    p.text_dim,
+                    small,
+                )
+            }),
+            Status::Failed => d.error.as_ref().map(|e| (crate::app::capitalize(e), p.red, small)),
+            _ => None,
+        };
+        if let Some((text, color, font)) = right_text {
+            let clip = Rect::from_min_max(pos2(lg.right() + 16.0, top), pos2(x1, card.bottom()));
+            let g = painter.layout_no_wrap(text, font, color);
+            let pos = pos2((x1 - g.size().x).max(clip.left()), figures_y - g.size().y / 2.0);
+            painter.with_clip_rect(clip.intersect(painter.clip_rect())).galley(pos, g, color);
+        }
+
+        // Actions: the main one first, filled; then the folder and a menu.
+        let actions = Rect::from_min_max(
+            pos2(card.right() - 16.0 - actions_w, card.top()),
+            pos2(card.right() - 16.0, card.bottom()),
+        );
+        let mut open_menu = None;
+        ui.scope_builder(
+            egui::UiBuilder::new().max_rect(actions).layout(egui::Layout::right_to_left(egui::Align::Center)),
+            |ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                let more = widgets::round_button(ui, Icon::More, "More actions", false, &p);
+                if more.clicked() && !selected {
+                    self.selection.clear();
+                    self.selection.insert(d.id);
+                    self.cursor = Some(d.id);
+                    self.anchor = Some(d.id);
+                }
+                open_menu = Some(more);
+                if widgets::round_button(ui, Icon::FolderOpen, "Show in folder", false, &p).clicked() {
+                    self.reveal(&d.path);
+                }
+                if d.status == Status::Completed {
+                    let exists = file_exists(&d.path);
+                    if exists && widgets::round_button(ui, Icon::External, "Open", true, &p).clicked() {
+                        self.open_path(&d.path);
+                    } else if !exists && widgets::round_button(ui, Icon::Retry, "Download again", true, &p).clicked() {
+                        let r = self.engine.restart(d.id);
+                        self.report(r);
+                    }
+                } else if d.status.can_pause() {
+                    if widgets::round_button(ui, Icon::Pause, "Pause", false, &p).clicked() {
+                        let r = self.engine.pause(d.id);
+                        self.report(r);
+                    }
+                } else if d.status.can_resume() && problem_of(d) != Some(Problem::Changed) {
+                    // A changed file needs a decision; the details pane offers it.
+                    let (icon, tip) =
+                        if d.status == Status::Failed { (Icon::Retry, "Retry") } else { (Icon::Play, "Resume") };
+                    if widgets::round_button(ui, icon, tip, true, &p).clicked() {
+                        let r = self.engine.resume(d.id);
+                        self.report(r);
+                    }
+                }
+            },
+        );
+        if let Some(more) = open_menu {
+            let dd = d.clone();
+            egui::Popup::menu(&more).show(|ui| self.context_menu(ui, &dd));
+        }
+
+        self.row_interaction(ui, &response, order, index, d, selected);
     }
 
     fn context_menu(&mut self, ui: &mut Ui, d: &DownloadView) {
@@ -587,8 +1051,8 @@ impl StewardGetApp {
         let p = self.palette;
         ui.add_space(48.0);
         ui.vertical_centered(|ui| {
-            widgets::icon(ui, Icon::Download, 40.0, p.accent.gamma_multiply(0.8));
-            ui.add_space(6.0);
+            widgets::icon_tile(ui, Icon::Download, 64.0, p.accent, &p);
+            ui.add_space(12.0);
             let (title, sub) = if self.snap.downloads.is_empty() {
                 (
                     "No downloads yet",
@@ -610,7 +1074,8 @@ impl StewardGetApp {
             } else {
                 ("Nothing here", "Downloads in this view will appear here.")
             };
-            ui.label(RichText::new(title).size(16.0).family(crate::theme::semi()).color(p.text));
+            ui.label(RichText::new(title).size(crate::theme::size::XL).family(crate::theme::semi()).color(p.text));
+            ui.add_space(2.0);
             ui.add(egui::Label::new(RichText::new(sub).color(p.text_dim)).wrap());
             ui.add_space(6.0);
             if self.snap.downloads.is_empty() {
@@ -667,21 +1132,29 @@ pub fn file_exists(path: &std::path::Path) -> bool {
 /// (dialogs ask every frame while they are open).
 pub fn free_space(path: &std::path::Path) -> Option<u64> {
     use std::cell::RefCell;
+    use std::collections::HashMap;
     use std::time::{Duration, Instant};
     thread_local! {
-        static LAST: RefCell<Option<(std::path::PathBuf, Instant, Option<u64>)>> = const { RefCell::new(None) };
+        static SEEN: RefCell<HashMap<std::path::PathBuf, (Instant, Option<u64>)>> = RefCell::new(HashMap::new());
     }
-    LAST.with_borrow_mut(|last| {
-        if let Some((p, at, free)) = last.as_ref()
-            && p == path
+    SEEN.with_borrow_mut(|seen| {
+        if let Some(&(at, free)) = seen.get(path)
             && at.elapsed() < Duration::from_secs(2)
         {
-            return *free;
+            return free;
+        }
+        if seen.len() > 64 {
+            seen.clear();
         }
         let free = stewardget_core::util::free_space(path);
-        *last = Some((path.to_path_buf(), Instant::now(), free));
+        seen.insert(path.to_path_buf(), (Instant::now(), free));
         free
     })
+}
+
+/// The last folder name of a path, for tight spaces ("Downloads").
+fn short_dir(path: &std::path::Path) -> String {
+    path.file_name().map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into_owned())
 }
 
 pub fn status_label(d: &DownloadView, p: &Palette) -> (String, Color32) {

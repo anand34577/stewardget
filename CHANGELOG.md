@@ -6,6 +6,21 @@ All notable changes to StewardGet are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-10-30
+
+### Changed
+- **A redesigned window.** The sidebar now runs the full height, menus, search and *Add download* share one header, and pages sit on a rounded canvas instead of under three stacked toolbars.
+- What you can do with the selection (Resume, Pause, Restart, Refresh link, Remove) now appears in the list's own header, and only while something is selected. With nothing selected, the same spot offers *Start all* and *Pause all*.
+- **Downloads as cards.** Each download is a card with a file-type tile showing its extension, its source and when it was added, a progress bar, and the figures that matter right now (speed, time left, connections; or how long it took and the average speed once finished). Pause, resume, open, show in folder and the full menu are buttons on the card. *List* switches to the dense sortable list with columns.
+- Above the cards, four live tiles: speed with a one-minute graph, what is in progress with the data still to come and an estimate, what arrived today with a two-week graph, and the free disk space, which turns amber when the unfinished downloads won't fit.
+- **Inspector.** In a wide window the details of the selected download open in a column on the right, with a progress ring, the live figures, its actions, the connection map, the speed graph and all its information. Narrow windows keep the pane at the bottom.
+- Primary buttons, the selected sidebar entry and live progress use a gradient of the accent colour, and a soft glow of the accent lights the top of each page. The Overview uses the same tiles.
+- The sidebar shows counts as badges and keeps a live card with the current speed and a small graph; click it to see what is downloading.
+- A clearer type scale with letter-spaced section labels, and refined colours in every theme.
+
+### Fixed
+- Text fields and drop-down lists could keep the colours of the other theme when StewardGet's theme differed from the system's (for example, black fields in the light theme).
+
 ## [0.9.1] - 2026-10-30
 
 ### Fixed

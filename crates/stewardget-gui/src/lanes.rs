@@ -41,14 +41,17 @@ impl StewardGetApp {
                 } else {
                     p.accent2
                 };
+                // Name on one line, host and figures on the next: fits a narrow inspector.
                 ui.horizontal(|ui| {
                     let name = if lane.mirror { format!("{} · {}", lane.link, lane.host) } else { lane.link.clone() };
                     ui.add(egui::Label::new(RichText::new(name).color(p.text)).truncate());
                     if lane.mirror {
                         widgets::pill(ui, "mirror", p.accent);
                     }
+                });
+                ui.horizontal(|ui| {
                     if !lane.mirror && !lane.host.is_empty() {
-                        ui.label(RichText::new(&lane.host).size(12.0).color(p.text_dim));
+                        ui.add(egui::Label::new(RichText::new(&lane.host).size(12.0).color(p.text_dim)).truncate());
                     }
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         let text = if lane.failed {
