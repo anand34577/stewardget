@@ -42,18 +42,27 @@ impl StewardGetApp {
                     p.accent2
                 };
                 // Name on one line, host and figures on the next: fits a narrow inspector.
-                ui.horizontal(|ui| {
-                    let name = if lane.mirror { format!("{} · {}", lane.link, lane.host) } else { lane.link.clone() };
-                    ui.add(egui::Label::new(RichText::new(name).color(p.text)).truncate());
-                    if lane.mirror {
-                        widgets::pill(ui, "mirror", p.accent);
-                    }
-                });
-                ui.horizontal(|ui| {
-                    if !lane.mirror && !lane.host.is_empty() {
-                        ui.add(egui::Label::new(RichText::new(&lane.host).size(12.0).color(p.text_dim)).truncate());
-                    }
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                let name = if lane.mirror { format!("{} · {}", lane.link, lane.host) } else { lane.link.clone() };
+                widgets::split_row(
+                    ui,
+                    |ui| {
+                        ui.add(egui::Label::new(RichText::new(name).color(p.text)).truncate());
+                    },
+                    |ui| {
+                        if lane.mirror {
+                            widgets::pill(ui, "mirror", p.accent);
+                        }
+                    },
+                );
+                // The figures are placed first; the host gets what is left.
+                widgets::split_row(
+                    ui,
+                    |ui| {
+                        if !lane.mirror && !lane.host.is_empty() {
+                            ui.add(egui::Label::new(RichText::new(&lane.host).size(12.0).color(p.text_dim)).truncate());
+                        }
+                    },
+                    |ui| {
                         let text = if lane.failed {
                             "dropped".to_owned()
                         } else {
@@ -65,8 +74,8 @@ impl StewardGetApp {
                             )
                         };
                         ui.label(RichText::new(text).size(12.0).color(if lane.failed { p.red } else { p.text_dim }));
-                    });
-                });
+                    },
+                );
                 widgets::share_bar(ui, (lane.speed / top) as f32, color, &p);
                 if let Some(why) = lane.reason.as_ref().filter(|_| lane.failed) {
                     ui.label(RichText::new(why).size(12.0).color(p.red));

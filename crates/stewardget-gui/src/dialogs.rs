@@ -387,7 +387,7 @@ impl StewardGetApp {
                         format!("{} of these links are already in your list.", existing.len())
                     };
                     ui.add(egui::Label::new(RichText::new(text).color(p.text)).wrap());
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         widgets::segmented(
                             ui,
                             &mut dialog.duplicates,
@@ -414,7 +414,7 @@ impl StewardGetApp {
                     );
                     widgets::path_label(ui, &folder, 12.0, p.text_dim);
                     let mut choice = dialog.existing.unwrap_or(default_existing);
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         if widgets::button(ui, ButtonKind::Tool, Some(Icon::FolderOpen), "Open existing", true, &p)
                             .on_hover_text("Show the file in its folder and cancel this download")
                             .clicked()

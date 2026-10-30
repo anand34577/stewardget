@@ -14,6 +14,7 @@ use crate::widgets::{self, ButtonKind, card, toggle};
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
     General,
+    Notifications,
     Appearance,
     Connection,
     Network,
@@ -26,8 +27,9 @@ pub enum Tab {
 }
 
 impl Tab {
-    pub(crate) const ALL: [(Tab, Icon, &'static str); 10] = [
+    pub(crate) const ALL: [(Tab, Icon, &'static str); 11] = [
         (Tab::General, Icon::Gear, "General"),
+        (Tab::Notifications, Icon::Inbox, "Notifications"),
         (Tab::Appearance, Icon::Palette, "Appearance"),
         (Tab::Connection, Icon::Gauge, "Downloads"),
         (Tab::Network, Icon::Network, "Network"),
@@ -311,6 +313,10 @@ impl StewardGetApp {
                             },
                         );
                     }
+                });
+            }
+            Tab::Notifications => {
+                section(ui, &p, "On this computer", |ui| {
                     row(
                         ui,
                         &p,
@@ -332,7 +338,7 @@ impl StewardGetApp {
                     row(
                         ui,
                         &p,
-                        "Notifications",
+                        "System notifications",
                         "A system notification when a download finishes or fails while StewardGet is in the background.",
                         |ui| {
                             toggle(ui, &mut draft.notifications, &p);
@@ -877,7 +883,14 @@ pub(crate) fn row(ui: &mut Ui, p: &Palette, label: &str, help: &str, add: impl F
         return;
     }
     let width = ui.available_width();
-    let label_w = (width * 0.5).clamp(180.0, 520.0);
+    // Controls sit at the right edge of the card and keep their order: the
+    // width they took last frame says how much room the label may keep.
+    let key = egui::Id::unique(("settings-row-width", label));
+    let known: Option<f32> = ui.data(|d| d.get_temp(key));
+    let mut label_w = (width * 0.5).clamp(180.0, 520.0);
+    if let Some(w) = known {
+        label_w = label_w.min((width - w - 16.0).max(140.0));
+    }
     // Dividers go between rows only, never after the last one in a card.
     if ui.min_rect().height() > 4.0 {
         divider(ui, p, width);
@@ -891,10 +904,6 @@ pub(crate) fn row(ui: &mut Ui, p: &Palette, label: &str, help: &str, add: impl F
                 ui.add(egui::Label::new(RichText::new(help).size(12.0).color(p.text_dim)).wrap());
             }
         });
-        // Controls sit at the right edge of the card and keep their order: the
-        // width they took last frame says how much room to leave on the left.
-        let key = egui::Id::unique(("settings-row-width", label));
-        let known: Option<f32> = ui.data(|d| d.get_temp(key));
         if let Some(w) = known {
             ui.add_space((ui.available_width() - w).max(0.0));
         }
@@ -1244,7 +1253,7 @@ impl StewardGetApp {
                         .wrap(),
                 );
                 ui.add_space(4.0);
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     if widgets::button(ui, ButtonKind::Ghost, Some(Icon::Copy), "Copy folder path", true, &p).clicked()
                     {
                         ui.ctx().copy_text(dir.display().to_string());
@@ -1267,7 +1276,7 @@ impl StewardGetApp {
         };
         let page_button = |ui: &mut Ui, copied: &mut Option<&'static str>| {
             ui.add_space(4.0);
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.label(RichText::new(browser.page()).monospace().color(p.text_dim));
                 if widgets::button(ui, ButtonKind::Ghost, Some(Icon::Copy), "Copy address", true, &p)
                     .on_hover_text("Browsers don't let other apps open this page. Paste it into the address bar.")

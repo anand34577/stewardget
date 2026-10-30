@@ -100,9 +100,11 @@ impl StewardGetApp {
             format!("{pct}{} – StewardGet", d.file_name)
         };
         let nth = self.progress.len();
+        let own_bar = self.custom_frame;
         let pos = *w.pos.get_or_insert_with(|| crate::app::screen_spot(ctx, vec2(WIDTH, 420.0), nth));
         let builder = egui::ViewportBuilder::default()
-            .with_title(title)
+            .with_title(title.clone())
+            .with_decorations(!own_bar)
             .with_position(pos)
             .with_app_id("dev.stewardget.StewardGet")
             .with_inner_size([WIDTH, w.height])
@@ -117,18 +119,20 @@ impl StewardGetApp {
                 ui.ctx().send_viewport_cmd(egui::ViewportCommand::Focus);
             }
             ui.painter().rect_filled(ui.max_rect(), CornerRadius::ZERO, p.card);
-            let inner = Frame::new().inner_margin(Margin::symmetric(14, 12)).show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                ui.spacing_mut().item_spacing.y = 4.0;
-                header(ui, &p, d);
-                ui.add_space(6.0);
-                if let Some(e) = &w.error {
-                    ui.add(egui::Label::new(RichText::new(e).size(12.5).color(p.red)).wrap());
-                }
-                action = if done { complete_body(ui, &p, d, w) } else { running_body(ui, &p, d, w, &mut details) };
+            let (inner, bar) = crate::frame::dialog_body(ui, &p, &title, own_bar, true, |ui| {
+                Frame::new().inner_margin(Margin::symmetric(14, 12)).show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.spacing_mut().item_spacing.y = 4.0;
+                    header(ui, &p, d);
+                    ui.add_space(6.0);
+                    if let Some(e) = &w.error {
+                        ui.add(egui::Label::new(RichText::new(e).size(12.5).color(p.red)).wrap());
+                    }
+                    action = if done { complete_body(ui, &p, d, w) } else { running_body(ui, &p, d, w, &mut details) };
+                })
             });
             // Fit the window to what it shows (details open or not, finished or not).
-            let wanted = inner.response.rect.height() + 2.0;
+            let wanted = inner.response.rect.height() + bar + 2.0;
             if class == egui::ViewportClass::Immediate && (wanted - w.height).abs() > 1.5 {
                 w.height = wanted;
                 ui.ctx().send_viewport_cmd(egui::ViewportCommand::InnerSize(vec2(WIDTH, wanted)));
@@ -265,7 +269,7 @@ fn running_body(
             .inner_margin(Margin::symmetric(10, 8))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     widgets::icon(ui, Icon::Warning, 14.0, p.yellow);
                     ui.label(
                         RichText::new("This server can't resume. Stopping now means starting over from zero later.")
@@ -337,7 +341,8 @@ fn complete_body(ui: &mut Ui, p: &Palette, d: &DownloadView, w: &ProgressWindow)
             p.text,
         ),
     ];
-    egui::Grid::new(("progress-done", d.id)).num_columns(2).spacing([18.0, 4.0]).show(ui, |ui| {
+    egui::Grid::new(("progress-done", d.id)).num_columns(2).spacing([18.0, 3.0]).min_row_height(18.0).show(ui, |ui| {
+        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
         for (label, value, color) in rows {
             ui.label(RichText::new(label).color(p.text_dim));
             ui.label(RichText::new(value).color(color));
@@ -384,7 +389,7 @@ fn complete_body(ui: &mut Ui, p: &Palette, d: &DownloadView, w: &ProgressWindow)
                 )
                 .sense(egui::Sense::click()),
             )
-            .on_hover_text("Turn it back on in Settings › General.")
+            .on_hover_text("Turn it back on in Settings › Notifications.")
             .on_hover_cursor(egui::CursorIcon::PointingHand);
         if r.clicked() {
             action = Some(Action::NeverAnnounce);
@@ -423,7 +428,8 @@ fn facts(ui: &mut Ui, p: &Palette, d: &DownloadView) {
         ("Time left", left, p.text),
         ("Resume support", resume.into(), resume_color),
     ];
-    egui::Grid::new(("progress-facts", d.id)).num_columns(2).spacing([18.0, 4.0]).show(ui, |ui| {
+    egui::Grid::new(("progress-facts", d.id)).num_columns(2).spacing([18.0, 3.0]).min_row_height(18.0).show(ui, |ui| {
+        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
         for (label, value, color) in &rows {
             ui.label(RichText::new(*label).color(p.text_dim));
             ui.label(RichText::new(value).color(*color));

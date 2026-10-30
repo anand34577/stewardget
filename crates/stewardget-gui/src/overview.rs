@@ -69,7 +69,7 @@ impl StewardGetApp {
                             };
                             ui.label(RichText::new(line).color(p.text_dim));
                             ui.add_space(5.0);
-                            ui.horizontal(|ui| {
+                            ui.horizontal_wrapped(|ui| {
                                 if widgets::button(ui, ButtonKind::Primary, Some(Icon::Plus), "Add download", true, &p)
                                     .clicked()
                                 {

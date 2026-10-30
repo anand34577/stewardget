@@ -236,6 +236,7 @@ impl StewardGetApp {
             let max_h = (ui.ctx().content_rect().height() - 190.0).max(160.0);
             egui::ScrollArea::vertical().max_height(max_h).show(ui, |ui| {
                 egui::Grid::new("shortcut-grid").num_columns(2).spacing([18.0, 2.0]).show(ui, |ui| {
+                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
                     for (keys, what) in SHORTCUTS {
                         ui.label(RichText::new(keys).size(12.5).family(crate::theme::semi()).color(p.text));
                         ui.label(RichText::new(what).size(12.5).color(p.text_dim));

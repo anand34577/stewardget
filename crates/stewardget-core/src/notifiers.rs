@@ -83,6 +83,15 @@ pub struct Target {
     pub events: Events,
     /// Only downloads of these queues; empty means every queue.
     pub queues: Vec<QueueId>,
+    /// Events that differ from `events` for one queue (set in that queue's settings).
+    pub queue_events: Vec<QueueEvents>,
+}
+
+/// What a destination is told about one queue, in place of its usual events.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QueueEvents {
+    pub queue: QueueId,
+    pub events: Events,
 }
 
 impl Default for Target {
@@ -94,6 +103,7 @@ impl Default for Target {
             service: Service::Ntfy(Ntfy::default()),
             events: Events::default(),
             queues: Vec::new(),
+            queue_events: Vec::new(),
         }
     }
 }
@@ -108,12 +118,17 @@ impl Target {
         self.enabled && self.service.filled_in()
     }
 
+    /// The events this destination hears about for `queue`.
+    pub fn events_for(&self, queue: QueueId) -> Events {
+        self.queue_events.iter().find(|q| q.queue == queue).map_or(self.events, |q| q.events)
+    }
+
     pub fn wants(&self, event: &Event) -> bool {
         let queue_ok = |q: &QueueId| self.queues.is_empty() || self.queues.contains(q);
         match event {
-            Event::Finished { queue } => self.events.finished && queue_ok(queue),
-            Event::Failed { queue } => self.events.failed && queue_ok(queue),
-            Event::QueueFinished { queue } => self.events.queue_finished && queue_ok(queue),
+            Event::Finished { queue } => self.events_for(*queue).finished && queue_ok(queue),
+            Event::Failed { queue } => self.events_for(*queue).failed && queue_ok(queue),
+            Event::QueueFinished { queue } => self.events_for(*queue).queue_finished && queue_ok(queue),
             Event::AllFinished => self.events.all_finished,
         }
     }
@@ -441,6 +456,15 @@ mod tests {
 
     fn msg(title: &str) -> Message {
         Message { title: title.into(), body: String::new(), problem: false }
+    }
+
+    #[test]
+    fn a_queue_can_change_a_destinations_events() {
+        let mut t = ntfy(1, vec![], Events::default());
+        t.queue_events.push(QueueEvents { queue: 2, events: Events { finished: false, ..Events::default() } });
+        assert!(t.wants(&Event::Finished { queue: 1 }));
+        assert!(!t.wants(&Event::Finished { queue: 2 }));
+        assert!(t.wants(&Event::Failed { queue: 2 }));
     }
 
     #[test]

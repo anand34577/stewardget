@@ -53,12 +53,26 @@ StewardGet keeps everything that made IDM great and fixes the rest.
 
 ## Screenshots
 
+All screenshots show demo data.
+
 | | |
 |---|---|
-| ![Adding a download: the link is checked first](docs/images/add-dialog.png) | ![Statistics](docs/images/statistics.png) |
-| **Add** — the link is checked before downloading: real name, size, resume support, free space, duplicates. | **Statistics** — 30-day history, live throughput, categories and sources. Stored only on your device. |
-| ![An expired link with partial data kept](docs/images/refresh-link.png) | ![Themes and accent colours](docs/images/appearance.png) |
-| **Refresh link** — an expired link never costs you the 75 % already downloaded. | **Appearance** — five themes, six accents, interface zoom. |
+| ![Overview: live speed, today, last 7 days and the monthly data cap](docs/images/overview.png) | ![Downloads with the inspector: live connection map and speed](docs/images/main-dark.png) |
+| **Overview** — live speed, today and 7-day totals, monthly data cap, what is running and what just finished. | **Downloads** — the inspector shows the connection map, speed history and sources of the selected download. |
+| ![The light theme](docs/images/main-light.png) | ![Card view](docs/images/cards.png) |
+| **Light theme** — five themes and six accents. | **Card view** — speed, progress and disk space at a glance. |
+| ![Adding a download: the link is checked first](docs/images/add-dialog.png) | ![Progress window](docs/images/progress.png) |
+| **Add** — the link is checked first: real name, size, resume support, free space, duplicates. | **Progress window** — a small window per download with the per-connection bar. |
+| ![History](docs/images/history.png) | ![Statistics](docs/images/statistics.png) |
+| **History** — every finished download stays searchable, with filters by time and type. | **Statistics** — 30-day history, live throughput and a six-month calendar. Stored only on your device. |
+| ![Queues](docs/images/queues.png) | ![Queue schedules and limits](docs/images/scheduler.png) |
+| **Queues** — each with its own order, limit and schedule. | **Queues & schedule** — start and pause times, weekdays and speed caps per queue. |
+| ![Phone and email notifications](docs/images/notifications.png) | ![Categories](docs/images/categories.png) |
+| **Notifications** — Gotify, ntfy or email when downloads finish or fail. | **Categories** — your own categories and folders by file type. |
+| ![Tools](docs/images/tools.png) | ![Themes and accent colours](docs/images/appearance.png) |
+| **Tools** — duplicate finder, link checker, leftovers and backup. | **Appearance** — themes, accents, interface zoom, compact rows. |
+| ![An expired link with partial data kept](docs/images/refresh-link.png) | ![Statistics in the light theme](docs/images/statistics-light.png) |
+| **Refresh link** — an expired link never costs you the 75 % already downloaded. | **Statistics (light)** |
 
 ## Features
 

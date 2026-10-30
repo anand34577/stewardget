@@ -20,7 +20,7 @@ pub type TestResults = HashMap<u32, Arc<Mutex<Option<Result<(), String>>>>>;
 const FIELD_W: f32 = 300.0;
 
 impl StewardGetApp {
-    /// The sections under the desktop notification settings.
+    /// The phone and email destinations of the Notifications tab.
     pub(crate) fn push_sections(&mut self, ui: &mut Ui, draft: &mut Config) {
         let p = self.palette;
         section(ui, &p, "Phone and email notifications", |ui| {
@@ -55,18 +55,26 @@ impl StewardGetApp {
                 format!("{} \u{00b7} {}", target.name.trim(), target.service.kind().name())
             };
             section(ui, &p, &title, |ui| {
-                target_fields(ui, target, &queues, &p);
+                target_fields(ui, target, &queues, true, &p);
             });
             ui.add_space(-10.0);
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 6.0;
-                self.test_button(ui, target);
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            // Remove is placed first, so the test result gets what is left of the line.
+            widgets::split_row(
+                ui,
+                |ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    self.test_button(ui, target);
+                },
+                |ui| {
                     if widgets::button(ui, ButtonKind::Tool, Some(Icon::Trash), "Remove", true, &p).clicked() {
                         remove = Some(i);
                     }
-                });
-            });
+                },
+            );
+            if let Some(Some(Err(e))) = self.notify_tests.get(&target.id).map(|s| s.lock().unwrap().clone()) {
+                ui.add_space(2.0);
+                ui.add(egui::Label::new(RichText::new(crate::app::capitalize(&e)).size(12.0).color(p.red)).wrap());
+            }
             ui.add_space(18.0);
         }
         if let Some(i) = remove {
@@ -107,21 +115,31 @@ impl StewardGetApp {
                 widgets::icon(ui, Icon::CheckCircle, 14.0, p.green);
                 ui.label(RichText::new("Sent. Check that it arrived.").size(12.5).color(p.green));
             }
-            Some(Some(Err(e))) => {
+            Some(Some(Err(_))) => {
+                // The reason is shown in full under the buttons.
                 widgets::icon(ui, Icon::Alert, 14.0, p.red);
-                ui.add(egui::Label::new(RichText::new(crate::app::capitalize(&e)).size(12.5).color(p.red)).truncate())
-                    .on_hover_text(e);
+                ui.label(RichText::new("Couldn't send").size(12.5).color(p.red));
             }
             None => {}
         }
     }
 }
 
-/// Everything about one destination: name, switch, service settings, events and queues.
-fn target_fields(ui: &mut Ui, t: &mut Target, queues: &[(u32, String)], p: &crate::theme::Palette) {
-    row(ui, p, "Send here", "Switch off to keep the settings without sending anything.", |ui| {
-        toggle(ui, &mut t.enabled, p);
-    });
+/// Everything about one destination: name, switch, service settings, events
+/// and queues. A queue's own window passes `full: false` and only edits who
+/// and where; it picks the events and whether the queue counts itself.
+pub(crate) fn target_fields(
+    ui: &mut Ui,
+    t: &mut Target,
+    queues: &[(u32, String)],
+    full: bool,
+    p: &crate::theme::Palette,
+) {
+    if full {
+        row(ui, p, "Send here", "Switch off to keep the settings without sending anything.", |ui| {
+            toggle(ui, &mut t.enabled, p);
+        });
+    }
     row(ui, p, "Name", "Who or what this is for, e.g. My phone or Team mailbox.", |ui| {
         field(ui, &mut t.name, "name", false);
     });
@@ -209,6 +227,9 @@ fn target_fields(ui: &mut Ui, t: &mut Target, queues: &[(u32, String)], p: &crat
             });
         }
     }
+    if !full {
+        return;
+    }
     // Choices go on their own wrapping line under the label: they don't fit beside it.
     row(ui, p, "Tell about", "Failures count once automatic retries are used up.", |_| {});
     chips(ui, |ui| {
@@ -225,22 +246,27 @@ fn target_fields(ui: &mut Ui, t: &mut Target, queues: &[(u32, String)], p: &crat
         }
     });
     if queues.len() > 1 {
-        row(ui, p, "For queues", "Pick queues to hear only about those; with none picked, every queue counts.", |_| {});
-        chips(ui, |ui| {
-            if widgets::chip(ui, "All queues", t.queues.is_empty(), p).clicked() {
-                t.queues.clear();
-            }
-            for (id, name) in queues {
-                let on = t.queues.contains(id);
-                if widgets::chip(ui, name, on, p).clicked() {
-                    if on {
-                        t.queues.retain(|q| q != id);
-                    } else {
-                        t.queues.push(*id);
-                    }
-                }
-            }
-        });
+        let covered = if t.queues.is_empty() {
+            "Every queue".to_owned()
+        } else {
+            queues
+                .iter()
+                .filter(|(id, _)| t.queues.contains(id))
+                .map(|(_, n)| n.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        row(
+            ui,
+            p,
+            "For queues",
+            "Each queue says for itself whether this destination hears about it: Queues & schedule, then Edit on a queue.",
+            |ui| {
+                let font = egui::FontId::proportional(12.5);
+                let text = widgets::fit_text(ui.painter(), &covered, &font, FIELD_W);
+                ui.label(RichText::new(text).size(12.5).color(p.text_dim)).on_hover_text(covered);
+            },
+        );
     }
 }
 

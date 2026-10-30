@@ -171,21 +171,23 @@ impl StewardGetApp {
                         .inner_margin(egui::Margin::symmetric(10, 7))
                         .show(ui, |ui| {
                             ui.set_min_width(ui.available_width());
-                            ui.horizontal(|ui| {
-                                toggle(ui, &mut rule.enabled, &p);
-                                action_picker(ui, i, &mut rule.action, &p);
-                                ui.add(
-                                    widgets::input(&mut rule.name).hint_text(rule.action.label()).desired_width(150.0),
-                                );
-                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let (enabled, action, name) = (&mut rule.enabled, &mut rule.action, &mut rule.name);
+                            widgets::split_row(
+                                ui,
+                                |ui| {
+                                    toggle(ui, enabled, &p);
+                                    action_picker(ui, i, action, &p);
+                                    ui.add(widgets::input(name).hint_text(action.label()).desired_width(150.0));
+                                },
+                                |ui| {
                                     if widgets::icon_button(ui, Icon::Trash, "Remove step", &p).clicked() {
                                         remove = Some(i);
                                     }
                                     if i > 0 && widgets::icon_button(ui, Icon::ArrowUp, "Run earlier", &p).clicked() {
                                         up = Some(i);
                                     }
-                                });
-                            });
+                                },
+                            );
                             action_params(ui, &p, rule);
                             ui.horizontal_wrapped(|ui| {
                                 ui.label(RichText::new("Only for").size(12.0).color(p.text_dim));
@@ -200,7 +202,7 @@ impl StewardGetApp {
                                     }
                                 }
                             });
-                            ui.horizontal(|ui| {
+                            ui.horizontal_wrapped(|ui| {
                                 ui.label(RichText::new("Extensions").size(12.0).color(p.text_dim));
                                 list_input(
                                     ui,
@@ -332,7 +334,7 @@ fn action_params(ui: &mut Ui, p: &crate::theme::Palette, rule: &mut PostRule) {
             );
         }
         PostAction::Extract { delete_archive } => {
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 toggle(ui, delete_archive, p);
                 ui.label(RichText::new("Delete the archive afterwards").size(12.5).color(p.text));
                 ui.label(RichText::new(".zip, .tar, .tar.gz and .tgz").size(12.0).color(p.text_dim));
@@ -503,7 +505,7 @@ fn tool_block(ui: &mut Ui, p: &crate::theme::Palette, tool: &ToolInfo, chosen: &
     }
 
     // For people who know where it is.
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         ui.label(RichText::new("Location (advanced)").size(12.0).color(p.text_dim));
         let mut text = chosen.as_ref().map(|d| d.display().to_string()).unwrap_or_default();
         let r = ui.add(widgets::input(&mut text).hint_text("automatic").desired_width(300.0));

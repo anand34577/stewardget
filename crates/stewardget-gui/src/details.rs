@@ -129,19 +129,21 @@ impl StewardGetApp {
                         .show(ui, |ui| self.info_grid(ui, &d));
                 });
                 ui.separator();
-                ui.allocate_ui_with_layout(vec2(avail * 0.34, height), column, |ui| self.map_block(ui, &d, height));
+                ui.allocate_ui_with_layout(vec2(avail * 0.34, height), column, |ui| {
+                    self.map_block(ui, &d, height, true)
+                });
                 ui.separator();
                 ui.allocate_ui_with_layout(vec2(ui.available_width(), height), column, |ui| {
-                    self.speed_block(ui, &d, height)
+                    self.speed_block(ui, &d, height, true)
                 });
             });
         } else {
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                self.map_block(ui, &d, 90.0);
+                self.map_block(ui, &d, 90.0, false);
                 ui.add_space(5.0);
                 self.info_grid(ui, &d);
                 ui.add_space(5.0);
-                self.speed_block(ui, &d, 120.0);
+                self.speed_block(ui, &d, 120.0, false);
             });
         }
     }
@@ -316,9 +318,9 @@ impl StewardGetApp {
             }
 
             ui.add_space(16.0);
-            self.map_block(ui, d, 84.0);
+            self.map_block(ui, d, 84.0, false);
             ui.add_space(14.0);
-            self.speed_block(ui, d, 120.0);
+            self.speed_block(ui, d, 120.0, false);
             ui.add_space(16.0);
             widgets::caption(ui, "Information", &p);
             ui.add_space(4.0);
@@ -383,7 +385,7 @@ impl StewardGetApp {
             }
         });
         ui.add_space(4.0);
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
             if kind == Problem::Changed
                 && widgets::button(ui, ButtonKind::Primary, Some(Icon::Play), "Resume anyway", true, &p).clicked()
@@ -419,6 +421,7 @@ impl StewardGetApp {
     fn info_grid(&mut self, ui: &mut Ui, d: &DownloadView) {
         let p = self.palette;
         egui::Grid::new(("stewardget-info", d.id)).num_columns(2).spacing([14.0, 6.0]).show(ui, |ui| {
+            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
             let key = |ui: &mut Ui, k: &str| {
                 ui.label(RichText::new(k).size(12.5).color(p.text_dim));
             };
@@ -556,7 +559,9 @@ impl StewardGetApp {
         });
     }
 
-    fn map_block(&mut self, ui: &mut Ui, d: &DownloadView, height: f32) {
+    /// `fit`: use the space left in the pane (the wide layout, whose columns have a
+    /// fixed height) instead of exactly `height` (the scrolling inspector).
+    fn map_block(&mut self, ui: &mut Ui, d: &DownloadView, height: f32, fit: bool) {
         let p = self.palette;
         ui.horizontal(|ui| {
             widgets::caption(ui, "CONNECTION MAP", &p);
@@ -566,7 +571,8 @@ impl StewardGetApp {
             });
         });
         // Fit the space left in the pane; never make the pane grow.
-        let map_h = (ui.available_height().min(height) - 24.0).clamp(28.0, 220.0);
+        let room = if fit { ui.available_height().min(height) } else { height };
+        let map_h = (room - 24.0).clamp(28.0, 220.0);
         widgets::connection_map(ui, d, &p, map_h);
         let text = if d.segments.is_empty() {
             if d.resumable || d.status == Status::Completed { String::new() } else { "single connection".into() }
@@ -576,7 +582,7 @@ impl StewardGetApp {
         ui.label(RichText::new(text).size(12.0).color(p.text_dim));
     }
 
-    fn speed_block(&mut self, ui: &mut Ui, d: &DownloadView, height: f32) {
+    fn speed_block(&mut self, ui: &mut Ui, d: &DownloadView, height: f32, fit: bool) {
         let p = self.palette;
         ui.horizontal(|ui| {
             widgets::caption(ui, "SPEED", &p);
@@ -606,7 +612,8 @@ impl StewardGetApp {
             ui.label(RichText::new(text).color(p.text_dim));
             return;
         }
-        let size = vec2(ui.available_width(), (ui.available_height().min(height) - 6.0).clamp(40.0, 220.0));
+        let room = if fit { ui.available_height().min(height) } else { height };
+        let size = vec2(ui.available_width(), (room - 6.0).clamp(40.0, 220.0));
         widgets::area_chart(ui, &d.history, size, p.accent2, &p);
     }
 }
