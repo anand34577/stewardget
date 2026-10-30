@@ -18,6 +18,7 @@ mod media;
 mod menubar;
 mod notify;
 mod overview;
+mod palette;
 mod progress;
 mod queues;
 mod settings;
@@ -26,6 +27,7 @@ mod table;
 mod theme;
 mod toolbox;
 mod tray;
+mod updates;
 mod widgets;
 
 use std::time::Duration;

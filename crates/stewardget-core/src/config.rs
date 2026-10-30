@@ -239,6 +239,8 @@ pub struct Config {
     pub api_token: Option<String>,
     /// Offer to download file links copied to the clipboard (desktop app).
     pub clipboard_monitor: bool,
+    /// Look for a newer release on startup (one request to the project's release page). Off by default.
+    pub check_updates: bool,
     /// Accent colour of the desktop app.
     pub accent: Accent,
     /// Interface zoom of the desktop app (1.0 = 100 %).
@@ -367,6 +369,7 @@ impl Default for Config {
             api_port: DEFAULT_API_PORT,
             api_token: None,
             clipboard_monitor: true,
+            check_updates: false,
             accent: Accent::Teal,
             ui_scale: 1.0,
             auto_retry: 3,

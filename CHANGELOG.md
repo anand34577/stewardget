@@ -6,6 +6,23 @@ All notable changes to StewardGet are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-30
+
+### Added
+- **Optional update check** (Settings › Privacy & data), off by default. When on, StewardGet asks the project's public release page for the newest version number once at startup, or when you press *Check now*; it sends no identifiers and installs nothing.
+- **Command palette** (Ctrl+K): jump to any page, setting, action or download from one box.
+- **Settings search**: type in the box at the top of Settings to find an option in any tab.
+- **Undo for Remove**: removing idle downloads no longer asks; an Undo bar stays for 8 seconds. Running downloads and deleting files still ask first.
+- **Retry all** button in the Failed view for downloads that can simply be retried.
+- Empty views now say why they are empty and offer the next step (Connect browser, Import links, Clear search, Show all).
+- Plain-language hints for network, timeout, busy-server, disk and bad-link failures, also in the progress window.
+
+### Changed
+- Text is never smaller than 12 px. A test now checks text contrast in every theme and accent.
+- The idle window redraws less often to save battery.
+- The browser extension popup keeps filters and connection settings in a collapsible section.
+- `stewardget add` mentions `stewardget serve` when the app isn't running.
+
 ## [0.8.0] - 2026-10-30
 
 - Adding a link whose file is already downloaded now offers three choices: open the existing file in its folder, save with another name, or replace it (a per-download choice; the setting stays the default).

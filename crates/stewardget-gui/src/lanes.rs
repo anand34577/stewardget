@@ -25,7 +25,7 @@ impl StewardGetApp {
                     if let Some(n) = tuning {
                         ui.label(
                             RichText::new(format!("Tuning: {n} of {} connections", self.engine.config().connections))
-                                .size(11.5)
+                                .size(12.0)
                                 .color(p.accent2),
                         );
                     }
@@ -48,7 +48,7 @@ impl StewardGetApp {
                         widgets::pill(ui, "mirror", p.accent);
                     }
                     if !lane.mirror && !lane.host.is_empty() {
-                        ui.label(RichText::new(&lane.host).size(11.5).color(p.text_dim));
+                        ui.label(RichText::new(&lane.host).size(12.0).color(p.text_dim));
                     }
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         let text = if lane.failed {
@@ -66,7 +66,7 @@ impl StewardGetApp {
                 });
                 widgets::share_bar(ui, (lane.speed / top) as f32, color, &p);
                 if let Some(why) = lane.reason.as_ref().filter(|_| lane.failed) {
-                    ui.label(RichText::new(why).size(11.5).color(p.red));
+                    ui.label(RichText::new(why).size(12.0).color(p.red));
                 }
                 ui.add_space(2.0);
             }
@@ -100,11 +100,11 @@ impl StewardGetApp {
                                     String::new()
                                 }
                             ))
-                            .size(11.5)
+                            .size(12.0)
                             .color(p.text_dim),
                         );
                         ui.label(
-                            RichText::new(format!("{} so far", format_bytes(link.bytes))).size(11.5).color(p.text_dim),
+                            RichText::new(format!("{} so far", format_bytes(link.bytes))).size(12.0).color(p.text_dim),
                         );
                     });
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {

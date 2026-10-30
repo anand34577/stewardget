@@ -99,6 +99,15 @@ impl AfterAll {
     }
 }
 
+/// Downloads removed from the list a moment ago; they are only deleted for real
+/// when the time is up, so "Undo" can bring them back untouched.
+pub struct PendingRemoval {
+    pub ids: Vec<DownloadId>,
+    pub since: Instant,
+}
+
+const UNDO_WINDOW: Duration = Duration::from_secs(8);
+
 pub struct Toast {
     pub text: String,
     pub color: Color32,
@@ -139,8 +148,14 @@ pub struct StewardGetApp {
     pub properties: Option<PropertiesDialog>,
     pub settings_draft: Option<Config>,
     pub settings_tab: crate::settings::Tab,
+    pub settings_search: String,
+    pub updates: crate::updates::Updates,
+    pub palette_box: Option<crate::palette::Palette>,
     pub limit_text: String,
     pub toasts: Vec<Toast>,
+    pub pending_removal: Option<PendingRemoval>,
+    /// Bumped when the set of hidden (pending removal) downloads changes.
+    pub hidden_gen: u64,
     /// Open progress windows, one per download.
     pub progress: Vec<crate::progress::ProgressWindow>,
     /// The progress windows show the parts table (IDM's "Show details").
@@ -294,8 +309,13 @@ impl StewardGetApp {
             properties: None,
             settings_draft: None,
             settings_tab: crate::settings::Tab::General,
+            settings_search: String::new(),
+            updates: Default::default(),
+            palette_box: None,
             limit_text: String::new(),
             toasts: Vec::new(),
+            pending_removal: None,
+            hidden_gen: 0,
             progress: Vec::new(),
             progress_details: false,
             shortcuts_open: false,
@@ -379,6 +399,7 @@ impl StewardGetApp {
     pub fn visible_rows(&self) -> std::rc::Rc<Vec<usize>> {
         let key = RowsKey {
             snap: self.snap_gen,
+            hidden: self.hidden_gen,
             filter: self.filter,
             search: self.search.clone(),
             sort: (self.table.sort, self.table.ascending),
@@ -392,6 +413,7 @@ impl StewardGetApp {
         let all = &self.snap.downloads;
         let mut rows: Vec<usize> = (0..all.len())
             .filter(|&i| self.filter.matches(&all[i]))
+            .filter(|&i| !self.pending_removal.as_ref().is_some_and(|p| p.ids.contains(&all[i].id)))
             .filter(|&i| {
                 needle.is_empty()
                     || all[i].file_name.to_lowercase().contains(&needle)
@@ -462,6 +484,7 @@ impl StewardGetApp {
 
     /// Closes the window for real: no "keep running" prompt.
     pub fn quit(&mut self, ctx: &egui::Context) {
+        self.commit_removal();
         self.quitting = true;
         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
     }
@@ -544,8 +567,32 @@ impl StewardGetApp {
 
     pub fn remove_selected(&mut self, delete_files: bool) {
         let views: Vec<DownloadView> = self.selected_views().into_iter().cloned().collect();
-        if !views.is_empty() {
+        if views.is_empty() {
+            return;
+        }
+        // Nothing is lost by removing idle downloads (partial data stays), so skip the
+        // question and offer Undo instead. Running ones and file deletion still ask.
+        if !delete_files && views.iter().all(|d| !d.status.is_active() && d.retry_in.is_none()) {
+            self.commit_removal();
+            for d in &views {
+                self.selection.remove(&d.id);
+            }
+            self.pending_removal =
+                Some(PendingRemoval { ids: views.iter().map(|d| d.id).collect(), since: Instant::now() });
+            self.hidden_gen += 1;
+        } else {
             self.confirm = Some(ConfirmRemove::new(&views, delete_files));
+        }
+    }
+
+    /// Really removes what [`Self::remove_selected`] hid.
+    pub fn commit_removal(&mut self) {
+        if let Some(p) = self.pending_removal.take() {
+            for id in p.ids {
+                let r = self.engine.remove(id, false);
+                self.report(r);
+            }
+            self.hidden_gen += 1;
         }
     }
 
@@ -766,12 +813,20 @@ impl StewardGetApp {
             || self.close_prompt.is_some()
             || self.capture.is_some()
             || self.shortcuts_open
+            || self.palette_box.is_some()
     }
 
     fn shortcuts(&mut self, ctx: &egui::Context) {
         if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::Q)) {
             self.quit(ctx);
             return;
+        }
+        if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::K)) {
+            if self.palette_box.is_some() {
+                self.palette_box = None;
+            } else {
+                self.open_palette();
+            }
         }
         if ctx.input(|i| i.key_pressed(egui::Key::F1)) {
             self.shortcuts_open = !self.shortcuts_open;
@@ -1036,7 +1091,7 @@ impl StewardGetApp {
         }
         ui.separator();
         ui.add_space(2.0);
-        ui.label(RichText::new("   When all downloads finish").size(11.5).color(p.text_dim));
+        ui.label(RichText::new("   When all downloads finish").size(12.0).color(p.text_dim));
         for action in AfterAll::ALL {
             if menu_row(ui, &p, None, action.label(), true, self.after_all == action) {
                 self.after_all = action;
@@ -1144,7 +1199,7 @@ impl StewardGetApp {
                     .add(
                         egui::Label::new(
                             RichText::new(concat!("StewardGet v", env!("CARGO_PKG_VERSION")))
-                                .size(11.5)
+                                .size(12.0)
                                 .color(p.text_dim),
                         )
                         .sense(Sense::click()),
@@ -1348,7 +1403,45 @@ impl StewardGetApp {
         }
     }
 
+    fn draw_undo_bar(&mut self, ctx: &egui::Context) {
+        let Some(pending) = &self.pending_removal else { return };
+        if pending.since.elapsed() >= UNDO_WINDOW {
+            self.commit_removal();
+            return;
+        }
+        let p = self.palette;
+        let n = pending.ids.len();
+        let mut undo = false;
+        egui::Area::new(egui::Id::unique("stewardget-undo"))
+            .anchor(Align2::CENTER_BOTTOM, vec2(0.0, -42.0))
+            .order(egui::Order::Foreground)
+            .show(ctx, |ui| {
+                Frame::new()
+                    .fill(p.card)
+                    .stroke(Stroke::new(1.0, p.border))
+                    .corner_radius(CornerRadius::same(10))
+                    .inner_margin(Margin::symmetric(14, 8))
+                    .shadow(p.shadow(4, 18))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            let what =
+                                if n == 1 { "Download removed".to_owned() } else { format!("{n} downloads removed") };
+                            ui.label(RichText::new(what).color(p.text));
+                            if widgets::button(ui, ButtonKind::Ghost, Some(Icon::Retry), "Undo", true, &p).clicked() {
+                                undo = true;
+                            }
+                        });
+                    });
+            });
+        if undo {
+            self.pending_removal = None;
+            self.hidden_gen += 1;
+        }
+        ctx.request_repaint_after(Duration::from_millis(250));
+    }
+
     fn draw_toasts(&mut self, ctx: &egui::Context) {
+        self.draw_undo_bar(ctx);
         self.toasts.retain(|t| t.born.elapsed() < Duration::from_millis(4500));
         if self.toasts.is_empty() {
             return;
@@ -1388,6 +1481,7 @@ impl StewardGetApp {
 #[derive(PartialEq)]
 struct RowsKey {
     snap: u64,
+    hidden: u64,
     filter: ListFilter,
     search: String,
     sort: (SortKey, bool),
@@ -1498,7 +1592,7 @@ fn menu_row(ui: &mut Ui, p: &Palette, icon: Option<Icon>, text: &str, enabled: b
             rect.right_center() - vec2(10.0, 0.0),
             Align2::RIGHT_CENTER,
             s,
-            FontId::proportional(11.5),
+            FontId::proportional(12.0),
             p.text_dim,
         );
     }
@@ -1551,7 +1645,7 @@ fn nav_item(
                 rect.right_center() - vec2(10.0, 0.0),
                 Align2::RIGHT_CENTER,
                 count.to_string(),
-                FontId::proportional(11.5),
+                FontId::proportional(12.0),
                 p.text_dim,
             );
         }
@@ -1806,6 +1900,7 @@ impl eframe::App for StewardGetApp {
             self.apply_appearance(&ctx);
         }
         self.handle_close(&ctx);
+        self.poll_updates(&ctx);
         self.dropped_files(&ctx);
         self.shortcuts(&ctx);
         let p = self.palette;
@@ -1880,6 +1975,7 @@ impl eframe::App for StewardGetApp {
         self.close_prompt(&ctx);
         self.capture_window(&ctx);
         self.shortcuts_dialog(&ctx);
+        self.palette_dialog(&ctx);
         self.progress_windows(&ctx);
         self.drag_overlay(&ctx);
         self.draw_toasts(&ctx);
@@ -1949,7 +2045,7 @@ impl eframe::App for StewardGetApp {
         let wait = match (busy, away) {
             (true, false) => 120,
             (true, true) => 500,
-            (false, false) => 600,
+            (false, false) => 1500,
             (false, true) if self.cfg.clipboard_monitor => 1000,
             (false, true) => 5000,
         };

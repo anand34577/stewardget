@@ -184,7 +184,7 @@ impl StewardGetApp {
                         rect.left_top() + vec2(34.0, 41.0),
                         egui::Align2::LEFT_CENTER,
                         insight.headline,
-                        egui::FontId::proportional(11.0),
+                        egui::FontId::proportional(12.0),
                         c,
                     );
                 }

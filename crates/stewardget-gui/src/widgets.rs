@@ -150,7 +150,7 @@ pub fn area_chart(ui: &mut Ui, values: &[f32], size: Vec2, color: Color32, p: &P
         );
     }
     if values.len() < 2 {
-        painter.text(rect.center(), Align2::CENTER_CENTER, "no data yet", FontId::proportional(11.5), p.text_dim);
+        painter.text(rect.center(), Align2::CENTER_CENTER, "no data yet", FontId::proportional(12.0), p.text_dim);
         return response;
     }
     let max = values.iter().copied().fold(1.0f32, f32::max) * 1.15;
@@ -202,7 +202,7 @@ pub fn area_chart(ui: &mut Ui, values: &[f32], size: Vec2, color: Color32, p: &P
                 pt + vec2(0.0, -8.0),
                 align,
                 format!("{} · {ago:.0}s ago", format_speed(v as f64)),
-                FontId::proportional(11.0),
+                FontId::proportional(12.0),
                 p.text,
             );
         }
@@ -247,7 +247,7 @@ pub fn day_bars(ui: &mut Ui, days: &[DayTotal], p: &Palette, height: f32) {
                 pos2(x, bar.top() - 3.0),
                 Align2::CENTER_BOTTOM,
                 format_bytes(d.bytes),
-                FontId::proportional(11.0),
+                FontId::proportional(12.0),
                 p.text,
             );
         }
@@ -284,7 +284,7 @@ pub fn hour_bars(ui: &mut Ui, hours: &[u32; 24], p: &Palette, height: f32) {
                 pos2(x, bar.top() - 3.0),
                 Align2::CENTER_BOTTOM,
                 format!("{n} · {h:02}:00"),
-                FontId::proportional(11.0),
+                FontId::proportional(12.0),
                 p.text,
             );
         }
@@ -491,7 +491,7 @@ pub fn folder_field(ui: &mut Ui, dir: &mut String, recent: &[std::path::PathBuf]
             let r = button(ui, ButtonKind::Ghost, Some(Icon::History), "", true, p).on_hover_text("Recent folders");
             egui::Popup::menu(&r).show(|ui| {
                 ui.set_min_width(300.0);
-                ui.label(egui::RichText::new("Recent folders").size(11.5).color(p.text_dim));
+                ui.label(egui::RichText::new("Recent folders").size(12.0).color(p.text_dim));
                 for folder in recent {
                     let text = folder.display().to_string();
                     if ui.selectable_label(*dir == text, &text).clicked() {
@@ -624,11 +624,11 @@ pub fn section(ui: &mut Ui, text: &str, p: &Palette) -> bool {
 pub fn stat_tile(ui: &mut Ui, p: &Palette, label: &str, value: &str, caption_text: &str, color: Color32) {
     card(p).show(ui, |ui| {
         ui.set_min_width(ui.available_width());
-        ui.label(egui::RichText::new(label).size(11.5).color(p.text_dim));
+        ui.label(egui::RichText::new(label).size(12.0).color(p.text_dim));
         ui.label(egui::RichText::new(value).size(17.0).family(crate::theme::semi()).color(color));
         // Always one line, so tiles side by side have the same height.
         let caption_text = if caption_text.is_empty() { "\u{a0}" } else { caption_text };
-        ui.label(egui::RichText::new(caption_text).size(11.0).color(p.text_dim));
+        ui.label(egui::RichText::new(caption_text).size(12.0).color(p.text_dim));
     });
 }
 
@@ -639,7 +639,7 @@ pub fn dot(painter: &egui::Painter, center: Pos2, color: Color32) {
 
 /// Pill-shaped status badge.
 pub fn pill(ui: &mut Ui, text: &str, color: Color32) -> Response {
-    let galley = ui.painter().layout_no_wrap(text.to_owned(), FontId::proportional(11.5), color);
+    let galley = ui.painter().layout_no_wrap(text.to_owned(), FontId::proportional(12.0), color);
     let size = galley.size() + vec2(14.0, 4.0);
     let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
     ui.painter().rect_filled(rect, CornerRadius::same(255), color.gamma_multiply(0.15));
