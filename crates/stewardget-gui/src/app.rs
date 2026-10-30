@@ -381,6 +381,22 @@ impl StewardGetApp {
         self.toasts.push(Toast { text: text.into(), color, born: Instant::now() });
     }
 
+    /// Opens a file or folder with the system's default program; says so when that fails.
+    pub fn open_path(&mut self, path: &std::path::Path) {
+        if let Err(e) = stewardget_core::util::open_with_system(path) {
+            let red = self.palette.red;
+            self.toast(format!("Couldn't open it: {e}"), red);
+        }
+    }
+
+    /// Shows a file in its folder; says so when that isn't possible.
+    pub fn reveal(&mut self, path: &std::path::Path) {
+        if let Err(e) = stewardget_core::util::reveal_in_file_manager(path) {
+            let red = self.palette.red;
+            self.toast(format!("Couldn't open the folder: {e}"), red);
+        }
+    }
+
     pub fn report(&mut self, result: Result<(), stewardget_core::Error>) {
         if let Err(e) = result {
             let red = self.palette.red;
@@ -916,7 +932,7 @@ impl StewardGetApp {
             && let Some(d) = self.single_selected()
         {
             if d.status == Status::Completed {
-                let _ = stewardget_core::util::open_with_system(&d.path);
+                self.open_path(&d.path);
             } else {
                 self.open_progress(d.id);
             }

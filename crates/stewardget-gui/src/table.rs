@@ -455,7 +455,7 @@ impl StewardGetApp {
         if response.double_clicked() {
             // Like IDM: open the finished file, or watch the download in its own window.
             if d.status == Status::Completed {
-                let _ = stewardget_core::util::open_with_system(&d.path);
+                self.open_path(&d.path);
             } else {
                 self.open_progress(d.id);
             }
@@ -471,11 +471,11 @@ impl StewardGetApp {
         let exists = file_exists(&d.path);
         if !many {
             if menu_item(ui, &p, Icon::External, "Open", d.status == Status::Completed && exists) {
-                let _ = stewardget_core::util::open_with_system(&d.path);
+                self.open_path(&d.path);
                 ui.close();
             }
             if menu_item(ui, &p, Icon::FolderOpen, "Show in folder", true) {
-                let _ = stewardget_core::util::reveal_in_file_manager(&d.path);
+                self.reveal(&d.path);
                 ui.close();
             }
             ui.separator();

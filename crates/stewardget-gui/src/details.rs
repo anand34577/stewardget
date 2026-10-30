@@ -56,13 +56,13 @@ impl StewardGetApp {
                     self.open_properties(&d);
                 }
                 if widgets::icon_button(ui, Icon::FolderOpen, "Show in folder", &p).clicked() {
-                    let _ = stewardget_core::util::reveal_in_file_manager(&d.path);
+                    self.reveal(&d.path);
                 }
                 if d.status == Status::Completed
                     && crate::table::file_exists(&d.path)
                     && widgets::button(ui, ButtonKind::Tool, Some(Icon::External), "Open", true, &p).clicked()
                 {
-                    let _ = stewardget_core::util::open_with_system(&d.path);
+                    self.open_path(&d.path);
                 }
                 if d.status.can_pause()
                     && widgets::button(ui, ButtonKind::Tool, Some(Icon::Pause), "Pause", true, &p).clicked()

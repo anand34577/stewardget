@@ -122,42 +122,120 @@ pub fn format_relative(unix_secs: u64, now: u64) -> String {
 /// Opens the system file manager with `path` selected (or its folder opened).
 pub fn reveal_in_file_manager(path: &Path) -> std::io::Result<()> {
     use std::process::Command;
+    let path = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    let exists = path.exists();
+    // A file that is gone: open the closest folder that is still there.
+    let folder = path.ancestors().skip(1).find(|p| p.is_dir()).unwrap_or(&path).to_path_buf();
     #[cfg(target_os = "windows")]
     {
-        if path.exists() {
-            let mut arg = std::ffi::OsString::from("/select,");
-            arg.push(path);
-            Command::new("explorer").arg(arg).spawn()?;
+        use std::os::windows::process::CommandExt;
+        if exists {
+            // Explorer wants `/select,"C:\a b\file"` with the quotes around the path only; a
+            // normal argument would be quoted as a whole, and Explorer would open Documents.
+            Command::new("explorer").raw_arg(explorer_select_arg(&path)).spawn().map(reap)?;
         } else {
-            Command::new("explorer").arg(path.parent().unwrap_or(path)).spawn()?;
+            Command::new("explorer").arg(windows_path(&folder)).spawn().map(reap)?;
         }
     }
     #[cfg(target_os = "macos")]
     {
-        if path.exists() {
-            Command::new("open").arg("-R").arg(path).spawn()?;
+        let mut cmd = Command::new("open");
+        if exists {
+            cmd.arg("-R").arg(&path);
         } else {
-            Command::new("open").arg(path.parent().unwrap_or(path)).spawn()?;
+            cmd.arg(&folder);
         }
+        cmd.spawn().map(reap)?;
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
-        let dir = if path.is_dir() { path } else { path.parent().unwrap_or(path) };
-        Command::new("xdg-open").arg(dir).spawn()?;
+        // The file managers that implement the freedesktop interface (Nautilus, Dolphin,
+        // Nemo, Thunar, PCManFM-Qt…) can open the folder with the file selected.
+        if exists && show_item_via_dbus(&path) {
+            return Ok(());
+        }
+        let dir = if path.is_dir() { path.clone() } else { folder };
+        Command::new("xdg-open").arg(dir).spawn().map(reap)?;
     }
     Ok(())
+}
+
+/// Waits for a started helper (an opener, a file manager) in the background so it
+/// doesn't linger as a zombie process on Linux and macOS.
+fn reap(mut child: std::process::Child) {
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+}
+
+/// Asks the desktop's file manager to show `path` selected. `false` when nothing
+/// answered (no D-Bus, no such file manager), so the caller can fall back.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn show_item_via_dbus(path: &Path) -> bool {
+    use std::process::{Command, Stdio};
+    let uri = file_uri(path);
+    let mut child = match Command::new("dbus-send")
+        .args([
+            "--session",
+            "--print-reply=literal",
+            "--reply-timeout=1500",
+            "--dest=org.freedesktop.FileManager1",
+            "/org/freedesktop/FileManager1",
+            "org.freedesktop.FileManager1.ShowItems",
+        ])
+        .arg(format!("array:string:{uri}"))
+        .arg("string:")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(_) => return false,
+    };
+    child.wait().is_ok_and(|s| s.success())
+}
+
+/// `file:///a%20b/c` for a path, as D-Bus file managers want it.
+#[cfg_attr(not(all(unix, not(target_os = "macos"))), allow(dead_code))]
+fn file_uri(path: &Path) -> String {
+    let text = path.display().to_string().replace(std::path::MAIN_SEPARATOR, "/");
+    let mut uri = String::from("file://");
+    if !text.starts_with('/') {
+        uri.push('/');
+    }
+    for byte in text.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'/' => uri.push(byte as char),
+            b => uri.push_str(&format!("%{b:02X}")),
+        }
+    }
+    uri
+}
+
+/// `C:\a b\file` with backslashes only, which is all Explorer understands.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn windows_path(path: &Path) -> String {
+    path.display().to_string().replace('/', "\\")
+}
+
+/// The command line Explorer needs to open a folder with `path` selected.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn explorer_select_arg(path: &Path) -> String {
+    format!("/select,\"{}\"", windows_path(path))
 }
 
 /// Opens a file with the system's default application.
 pub fn open_with_system(path: &Path) -> std::io::Result<()> {
     #[cfg(target_os = "windows")]
     shell_open(path.as_os_str())?;
+    // An absolute path can't be mistaken for an option by the opener.
     #[cfg(not(target_os = "windows"))]
-    use std::process::Command;
+    let path = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
     #[cfg(target_os = "macos")]
-    Command::new("open").arg(path).spawn()?;
+    std::process::Command::new("open").arg(&path).spawn().map(reap)?;
     #[cfg(all(unix, not(target_os = "macos")))]
-    Command::new("xdg-open").arg(path).spawn()?;
+    std::process::Command::new("xdg-open").arg(&path).spawn().map(reap)?;
     Ok(())
 }
 
@@ -165,12 +243,10 @@ pub fn open_with_system(path: &Path) -> std::io::Result<()> {
 pub fn open_url(url: &str) -> std::io::Result<()> {
     #[cfg(target_os = "windows")]
     shell_open(std::ffi::OsStr::new(url))?;
-    #[cfg(not(target_os = "windows"))]
-    use std::process::Command;
     #[cfg(target_os = "macos")]
-    Command::new("open").arg(url).spawn()?;
+    std::process::Command::new("open").arg(url).spawn().map(reap)?;
     #[cfg(all(unix, not(target_os = "macos")))]
-    Command::new("xdg-open").arg(url).spawn()?;
+    std::process::Command::new("xdg-open").arg(url).spawn().map(reap)?;
     Ok(())
 }
 
@@ -417,7 +493,22 @@ pub fn power(action: PowerAction) -> std::io::Result<()> {
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
-    cmd.spawn().map(drop)
+    // A command that fails at once (no systemd, no permission) must be reported, not
+    // look like it worked; one still running after a moment is taken as under way.
+    let program = cmd.get_program().to_string_lossy().into_owned();
+    let mut child = cmd.spawn()?;
+    let started = std::time::Instant::now();
+    loop {
+        match child.try_wait()? {
+            Some(status) if status.success() => return Ok(()),
+            Some(status) => return Err(std::io::Error::other(format!("`{program}` failed ({status})"))),
+            None if started.elapsed() > std::time::Duration::from_secs(1) => {
+                reap(child);
+                return Ok(());
+            }
+            None => std::thread::sleep(std::time::Duration::from_millis(30)),
+        }
+    }
 }
 
 /// Splits a command line into arguments: whitespace separates them, double
@@ -522,6 +613,22 @@ fn substitute(text: &str, values: &[(&str, &str)]) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn file_uris_are_percent_encoded() {
+        use super::file_uri;
+        assert_eq!(
+            file_uri(std::path::Path::new("/home/me/My Files/r&d é.pdf")),
+            "file:///home/me/My%20Files/r%26d%20%C3%A9.pdf"
+        );
+    }
+
+    #[test]
+    fn explorer_gets_the_path_in_quotes_with_backslashes() {
+        use super::explorer_select_arg;
+        let arg = explorer_select_arg(std::path::Path::new("C:/Users/me/My Files/report v2.pdf"));
+        assert_eq!(arg, r#"/select,"C:\Users\me\My Files\report v2.pdf""#);
+    }
+
     #[test]
     fn tokens_are_random_and_compared_fully() {
         use super::{random_token, secrets_equal};

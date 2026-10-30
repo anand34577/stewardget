@@ -333,7 +333,7 @@ impl StewardGetApp {
                 }
             }
             RowAction::Reveal(path) => {
-                let _ = stewardget_core::util::reveal_in_file_manager(&path);
+                self.reveal(&path);
             }
             RowAction::Again(url, file_name) => {
                 let mut new = NewDownload::new(url);

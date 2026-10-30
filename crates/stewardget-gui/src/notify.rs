@@ -21,14 +21,39 @@ pub fn show(summary: String, body: String) {
     });
 }
 
-/// The system's "asterisk" sound, for a finished download. Silent where there is
-/// no simple way to play one.
+/// The system's "asterisk" sound, for a finished download (a freedesktop "complete"
+/// sound on Linux, Glass on macOS). Silent where no player is installed.
 pub fn beep() {
     #[cfg(windows)]
     // SAFETY: plain Win32 call without pointers; 0x40 is MB_ICONASTERISK.
     unsafe {
         windows_sys::Win32::System::Diagnostics::Debug::MessageBeep(0x40);
     }
+    #[cfg(not(windows))]
+    std::thread::spawn(|| {
+        use std::process::{Command, Stdio};
+        // The first player that exists wins; none of them is required.
+        let players: &[(&str, &[&str])] = &[
+            #[cfg(target_os = "macos")]
+            ("afplay", &["/System/Library/Sounds/Glass.aiff"]),
+            #[cfg(not(target_os = "macos"))]
+            ("canberra-gtk-play", &["-i", "complete"]),
+            #[cfg(not(target_os = "macos"))]
+            ("paplay", &["/usr/share/sounds/freedesktop/stereo/complete.oga"]),
+        ];
+        for (program, args) in players {
+            let started = Command::new(program)
+                .args(*args)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn();
+            if let Ok(mut child) = started {
+                let _ = child.wait();
+                return;
+            }
+        }
+    });
 }
 
 /// Whether the installer's Start-menu shortcut (which registers [`APP_ID`]) is

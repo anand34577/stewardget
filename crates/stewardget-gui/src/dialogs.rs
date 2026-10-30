@@ -58,7 +58,7 @@ pub(crate) fn note(ui: &mut Ui, text: impl Into<String>, color: Color32) {
 }
 
 /// A tinted inline message box.
-fn callout(ui: &mut Ui, p: &Palette, color: Color32, icon: Icon, add: impl FnOnce(&mut Ui)) {
+pub(crate) fn callout(ui: &mut Ui, p: &Palette, color: Color32, icon: Icon, add: impl FnOnce(&mut Ui)) {
     Frame::new()
         .fill(color.gamma_multiply(if p.dark { 0.12 } else { 0.08 }))
         .stroke(Stroke::new(1.0, color.gamma_multiply(0.35)))
@@ -302,7 +302,9 @@ impl StewardGetApp {
         // the history remembers it, or the folder holds one by that name.
         let conflict: Option<PathBuf> = if links.len() == 1 {
             let by_name = match dialog.checked() {
-                Some(Ok(info)) => Some(PathBuf::from(dialog.dir.trim()).join(info.file_name)),
+                Some(Ok(info)) => {
+                    Some(PathBuf::from(dialog.dir.trim()).join(stewardget_core::filename::sanitize(&info.file_name)))
+                }
                 _ => None,
             };
             existing
@@ -568,7 +570,7 @@ Connections are shared across all of them.",
         });
 
         if let Some(path) = open_existing {
-            let _ = stewardget_core::util::reveal_in_file_manager(&path);
+            self.reveal(&path);
             return;
         }
         if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::Enter)) {

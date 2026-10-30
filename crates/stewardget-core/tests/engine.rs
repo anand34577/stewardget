@@ -1140,7 +1140,11 @@ async fn ftp_links_download_in_parallel_segments() {
     let port = serve_ftp(Arc::clone(&data), Arc::clone(&logins)).await;
     let dir = temp_dir("ftp");
     let engine = Engine::start(EngineOptions::in_memory().with_config(config(&dir))).unwrap();
-    let id = engine.add(NewDownload::new(format!("ftp://127.0.0.1:{port}/pub/archive%20one.bin"))).unwrap();
+    // A fixed connection count switches the auto-tuner off; otherwise a fast loopback
+    // transfer can finish before it has opened more than two connections.
+    let mut new = NewDownload::new(format!("ftp://127.0.0.1:{port}/pub/archive%20one.bin"));
+    new.options.connections = Some(8);
+    let id = engine.add(new).unwrap();
     assert_eq!(wait_for(&engine, id, Status::Completed, 60).await, Status::Completed);
     let view = engine.download(id).unwrap();
     assert_eq!(view.file_name, "archive one.bin");

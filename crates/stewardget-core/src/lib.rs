@@ -43,7 +43,7 @@ mod crawl;
 mod engine;
 mod error;
 pub mod extension;
-mod filename;
+pub mod filename;
 mod fsio;
 mod ftp;
 mod history;
