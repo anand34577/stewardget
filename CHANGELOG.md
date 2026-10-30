@@ -6,6 +6,8 @@ All notable changes to StewardGet are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-30
+
 ### Added
 - **Optional update check** (Settings › Privacy & data), off by default. When on, StewardGet asks the project's public release page for the newest version number once at startup, or when you press *Check now*; it sends no identifiers and installs nothing.
 - **Command palette** (Ctrl+K): jump to any page, setting, action or download from one box.
