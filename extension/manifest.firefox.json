@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "StewardGet Download Manager",
   "short_name": "StewardGet",
-  "version": "0.11.0",
+  "version": "0.11.1",
   "description": "Send browser downloads to StewardGet: segmented, resumable, fast. Includes expired-link recapture. No tracking.",
   "icons": {
     "16": "icons/icon16.png",

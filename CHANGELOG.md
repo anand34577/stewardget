@@ -6,6 +6,19 @@ All notable changes to StewardGet are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-10-30
+
+### Changed
+- The README screenshots show the current look: overview, downloads with the inspector, cards, history, queues, statistics, notifications, categories, tools and the light theme.
+- **Notifications have their own settings page.** *Settings > Notifications* holds the desktop notification, sound and Download complete switches and the Gotify, ntfy and email destinations; *General* keeps only general options. Which queues a destination covers is now chosen in each queue's own window.
+- **The New download and progress windows follow the title bar setting.** With the system title bar off, they get StewardGet's own bar too.
+
+### Fixed
+- The progress window is compact again: the status, size, rate and time lines no longer have large gaps between them, so the window is shorter.
+- "1 selected" above the list no longer wraps one letter per line when the details panel is open.
+- The New download window no longer grows past its edges when "already downloaded" options don't fit; they wrap, so Browse and Download stay visible.
+- A long *Send test* error no longer runs under the Remove button; it is shown in full under the buttons.
+
 ## [0.11.0] - 2026-10-30
 
 ### Added
