@@ -21,7 +21,7 @@ use crate::icons::{self, Icon};
 use crate::queues::QueueDialog;
 use crate::table::{SortKey, TableState};
 use crate::theme::{self, Palette};
-use crate::widgets::{self, ButtonKind};
+use crate::widgets::{self, ButtonKind, lerp_color};
 
 /// Downloads that appear together and still get a progress window each;
 /// more than this (a page's worth of links) get none.
@@ -941,96 +941,32 @@ impl StewardGetApp {
 
     // ---- frame ---------------------------------------------------------------------
 
+    /// The header above the canvas: menus, search and the main actions. What to
+    /// do with the selected downloads lives in the downloads page itself.
     fn toolbar(&mut self, ui: &mut Ui, compact: bool, collapsed: bool) {
         let p = self.palette;
-        let sel = self.selected_views();
-        let can_resume = sel.iter().any(|d| d.status.can_resume());
-        let can_pause = sel.iter().any(|d| d.status.can_pause());
-        let has_sel = !sel.is_empty();
-        let can_refresh = sel.len() == 1 && sel[0].status != Status::Completed;
-        let label = |s: &'static str| if compact { "" } else { s };
         ui.horizontal_centered(|ui| {
-            ui.spacing_mut().item_spacing.x = 2.0;
+            ui.spacing_mut().item_spacing.x = 4.0;
             let tip = if collapsed { "Expand sidebar" } else { "Collapse sidebar" };
             if widgets::icon_button(ui, Icon::Sidebar, tip, &p).clicked() {
                 self.sidebar_pref = Some(!collapsed);
             }
-            ui.add_space(6.0);
-            if widgets::button(ui, ButtonKind::Primary, Some(Icon::Plus), "Add URL", true, &p)
-                .on_hover_text("Add downloads (Ctrl+N)")
-                .clicked()
-            {
-                self.open_add(None);
-            }
-            if widgets::button(ui, ButtonKind::Tool, Some(Icon::Globe), label("Grab"), true, &p)
-                .on_hover_text("Find the files linked from a web page")
-                .clicked()
-            {
-                self.grab_dialog = Some(crate::grab::GrabDialog::new(None));
-            }
-            ui.add_space(5.0);
-            if widgets::button(ui, ButtonKind::Tool, Some(Icon::Play), label("Resume"), can_resume, &p)
-                .on_hover_text("Resume selected (Space)")
-                .clicked()
-            {
-                self.resume_selected();
-            }
-            if widgets::button(ui, ButtonKind::Tool, Some(Icon::Pause), label("Pause"), can_pause, &p)
-                .on_hover_text("Pause selected (Space)")
-                .clicked()
-            {
-                self.pause_selected();
-            }
-            if widgets::button(ui, ButtonKind::Tool, Some(Icon::Retry), label("Restart"), has_sel, &p)
-                .on_hover_text("Download again from scratch")
-                .clicked()
-            {
-                self.restart_selected();
-            }
-            if widgets::button(ui, ButtonKind::Tool, Some(Icon::Link), label("Refresh link"), can_refresh, &p)
-                .on_hover_text("The link expired? Capture a fresh one and continue where it stopped")
-                .clicked()
-                && let Some(d) = self.single_selected()
-            {
-                self.open_refresh(&d);
-            }
-            if widgets::button(ui, ButtonKind::Tool, Some(Icon::Trash), label("Remove"), has_sel, &p)
-                .on_hover_text("Remove selected (Delete; Shift+Delete also deletes files)")
-                .clicked()
-            {
-                self.remove_selected(false);
-            }
-            toolbar_separator(ui, &p);
-            if let Some(q) = self.shown_queue() {
-                let name = self.engine.config().queue(q).name.clone();
-                if widgets::button(ui, ButtonKind::Tool, Some(Icon::Play), label("Start queue"), true, &p)
-                    .on_hover_text(format!("Resume the paused and failed downloads of {name}"))
-                    .clicked()
-                {
-                    self.engine.start_queue(q);
-                }
-                if widgets::button(ui, ButtonKind::Tool, Some(Icon::Pause), label("Stop queue"), true, &p)
-                    .on_hover_text(format!("Pause every download of {name}"))
-                    .clicked()
-                {
-                    self.engine.stop_queue(q);
-                }
-            } else {
-                if widgets::button(ui, ButtonKind::Tool, Some(Icon::Play), label("Start all"), true, &p)
-                    .on_hover_text("Resume every paused or failed download")
-                    .clicked()
-                {
-                    self.engine.resume_all();
-                }
-                if widgets::button(ui, ButtonKind::Tool, Some(Icon::Pause), label("Pause all"), true, &p)
-                    .on_hover_text("Pause everything")
-                    .clicked()
-                {
-                    self.engine.pause_all();
-                }
-            }
+            ui.add_space(2.0);
+            ui.scope(|ui| {
+                // Menu titles read as quiet text until hovered.
+                let w = &mut ui.visuals_mut().widgets;
+                w.inactive.fg_stroke.color = p.text_dim;
+                w.inactive.weak_bg_fill = Color32::TRANSPARENT;
+                w.hovered.weak_bg_fill = p.card_hover;
+                w.hovered.bg_stroke = Stroke::NONE;
+                w.open.weak_bg_fill = p.card_hover;
+                w.open.bg_stroke = Stroke::NONE;
+                ui.spacing_mut().button_padding = vec2(10.0, 6.0);
+                self.menu_bar(ui);
+            });
 
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
                 if widgets::icon_button(
                     ui,
                     Icon::PanelBottom,
@@ -1044,28 +980,163 @@ impl StewardGetApp {
                 let more = widgets::icon_button(ui, Icon::More, "More", &p);
                 egui::Popup::menu(&more).show(|ui| self.more_menu(ui));
                 ui.add_space(4.0);
-                let width = if compact { 160.0 } else { 240.0 };
+                let add = if compact { "Add" } else { "Add download" };
+                if widgets::button(ui, ButtonKind::Primary, Some(Icon::Plus), add, true, &p)
+                    .on_hover_text("Add downloads (Ctrl+N)")
+                    .clicked()
+                {
+                    self.open_add(None);
+                }
+                if widgets::button(
+                    ui,
+                    ButtonKind::Ghost,
+                    Some(Icon::Globe),
+                    if compact { "" } else { "Grab" },
+                    true,
+                    &p,
+                )
+                .on_hover_text("Find the files linked from a web page")
+                .clicked()
+                {
+                    self.grab_dialog = Some(crate::grab::GrabDialog::new(None));
+                }
+                ui.add_space(6.0);
+                let width = if compact { 200.0 } else { 320.0 };
                 self.search_box(ui, width);
             });
         });
     }
 
+    /// Start or stop everything in view: the shown queue, or all downloads.
+    fn bulk_actions(&mut self, ui: &mut Ui, compact: bool) {
+        let p = self.palette;
+        let label = |s: &'static str| if compact { "" } else { s };
+        if let Some(q) = self.shown_queue() {
+            let name = self.engine.config().queue(q).name.clone();
+            if widgets::button(ui, ButtonKind::Ghost, Some(Icon::Pause), label("Stop queue"), true, &p)
+                .on_hover_text(format!("Pause every download of {name}"))
+                .clicked()
+            {
+                self.engine.stop_queue(q);
+            }
+            if widgets::button(ui, ButtonKind::Ghost, Some(Icon::Play), label("Start queue"), true, &p)
+                .on_hover_text(format!("Resume the paused and failed downloads of {name}"))
+                .clicked()
+            {
+                self.engine.start_queue(q);
+            }
+        } else {
+            if widgets::button(ui, ButtonKind::Ghost, Some(Icon::Pause), label("Pause all"), true, &p)
+                .on_hover_text("Pause everything")
+                .clicked()
+            {
+                self.engine.pause_all();
+            }
+            if widgets::button(ui, ButtonKind::Ghost, Some(Icon::Play), label("Start all"), true, &p)
+                .on_hover_text("Resume every paused or failed download")
+                .clicked()
+            {
+                self.engine.resume_all();
+            }
+        }
+    }
+
+    /// What can be done with the selection; shown in place of the bulk actions
+    /// while something is selected. Laid out right to left.
+    pub(crate) fn selection_actions(&mut self, ui: &mut Ui, compact: bool) {
+        let p = self.palette;
+        let sel = self.selected_views();
+        if sel.is_empty() {
+            self.bulk_actions(ui, compact);
+            return;
+        }
+        let can_resume = sel.iter().any(|d| d.status.can_resume());
+        let can_pause = sel.iter().any(|d| d.status.can_pause());
+        let can_refresh = sel.len() == 1 && sel[0].status != Status::Completed;
+        let n = sel.len();
+        let label = |s: &'static str| if compact { "" } else { s };
+        if widgets::button(ui, ButtonKind::Tool, Some(Icon::Trash), label("Remove"), true, &p)
+            .on_hover_text("Remove selected (Delete; Shift+Delete also deletes files)")
+            .clicked()
+        {
+            self.remove_selected(false);
+        }
+        if can_refresh
+            && widgets::button(ui, ButtonKind::Tool, Some(Icon::Link), label("Refresh link"), true, &p)
+                .on_hover_text("The link expired? Capture a fresh one and continue where it stopped")
+                .clicked()
+            && let Some(d) = self.single_selected()
+        {
+            self.open_refresh(&d);
+        }
+        if widgets::button(ui, ButtonKind::Tool, Some(Icon::Retry), label("Restart"), true, &p)
+            .on_hover_text("Download again from scratch")
+            .clicked()
+        {
+            self.restart_selected();
+        }
+        if can_pause
+            && widgets::button(ui, ButtonKind::Ghost, Some(Icon::Pause), "Pause", true, &p)
+                .on_hover_text("Pause selected (Space)")
+                .clicked()
+        {
+            self.pause_selected();
+        }
+        if can_resume
+            && widgets::button(ui, ButtonKind::Ghost, Some(Icon::Play), "Resume", true, &p)
+                .on_hover_text("Resume selected (Space)")
+                .clicked()
+        {
+            self.resume_selected();
+        }
+        ui.add_space(4.0);
+        let r = ui
+            .add(
+                egui::Label::new(RichText::new(format!("{n} selected")).size(theme::size::SM).color(p.text_dim))
+                    .sense(Sense::click()),
+            )
+            .on_hover_text("Clear the selection (Esc)")
+            .on_hover_cursor(egui::CursorIcon::PointingHand);
+        if r.clicked() {
+            self.selection.clear();
+        }
+    }
+
     fn search_box(&mut self, ui: &mut Ui, width: f32) {
         let p = self.palette;
         let r = ui
-            .add(widgets::input(&mut self.search).hint_text("Search").desired_width(width).margin(Margin {
-                left: 32,
-                right: 10,
-                top: 7,
-                bottom: 7,
-            }))
-            .on_hover_text("Search names and links (Ctrl+F)");
+            .add_sized(
+                vec2(width, theme::CONTROL_H),
+                widgets::input(&mut self.search).hint_text("Search downloads").margin(Margin {
+                    left: 34,
+                    right: 54,
+                    top: 8,
+                    bottom: 8,
+                }),
+            )
+            .on_hover_text("Search names and links (Ctrl+F). Ctrl+K finds any page, setting or action.");
         icons::paint(
             ui.painter(),
-            egui::Rect::from_center_size(r.rect.left_center() + vec2(17.0, 0.0), vec2(15.0, 15.0)),
+            egui::Rect::from_center_size(r.rect.left_center() + vec2(18.0, 0.0), vec2(15.0, 15.0)),
             Icon::Search,
             p.text_dim,
         );
+        if !r.has_focus() && self.search.is_empty() {
+            // Keyboard hint, like a key cap.
+            let galley = ui.painter().layout_no_wrap("Ctrl K".to_owned(), FontId::proportional(11.0), p.text_dim);
+            let key = egui::Rect::from_min_size(
+                egui::pos2(r.rect.right() - galley.size().x - 20.0, r.rect.center().y - 10.0),
+                vec2(galley.size().x + 12.0, 20.0),
+            );
+            ui.painter().rect(
+                key,
+                CornerRadius::same(5),
+                p.card_hover,
+                Stroke::new(1.0, p.border),
+                egui::StrokeKind::Inside,
+            );
+            ui.painter().galley(key.center() - galley.size() / 2.0, galley, p.text_dim);
+        }
         if self.focus_search {
             r.request_focus();
             self.focus_search = false;
@@ -1127,24 +1198,35 @@ impl StewardGetApp {
 
     fn sidebar(&mut self, ui: &mut Ui, collapsed: bool) {
         let p = self.palette;
-        ui.add_space(2.0);
-        ui.horizontal(|ui| {
-            if collapsed {
-                ui.add_space((ui.available_width() - 30.0) / 2.0 - 4.0);
-            } else {
-                ui.add_space(4.0);
-            }
-            widgets::logo(ui, 30.0);
-            if !collapsed {
-                ui.add_space(2.0);
-                ui.label(RichText::new("StewardGet").size(18.0).family(theme::semi()).color(p.text));
-            }
+        // Same height as the header, so the brand lines up with it.
+        let (brand, _) = ui.allocate_exact_size(vec2(ui.available_width(), 54.0), Sense::hover());
+        ui.scope_builder(egui::UiBuilder::new().max_rect(brand), |ui| {
+            ui.horizontal_centered(|ui| {
+                if collapsed {
+                    ui.add_space((ui.available_width() - 28.0) / 2.0 - 4.0);
+                } else {
+                    ui.add_space(6.0);
+                }
+                widgets::logo(ui, 30.0);
+                if !collapsed {
+                    ui.add_space(4.0);
+                    ui.vertical(|ui| {
+                        ui.add_space(2.0);
+                        ui.spacing_mut().item_spacing.y = 0.0;
+                        ui.label(RichText::new("StewardGet").size(theme::size::LG).family(theme::semi()).color(p.text));
+                        ui.label(RichText::new("Download manager").size(11.5).color(p.text_dim));
+                    });
+                }
+            });
         });
-        ui.add_space(8.0);
+        ui.add_space(4.0);
 
-        // The lists scroll when the window is short; Statistics and Settings stay pinned.
-        // Three pinned entries, plus the version line when the sidebar is open.
-        let list_h = (ui.available_height() - 3.0 * 34.0 - 10.0 - if collapsed { 0.0 } else { 24.0 }).max(60.0);
+        // The lists scroll when the window is short; the live card, Tools,
+        // Statistics and Settings stay pinned.
+        // Each nav entry is 34 points plus item spacing; the live card is 72 plus its gap.
+        let entry_h = 34.0 + ui.spacing().item_spacing.y;
+        let live_h = if collapsed { 0.0 } else { 72.0 + 8.0 + ui.spacing().item_spacing.y * 2.0 };
+        let list_h = (ui.available_height() - 3.0 * entry_h - 8.0 - live_h).max(60.0);
         ui.allocate_ui(vec2(ui.available_width(), list_h), |ui| {
             egui::ScrollArea::vertical().id_salt("nav-scroll").auto_shrink([false, false]).show(ui, |ui| {
                 // Keep clear of the scroll bar, which floats over the right edge.
@@ -1208,25 +1290,12 @@ impl StewardGetApp {
                     }
                 }
             });
+            // Fade out whatever scrolls past the bottom edge instead of cutting it off.
+            let list = ui.max_rect();
+            let fade = egui::Rect::from_min_max(egui::pos2(list.left(), list.bottom() - 28.0), list.right_bottom());
+            widgets::paint_vertical_gradient(ui.painter(), fade, Color32::TRANSPARENT, p.sidebar);
         });
         ui.with_layout(Layout::bottom_up(Align::Min), |ui| {
-            if !collapsed {
-                let version = ui
-                    .add(
-                        egui::Label::new(
-                            RichText::new(concat!("StewardGet v", env!("CARGO_PKG_VERSION")))
-                                .size(12.0)
-                                .color(p.text_dim),
-                        )
-                        .sense(Sense::click()),
-                    )
-                    .on_hover_cursor(egui::CursorIcon::PointingHand)
-                    .on_hover_text("About StewardGet");
-                if version.clicked() {
-                    self.open_settings(crate::settings::Tab::About);
-                }
-                ui.add_space(4.0);
-            }
             if nav_item(ui, Icon::Gear, None, "Settings", 0, self.page == Page::Settings, collapsed, &p).clicked() {
                 self.open_settings(self.settings_tab);
             }
@@ -1236,7 +1305,87 @@ impl StewardGetApp {
             if nav_item(ui, Icon::Sliders, None, "Tools", 0, self.page == Page::Tools, collapsed, &p).clicked() {
                 self.page = Page::Tools;
             }
+            if !collapsed {
+                ui.add_space(8.0);
+                self.live_card(ui);
+            }
         });
+    }
+
+    /// The current speed with a small graph: always in view, opens what is downloading.
+    fn live_card(&mut self, ui: &mut Ui) {
+        let p = self.palette;
+        let active = self.snap.count(Status::is_active);
+        let speed = self.snap.speed;
+        let (rect, r) = ui.allocate_exact_size(vec2(ui.available_width(), 72.0), Sense::click());
+        let painter = ui.painter();
+        let fill = if r.hovered() { p.card_hover } else { p.card };
+        painter.rect(
+            rect,
+            CornerRadius::same(theme::radius::LG),
+            fill,
+            Stroke::new(1.0, p.border),
+            egui::StrokeKind::Inside,
+        );
+        let inner = rect.shrink2(vec2(12.0, 10.0));
+        let live = active > 0 && speed > 1.0;
+        let (status, color) = if live {
+            (format!("{active} downloading"), p.accent2)
+        } else if self.snap.count(|s| s == Status::Queued) > 0 {
+            ("Waiting to start".to_owned(), p.yellow)
+        } else {
+            ("Idle".to_owned(), p.text_dim)
+        };
+        painter.circle_filled(inner.left_top() + vec2(3.5, 8.0), 3.5, color);
+        if live {
+            // A slow pulse around the dot while data is flowing.
+            let t = (ui.input(|i| i.time) as f32 * 0.8).fract();
+            painter.circle_stroke(
+                inner.left_top() + vec2(3.5, 8.0),
+                3.5 + 5.0 * t,
+                Stroke::new(1.5, color.gamma_multiply(1.0 - t)),
+            );
+            ui.ctx().request_repaint_after(Duration::from_millis(33));
+        }
+        painter.text(
+            inner.left_top() + vec2(14.0, 8.0),
+            Align2::LEFT_CENTER,
+            status,
+            FontId::proportional(theme::size::SM),
+            p.text_dim,
+        );
+        painter.text(
+            inner.left_bottom() - vec2(0.0, 2.0),
+            Align2::LEFT_BOTTOM,
+            if live { format_speed(speed) } else { "0 B/s".to_owned() },
+            FontId::new(theme::size::XL, theme::semi()),
+            p.text,
+        );
+        // Sparkline of the last minute, right-aligned.
+        let values = &self.snap.history;
+        let chart = egui::Rect::from_min_max(
+            egui::pos2(inner.right() - 70.0, inner.top() + 20.0),
+            egui::pos2(inner.right(), inner.bottom() - 2.0),
+        );
+        if values.len() > 1 {
+            let max = values.iter().copied().fold(1.0f32, f32::max);
+            let tail = &values[values.len().saturating_sub(40)..];
+            let pts: Vec<egui::Pos2> = tail
+                .iter()
+                .enumerate()
+                .map(|(i, v)| {
+                    egui::pos2(
+                        chart.left() + chart.width() * i as f32 / (tail.len() - 1).max(1) as f32,
+                        chart.bottom() - chart.height() * (v / max).clamp(0.0, 1.0),
+                    )
+                })
+                .collect();
+            painter.add(egui::Shape::line(pts, Stroke::new(1.5, if live { p.accent2 } else { p.text_dim })));
+        }
+        if r.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text("Show what is downloading").clicked() {
+            self.page = Page::Downloads;
+            self.filter = ListFilter::Active;
+        }
     }
 
     /// The QUEUES section: one entry per queue, a drop target for dragged downloads.
@@ -1580,10 +1729,10 @@ fn menu_row(ui: &mut Ui, p: &Palette, icon: Option<Icon>, text: &str, enabled: b
     };
     let width = ui.available_width().clamp(220.0, 280.0);
     let sense = if enabled { Sense::click() } else { Sense::hover() };
-    let (rect, response) = ui.allocate_exact_size(vec2(width, 30.0), sense);
+    let (rect, response) = ui.allocate_exact_size(vec2(width, 32.0), sense);
     let painter = ui.painter();
     if enabled && response.hovered() {
-        painter.rect_filled(rect, CornerRadius::same(6), p.card_hover);
+        painter.rect_filled(rect, CornerRadius::same(theme::radius::SM + 1), p.card_hover);
     }
     let fg = if enabled { p.text } else { p.text_dim.gamma_multiply(0.6) };
     let icon = if checked { Some(Icon::Check) } else { icon };
@@ -1616,13 +1765,6 @@ fn menu_row(ui: &mut Ui, p: &Palette, icon: Option<Icon>, text: &str, enabled: b
     response.clicked()
 }
 
-fn toolbar_separator(ui: &mut Ui, p: &Palette) {
-    ui.add_space(4.0);
-    let (rect, _) = ui.allocate_exact_size(vec2(1.0, 22.0), Sense::hover());
-    ui.painter().rect_filled(rect, CornerRadius::ZERO, p.border);
-    ui.add_space(4.0);
-}
-
 #[allow(clippy::too_many_arguments)]
 fn nav_item(
     ui: &mut Ui,
@@ -1634,37 +1776,57 @@ fn nav_item(
     collapsed: bool,
     p: &Palette,
 ) -> egui::Response {
-    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 28.0), Sense::hover());
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 34.0), Sense::hover());
+    let rect = rect.shrink2(vec2(0.0, 1.0));
     // Explicit ids keep navigation stable regardless of layout nesting; the
     // icon tells a queue called "Video" from the Video category.
     let response = ui.interact(rect, egui::Id::unique(("stewardget-nav", label, format!("{icon:?}"))), Sense::click());
     let painter = ui.painter();
+    let corner = CornerRadius::same(theme::radius::MD);
     if selected {
-        painter.rect_filled(rect, CornerRadius::same(8), p.accent.gamma_multiply(if p.dark { 0.18 } else { 0.12 }));
+        // The accent fades out towards the label's end.
+        let strength = if p.dark { 0.26 } else { 0.15 };
+        widgets::paint_gradient_rect(
+            painter,
+            rect,
+            corner.nw as f32,
+            p.accent.gamma_multiply(strength),
+            p.accent.gamma_multiply(strength * 0.25),
+            false,
+        );
+        if !collapsed {
+            let bar = egui::Rect::from_center_size(rect.left_center() + vec2(1.5, 0.0), vec2(3.0, 16.0));
+            painter.rect_filled(bar, CornerRadius::same(2), p.accent);
+        }
     } else if response.hovered() {
-        painter.rect_filled(rect, CornerRadius::same(8), p.card_hover);
+        painter.rect_filled(rect, corner, p.card_hover);
     }
-    let fg = if selected { p.text } else { p.text_dim };
-    let icon_color = tint.unwrap_or(if selected { p.accent } else { fg });
-    let icon_x = if collapsed { rect.center().x } else { rect.left() + 18.0 };
+    let fg = if selected { p.text } else { lerp_color(p.text_dim, p.text, 0.25) };
+    let icon_color = tint.unwrap_or(if selected { p.accent } else { p.text_dim });
+    let icon_x = if collapsed { rect.center().x } else { rect.left() + 20.0 };
     icons::paint(
         painter,
-        egui::Rect::from_center_size(egui::pos2(icon_x, rect.center().y), vec2(16.0, 16.0)),
+        egui::Rect::from_center_size(egui::pos2(icon_x, rect.center().y), vec2(17.0, 17.0)),
         icon,
         icon_color,
     );
     if !collapsed {
         let family = if selected { theme::semi() } else { egui::FontFamily::Proportional };
-        painter.text(rect.left_center() + vec2(36.0, 0.0), Align2::LEFT_CENTER, label, FontId::new(13.5, family), fg);
+        let text_rect =
+            egui::Rect::from_min_max(rect.left_top() + vec2(38.0, 0.0), rect.right_bottom() - vec2(40.0, 0.0));
+        painter.with_clip_rect(text_rect).text(
+            text_rect.left_center(),
+            Align2::LEFT_CENTER,
+            label,
+            FontId::new(theme::size::MD - 0.5, family),
+            fg,
+        );
         if count > 0 {
-            painter.text(
-                rect.right_center() - vec2(10.0, 0.0),
-                Align2::RIGHT_CENTER,
-                count.to_string(),
-                FontId::proportional(12.0),
-                p.text_dim,
-            );
+            let (bg, color) = if selected { (p.accent.gamma_multiply(0.22), p.text) } else { (p.track, p.text_dim) };
+            widgets::paint_badge(painter, rect.right_center() - vec2(8.0, 0.0), &count.to_string(), color, bg);
         }
+    } else if count > 0 && selected {
+        painter.circle_filled(rect.right_top() + vec2(-8.0, 8.0), 3.0, p.accent);
     }
     let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
     if collapsed { response.on_hover_text(format!("{label} ({count})")) } else { response }
@@ -1924,57 +2086,101 @@ impl eframe::App for StewardGetApp {
         let compact = width < 1180.0;
         let collapsed = self.sidebar_pref.unwrap_or(width < 940.0);
 
-        egui::Panel::top("stewardget-menubar")
-            .exact_size(34.0)
-            .frame(Frame::new().fill(p.sidebar).inner_margin(Margin::symmetric(8, 3)))
-            .show(ui, |ui| ui.push_id("menubar", |ui| self.menu_bar(ui)));
+        // The shell (sidebar, header, status bar) shares one colour; pages sit on
+        // a rounded canvas inset into it.
+        egui::Panel::left("stewardget-nav")
+            .exact_size(if collapsed { 64.0 } else { 236.0 })
+            .resizable(false)
+            .show_separator_line(false)
+            .frame(Frame::new().fill(p.sidebar).inner_margin(Margin { left: 10, right: 10, top: 0, bottom: 10 }))
+            .show(ui, |ui| ui.push_id("nav", |ui| self.sidebar(ui, collapsed)));
 
         egui::Panel::top("stewardget-toolbar")
-            .exact_size(44.0)
-            .frame(
-                Frame::new().fill(p.sidebar).inner_margin(Margin::symmetric(10, 0)).stroke(Stroke::new(1.0, p.border)),
-            )
+            .exact_size(54.0)
+            .show_separator_line(false)
+            .frame(Frame::new().fill(p.sidebar).inner_margin(Margin { left: 0, right: 12, top: 0, bottom: 0 }))
             .show(ui, |ui| ui.push_id("toolbar", |ui| self.toolbar(ui, compact, collapsed)));
 
         egui::Panel::bottom("stewardget-status")
-            .exact_size(28.0)
-            .frame(
-                Frame::new().fill(p.sidebar).inner_margin(Margin::symmetric(12, 0)).stroke(Stroke::new(1.0, p.border)),
-            )
+            .exact_size(32.0)
+            .show_separator_line(false)
+            .frame(Frame::new().fill(p.sidebar).inner_margin(Margin::symmetric(14, 0)))
             .show(ui, |ui| ui.push_id("status", |ui| self.status_bar(ui)));
 
-        egui::Panel::left("stewardget-nav")
-            .exact_size(if collapsed { 56.0 } else { 204.0 })
-            .resizable(false)
-            .frame(
-                Frame::new().fill(p.sidebar).inner_margin(Margin::symmetric(6, 8)).stroke(Stroke::new(1.0, p.border)),
-            )
-            .show(ui, |ui| ui.push_id("nav", |ui| self.sidebar(ui, collapsed)));
-
-        if self.page == Page::Downloads && self.show_details && !self.selection.is_empty() {
-            egui::Panel::bottom("stewardget-details")
-                .resizable(true)
-                .default_size(262.0)
-                .size_range(160.0..=540.0)
-                .frame(
-                    Frame::new()
-                        .fill(p.sidebar)
-                        .inner_margin(Margin::symmetric(12, 8))
-                        .stroke(Stroke::new(1.0, p.border)),
-                )
-                .show(ui, |ui| ui.push_id("details", |ui| self.details_pane(ui)));
-        }
-
-        egui::CentralPanel::no_frame().frame(Frame::new().fill(p.bg).inner_margin(Margin::ZERO)).show(ui, |ui| {
-            ui.push_id("central", |ui| match self.page {
-                Page::Overview => self.overview_page(ui),
-                Page::Downloads => self.downloads_page(ui),
-                Page::History => self.history_page(ui),
-                Page::Stats => self.stats_page(ui),
-                Page::Tools => self.tools_page(ui),
-                Page::Settings => self.settings_page(ui),
-            })
-        });
+        egui::CentralPanel::no_frame()
+            .frame(Frame::new().fill(p.sidebar).inner_margin(Margin { left: 0, right: 10, top: 0, bottom: 0 }))
+            .show(ui, |ui| {
+                Frame::new()
+                    .fill(p.bg)
+                    .stroke(Stroke::new(1.0, p.border))
+                    .corner_radius(CornerRadius::same(theme::radius::XL))
+                    .show(ui, |ui| {
+                        ui.set_min_size(ui.available_size());
+                        // Rounded corners: keep page content from painting over them.
+                        let canvas = ui.max_rect();
+                        ui.set_clip_rect(canvas.shrink(1.0).intersect(ui.clip_rect()));
+                        // Aurora: soft accent light falling in from the top of the canvas.
+                        let glow = if p.dark { 0.18 } else { 0.08 };
+                        widgets::paint_glow(
+                            ui.painter(),
+                            egui::pos2(canvas.right() - canvas.width() * 0.22, canvas.top() - 60.0),
+                            canvas.width().clamp(380.0, 620.0),
+                            p.accent.gamma_multiply(glow),
+                        );
+                        widgets::paint_glow(
+                            ui.painter(),
+                            egui::pos2(canvas.left() + canvas.width() * 0.25, canvas.top() - 120.0),
+                            canvas.width().clamp(300.0, 480.0),
+                            p.accent2.gamma_multiply(glow * 0.6),
+                        );
+                        let details = self.page == Page::Downloads && self.show_details && !self.selection.is_empty();
+                        if details && canvas.width() >= 980.0 {
+                            egui::Panel::right("stewardget-inspector")
+                                .resizable(true)
+                                .default_size(372.0)
+                                .size_range(330.0..=500.0)
+                                .frame(
+                                    Frame::new()
+                                        .fill(p.card)
+                                        .inner_margin(Margin { left: 18, right: 12, top: 16, bottom: 8 })
+                                        .corner_radius(CornerRadius {
+                                            nw: 0,
+                                            sw: 0,
+                                            ne: theme::radius::XL,
+                                            se: theme::radius::XL,
+                                        }),
+                                )
+                                .show(ui, |ui| ui.push_id("details", |ui| self.details_pane(ui)));
+                        } else if details {
+                            egui::Panel::bottom("stewardget-details")
+                                .resizable(true)
+                                .default_size(272.0)
+                                .size_range(170.0..=540.0)
+                                .frame(
+                                    Frame::new()
+                                        .fill(p.card)
+                                        .inner_margin(Margin { left: 20, right: 16, top: 14, bottom: 12 })
+                                        .corner_radius(CornerRadius {
+                                            nw: 0,
+                                            ne: 0,
+                                            sw: theme::radius::XL,
+                                            se: theme::radius::XL,
+                                        }),
+                                )
+                                .show(ui, |ui| ui.push_id("details", |ui| self.details_pane(ui)));
+                        }
+                        egui::CentralPanel::no_frame().show(ui, |ui| {
+                            ui.push_id("central", |ui| match self.page {
+                                Page::Overview => self.overview_page(ui),
+                                Page::Downloads => self.downloads_page(ui),
+                                Page::History => self.history_page(ui),
+                                Page::Stats => self.stats_page(ui),
+                                Page::Tools => self.tools_page(ui),
+                                Page::Settings => self.settings_page(ui),
+                            })
+                        });
+                    });
+            });
 
         self.add_dialog(&ctx);
         self.confirm_dialog(&ctx);

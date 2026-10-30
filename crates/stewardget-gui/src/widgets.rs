@@ -2,13 +2,14 @@
 
 use egui::epaint::{Mesh, PathStroke};
 use egui::{
-    Align2, Color32, CornerRadius, FontId, Pos2, Rect, Response, Sense, Shape, Stroke, StrokeKind, Ui, Vec2, pos2, vec2,
+    Align2, Color32, CornerRadius, FontId, Pos2, Rect, Response, Sense, Shadow, Shape, Stroke, StrokeKind, Ui, Vec2,
+    pos2, vec2,
 };
 use stewardget_core::util::{format_bytes, format_speed};
 use stewardget_core::{DayTotal, DownloadView, Status};
 
 use crate::icons::{self, Icon};
-use crate::theme::{CONTROL_H, Palette};
+use crate::theme::{CAPS_TRACKING, CONTROL_H, Palette, radius};
 
 pub fn lerp_color(a: Color32, b: Color32, t: f32) -> Color32 {
     let t = t.clamp(0.0, 1.0);
@@ -51,25 +52,371 @@ fn pill_slice(rect: Rect, a: f32, b: f32, left: Color32, right: Color32) -> Shap
     Shape::mesh(mesh)
 }
 
+/// Outline of a rounded rectangle, clockwise from the top-left corner, with the
+/// outward normal of each point (used to feather the edge of gradient meshes).
+fn rounded_outline(rect: Rect, r: f32) -> Vec<(Pos2, Vec2)> {
+    let r = r.min(rect.width() / 2.0).min(rect.height() / 2.0).max(0.0);
+    let corners = [
+        (pos2(rect.left() + r, rect.top() + r), std::f32::consts::PI),
+        (pos2(rect.right() - r, rect.top() + r), std::f32::consts::PI * 1.5),
+        (pos2(rect.right() - r, rect.bottom() - r), 0.0),
+        (pos2(rect.left() + r, rect.bottom() - r), std::f32::consts::PI * 0.5),
+    ];
+    let steps = if r < 1.0 { 1 } else { (r * 0.6).ceil().clamp(3.0, 12.0) as usize };
+    let mut out = Vec::with_capacity(4 * (steps + 1));
+    for (c, start) in corners {
+        for i in 0..=steps {
+            let a = start + std::f32::consts::FRAC_PI_2 * i as f32 / steps as f32;
+            let n = vec2(a.cos(), a.sin());
+            out.push((c + n * r, n));
+        }
+    }
+    out
+}
+
+/// A rounded rectangle filled with a gradient from `a` to `b`, left to right
+/// (or top to bottom when `vertical`), with an anti-aliased edge.
+pub fn paint_gradient_rect(painter: &egui::Painter, rect: Rect, r: f32, a: Color32, b: Color32, vertical: bool) {
+    let outline = rounded_outline(rect, r);
+    let color_at = |pt: Pos2| {
+        let t = if vertical {
+            (pt.y - rect.top()) / rect.height().max(1.0)
+        } else {
+            (pt.x - rect.left()) / rect.width().max(1.0)
+        };
+        lerp_color(a, b, t)
+    };
+    let mut mesh = Mesh::default();
+    mesh.colored_vertex(rect.center(), color_at(rect.center()));
+    let n = outline.len() as u32;
+    for &(pt, normal) in &outline {
+        let inner = pt - normal * 0.5;
+        mesh.colored_vertex(inner, color_at(inner));
+        mesh.colored_vertex(pt + normal * 0.5, Color32::TRANSPARENT);
+    }
+    for i in 0..n {
+        let j = (i + 1) % n;
+        let (ii, io, ji, jo) = (1 + i * 2, 2 + i * 2, 1 + j * 2, 2 + j * 2);
+        mesh.add_triangle(0, ii, ji);
+        mesh.add_triangle(ii, io, jo);
+        mesh.add_triangle(ii, jo, ji);
+    }
+    painter.add(Shape::mesh(mesh));
+}
+
+/// A soft round light, for the ambient glows behind hero areas.
+pub fn paint_glow(painter: &egui::Painter, center: Pos2, radius: f32, color: Color32) {
+    let mut mesh = Mesh::default();
+    mesh.colored_vertex(center, color);
+    let steps = 48;
+    for i in 0..=steps {
+        let a = std::f32::consts::TAU * i as f32 / steps as f32;
+        mesh.colored_vertex(center + vec2(a.cos(), a.sin()) * radius * 0.45, color.gamma_multiply(0.55));
+        mesh.colored_vertex(center + vec2(a.cos(), a.sin()) * radius, Color32::TRANSPARENT);
+    }
+    for i in 0..steps as u32 {
+        let (m, o, m2, o2) = (1 + i * 2, 2 + i * 2, 3 + i * 2, 4 + i * 2);
+        mesh.add_triangle(0, m, m2);
+        mesh.add_triangle(m, o, o2);
+        mesh.add_triangle(m, o2, m2);
+    }
+    painter.add(Shape::mesh(mesh));
+}
+
+/// Circular progress: a track ring and an arc from twelve o'clock, shaded
+/// from `from` to `to` along its length.
+#[allow(clippy::too_many_arguments)]
+pub fn paint_ring(
+    painter: &egui::Painter,
+    center: Pos2,
+    radius: f32,
+    width: f32,
+    fraction: f32,
+    from: Color32,
+    to: Color32,
+    track: Color32,
+) {
+    painter.circle_stroke(center, radius, Stroke::new(width, track));
+    let fraction = fraction.clamp(0.0, 1.0);
+    if fraction <= 0.0 {
+        return;
+    }
+    let steps = ((96.0 * fraction).ceil() as usize).max(2);
+    let start = -std::f32::consts::FRAC_PI_2;
+    let (ri, ro) = (radius - width / 2.0, radius + width / 2.0);
+    let mut mesh = Mesh::default();
+    for i in 0..=steps {
+        let t = i as f32 / steps as f32;
+        let a = start + std::f32::consts::TAU * fraction * t;
+        let n = vec2(a.cos(), a.sin());
+        let c = lerp_color(from, to, t);
+        mesh.colored_vertex(center + n * ri, c);
+        mesh.colored_vertex(center + n * ro, c);
+        if i > 0 {
+            let v = i as u32 * 2;
+            mesh.add_triangle(v - 2, v - 1, v);
+            mesh.add_triangle(v - 1, v + 1, v);
+        }
+    }
+    painter.add(Shape::mesh(mesh));
+    // Round caps.
+    let end = start + std::f32::consts::TAU * fraction;
+    painter.circle_filled(center + vec2(start.cos(), start.sin()) * radius, width / 2.0, from);
+    painter.circle_filled(center + vec2(end.cos(), end.sin()) * radius, width / 2.0, to);
+}
+
+/// The file-type mark used for downloads: a tile shaded in the category colour
+/// with its icon, and (when there is room) the file extension in a tag below.
+pub fn paint_file_tile(painter: &egui::Painter, rect: Rect, icon: Icon, ext: &str, color: Color32, p: &Palette) {
+    let r = (rect.height() * 0.28).round().clamp(5.0, 14.0);
+    let (top, bottom) = if p.dark {
+        (color.gamma_multiply(0.30), color.gamma_multiply(0.10))
+    } else {
+        (color.gamma_multiply(0.20), color.gamma_multiply(0.07))
+    };
+    paint_gradient_rect(painter, rect, r, top, bottom, true);
+    painter.rect_stroke(
+        rect,
+        CornerRadius::same(r as u8),
+        Stroke::new(1.0, color.gamma_multiply(0.22)),
+        StrokeKind::Inside,
+    );
+    let big = rect.height() >= 40.0 && !ext.is_empty();
+    let glyph = (rect.height() * if big { 0.42 } else { 0.5 }).round();
+    let icon_center = if big { rect.center() - vec2(0.0, rect.height() * 0.1) } else { rect.center() };
+    icons::paint(painter, Rect::from_center_size(icon_center, Vec2::splat(glyph)), icon, color);
+    if big {
+        let text: String = ext.chars().take(4).collect::<String>().to_uppercase();
+        let size = (rect.height() * 0.2).clamp(8.5, 11.0);
+        let galley = painter.layout_no_wrap(text, FontId::new(size, crate::theme::semi()), p.on_tile(color));
+        let tag = Rect::from_center_size(
+            pos2(rect.center().x, rect.bottom() - size * 0.95),
+            vec2(galley.size().x + 8.0, size + 4.0),
+        );
+        painter.rect_filled(tag, CornerRadius::same(4), color);
+        painter.galley(tag.center() - galley.size() / 2.0, galley, p.on_tile(color));
+    }
+}
+
+/// Lower-case extension of a file name ("" when it has none).
+pub fn extension(name: &str) -> &str {
+    match name.rsplit_once('.') {
+        Some((stem, ext)) if !stem.is_empty() && ext.len() <= 5 => ext,
+        _ => "",
+    }
+}
+
+/// Small line chart filling `rect` (no axes), with a soft fill under it.
+pub fn paint_sparkline(painter: &egui::Painter, rect: Rect, values: &[f32], color: Color32) {
+    if values.len() < 2 {
+        painter.line_segment([rect.left_bottom(), rect.right_bottom()], Stroke::new(1.5, color.gamma_multiply(0.5)));
+        return;
+    }
+    let max = values.iter().copied().fold(1.0f32, f32::max) * 1.1;
+    let pts: Vec<Pos2> = values
+        .iter()
+        .enumerate()
+        .map(|(i, v)| {
+            pos2(
+                rect.left() + rect.width() * i as f32 / (values.len() - 1) as f32,
+                rect.bottom() - rect.height() * (v / max).clamp(0.0, 1.0),
+            )
+        })
+        .collect();
+    let mut mesh = Mesh::default();
+    let (top, bottom) = (color.gamma_multiply(0.28), color.gamma_multiply(0.0));
+    for w in pts.windows(2) {
+        let i = mesh.vertices.len() as u32;
+        mesh.colored_vertex(w[0], top);
+        mesh.colored_vertex(w[1], top);
+        mesh.colored_vertex(pos2(w[1].x, rect.bottom()), bottom);
+        mesh.colored_vertex(pos2(w[0].x, rect.bottom()), bottom);
+        mesh.add_triangle(i, i + 1, i + 2);
+        mesh.add_triangle(i, i + 2, i + 3);
+    }
+    painter.add(Shape::mesh(mesh));
+    painter.add(Shape::line(pts, PathStroke::new(1.6, color)));
+}
+
+/// What a KPI tile shows below its value.
+pub enum KpiExtra<'a> {
+    /// Recent samples, drawn as a sparkline.
+    Spark(&'a [f32]),
+    /// A share in `0..=1`, drawn as a bar.
+    Meter(f32),
+}
+
+/// A summary tile: tinted icon and label, a large value, a supporting line and
+/// a sparkline or meter along the bottom.
+#[allow(clippy::too_many_arguments)]
+pub fn kpi_tile(
+    ui: &mut Ui,
+    width: f32,
+    icon: Icon,
+    color: Color32,
+    label: &str,
+    value: &str,
+    sub: &str,
+    extra: KpiExtra<'_>,
+    p: &Palette,
+) -> Response {
+    let (rect, response) = ui.allocate_exact_size(vec2(width, 104.0), Sense::click());
+    let painter = ui.painter();
+    let corner = CornerRadius::same(radius::LG + 2);
+    if !p.dark {
+        painter.add(p.shadow(2, 10).as_shape(rect, corner));
+    }
+    let fill = if response.hovered() { p.card_hover } else { p.card };
+    painter.rect(rect, corner, fill, Stroke::new(1.0, p.border), StrokeKind::Inside);
+    // A wash of the tile's colour from the top-left corner.
+    let wash = Rect::from_min_size(rect.min, vec2(rect.width(), rect.height() * 0.65));
+    paint_gradient_rect(
+        &painter.with_clip_rect(rect.shrink(1.0)),
+        wash.shrink(1.0),
+        (radius::LG + 1) as f32,
+        color.gamma_multiply(if p.dark { 0.10 } else { 0.07 }),
+        Color32::TRANSPARENT,
+        false,
+    );
+    let inner = rect.shrink2(vec2(14.0, 12.0));
+    let tile = Rect::from_min_size(inner.min, Vec2::splat(26.0));
+    paint_icon_tile(painter, tile, icon, color, p);
+    let label_galley = caps_galley(ui, &label.to_uppercase(), 10.5, p.text_dim);
+    painter.galley(pos2(tile.right() + 9.0, tile.center().y - label_galley.size().y / 2.0), label_galley, p.text_dim);
+    let value_pos = pos2(inner.left(), tile.bottom() + 8.0);
+    let vg = painter.text(
+        value_pos,
+        Align2::LEFT_TOP,
+        value,
+        FontId::new(crate::theme::size::XL + 2.0, crate::theme::semi()),
+        p.text,
+    );
+    painter
+        .with_clip_rect(Rect::from_min_max(pos2(inner.left(), rect.top()), pos2(inner.right(), rect.bottom())))
+        .text(
+            pos2(inner.left(), vg.bottom() + 3.0),
+            Align2::LEFT_TOP,
+            sub,
+            FontId::proportional(crate::theme::size::SM),
+            p.text_dim,
+        );
+    match extra {
+        KpiExtra::Spark(values) => {
+            let spark = Rect::from_min_max(
+                pos2(inner.right() - inner.width() * 0.42, inner.top() + 30.0),
+                pos2(inner.right(), vg.bottom()),
+            );
+            paint_sparkline(painter, spark, values, color);
+        }
+        KpiExtra::Meter(f) => {
+            let bar = Rect::from_min_max(
+                pos2(inner.right() - inner.width() * 0.38, vg.center().y - 3.0),
+                pos2(inner.right(), vg.center().y + 3.0),
+            );
+            painter.rect_filled(bar, CornerRadius::same(3), p.track);
+            let fill = Rect::from_min_max(bar.min, pos2(bar.left() + bar.width() * f.clamp(0.0, 1.0), bar.bottom()));
+            if fill.width() > 0.5 {
+                paint_gradient_rect(painter, fill, 3.0, color.gamma_multiply(0.75), color, false);
+            }
+        }
+    }
+    response
+}
+
+/// A round icon button for card rows; `primary` fills it with the accent.
+pub fn round_button(ui: &mut Ui, icon: Icon, tooltip: &str, primary: bool, p: &Palette) -> Response {
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(CONTROL_H), Sense::click());
+    let painter = ui.painter();
+    let hovered = response.hovered();
+    let pressed = response.is_pointer_button_down_on();
+    if primary {
+        let (a, b) = p.gradient();
+        let (a, b) =
+            if hovered { (lerp_color(a, Color32::WHITE, 0.1), lerp_color(b, Color32::WHITE, 0.1)) } else { (a, b) };
+        painter.add(p.glow(a, if hovered { 14 } else { 8 }).as_shape(rect, CornerRadius::same(255)));
+        paint_gradient_rect(painter, rect, rect.height() / 2.0, a, b, false);
+    } else {
+        let fill = if pressed {
+            p.track
+        } else if hovered {
+            p.card_hover
+        } else {
+            Color32::TRANSPARENT
+        };
+        painter.rect(
+            rect,
+            CornerRadius::same(255),
+            fill,
+            Stroke::new(1.0, if hovered { p.control_border } else { p.border }),
+            StrokeKind::Inside,
+        );
+    }
+    if response.has_focus() {
+        painter.circle_stroke(rect.center(), rect.width() / 2.0 + 2.5, Stroke::new(2.0, p.accent.gamma_multiply(0.85)));
+    }
+    let color = if primary {
+        p.on_accent
+    } else if hovered {
+        p.text
+    } else {
+        p.text_dim
+    };
+    icons::paint(painter, Rect::from_center_size(rect.center(), Vec2::splat(15.0)), icon, color);
+    response.on_hover_text(tooltip).on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
 /// Gradient colours for a download's state.
 pub fn status_gradient(status: Status, p: &Palette) -> (Color32, Color32) {
     match status {
         Status::Completed => (p.green, p.green),
-        Status::Failed => (p.red.gamma_multiply(0.8), p.red),
-        Status::Paused => (p.yellow.gamma_multiply(0.85), p.yellow),
+        // Opaque shades: a translucent end would show the track through it.
+        Status::Failed => (lerp_color(p.red, p.card, 0.3), p.red),
+        Status::Paused => (lerp_color(p.yellow, p.card, 0.3), p.yellow),
         Status::Queued => (p.text_dim, p.text_dim),
         _ => (p.accent, p.accent2),
     }
 }
 
-/// A slim progress bar painted into `rect` (no layout allocation).
+/// A slim progress bar painted into `rect` (no layout allocation). Live
+/// downloads get a soft glow and a highlight that sweeps along the filled part.
 pub fn paint_progress(ui: &Ui, rect: Rect, d: &DownloadView, p: &Palette) {
     let painter = ui.painter();
     painter.rect_filled(rect, CornerRadius::same((rect.height() / 2.0) as u8), p.track);
     let (from, to) = status_gradient(d.status, p);
     match d.fraction() {
         Some(frac) if frac > 0.0 => {
-            painter.add(pill_slice(rect, rect.left(), rect.left() + rect.width() * frac, from, to));
+            let end = rect.left() + rect.width() * frac;
+            let live = d.status == Status::Downloading;
+            if live {
+                let filled = Rect::from_min_max(rect.min, pos2(end.max(rect.left() + rect.height()), rect.max.y));
+                painter.add(p.glow(to, 10).as_shape(filled, CornerRadius::same((rect.height() / 2.0) as u8)));
+            }
+            let filled = Rect::from_min_max(rect.min, pos2(end.max(rect.left() + rect.height()), rect.max.y));
+            paint_gradient_rect(painter, filled, rect.height() / 2.0, from, lerp_color(from, to, frac), false);
+            if live && end - rect.left() > 24.0 {
+                // A short bright band travelling left to right, once every two seconds.
+                let t = (ui.input(|i| i.time) as f32 * 0.5).fract();
+                let w = 36.0f32.min((end - rect.left()) * 0.5);
+                let x = rect.left() - w + t * (end - rect.left() + w);
+                let shine = Color32::from_white_alpha(if p.dark { 60 } else { 80 });
+                let r = rect.height() / 2.0;
+                let clip = Rect::from_min_max(pos2(rect.left() + r, rect.top()), pos2(end - r, rect.bottom()));
+                let mut mesh = Mesh::default();
+                for (i, (bx, c)) in [(x, Color32::TRANSPARENT), (x + w / 2.0, shine), (x + w, Color32::TRANSPARENT)]
+                    .into_iter()
+                    .enumerate()
+                {
+                    mesh.colored_vertex(pos2(bx, rect.top()), c);
+                    mesh.colored_vertex(pos2(bx, rect.bottom()), c);
+                    if i > 0 {
+                        let v = i as u32 * 2;
+                        mesh.add_triangle(v - 2, v - 1, v);
+                        mesh.add_triangle(v - 1, v + 1, v);
+                    }
+                }
+                painter.with_clip_rect(clip.intersect(painter.clip_rect())).add(Shape::mesh(mesh));
+                ui.ctx().request_repaint();
+            }
         }
         None if d.status.is_active() => {
             let t = ui.input(|i| i.time) as f32;
@@ -344,15 +691,67 @@ pub fn icon(ui: &mut Ui, icon: Icon, size: f32, color: Color32) -> Response {
     response
 }
 
+/// Paints `icon` on a rounded square tinted with its own colour: the file-type
+/// and section marks used in lists, cards and dialog titles.
+pub fn paint_icon_tile(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color32, p: &Palette) {
+    let r = (rect.height() * 0.3).round().clamp(4.0, 12.0) as u8;
+    painter.rect_filled(rect, CornerRadius::same(r), p.tint(color));
+    let glyph = (rect.height() * 0.52).round();
+    icons::paint(painter, Rect::from_center_size(rect.center(), Vec2::splat(glyph)), icon, color);
+}
+
+/// [`paint_icon_tile`] placed in the layout.
+pub fn icon_tile(ui: &mut Ui, icon: Icon, size: f32, color: Color32, p: &Palette) -> Response {
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(size), Sense::hover());
+    paint_icon_tile(ui.painter(), rect, icon, color, p);
+    response
+}
+
+/// A small rounded count, as next to navigation entries.
+pub fn paint_badge(painter: &egui::Painter, right_center: Pos2, text: &str, fg: Color32, fill: Color32) -> Rect {
+    let galley = painter.layout_no_wrap(text.to_owned(), FontId::proportional(11.5), fg);
+    let size = vec2((galley.size().x + 12.0).max(22.0), 18.0);
+    let rect = Rect::from_min_size(pos2(right_center.x - size.x, right_center.y - size.y / 2.0), size);
+    painter.rect_filled(rect, CornerRadius::same(9), fill);
+    painter.galley(rect.center() - galley.size() / 2.0, galley, fg);
+    rect
+}
+
 /// Square, borderless icon button.
 pub fn icon_button(ui: &mut Ui, icon: Icon, tooltip: &str, p: &Palette) -> Response {
     let (rect, response) = ui.allocate_exact_size(Vec2::splat(CONTROL_H), Sense::click());
     if response.hovered() {
-        ui.painter().rect_filled(rect, CornerRadius::same(7), p.card_hover);
+        let fill = if response.is_pointer_button_down_on() { p.track } else { p.card_hover };
+        ui.painter().rect_filled(rect, CornerRadius::same(radius::MD), fill);
+    }
+    if response.has_focus() {
+        focus_ring(ui, rect, radius::MD, p);
     }
     let color = if response.hovered() { p.text } else { p.text_dim };
-    icons::paint(ui.painter(), Rect::from_center_size(rect.center(), Vec2::splat(16.0)), icon, color);
+    icons::paint(ui.painter(), Rect::from_center_size(rect.center(), Vec2::splat(17.0)), icon, color);
     response.on_hover_text(tooltip).on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+/// Keyboard focus outline, drawn just outside `rect`.
+fn focus_ring(ui: &Ui, rect: Rect, r: u8, p: &Palette) {
+    ui.painter().rect_stroke(
+        rect.expand(2.5),
+        CornerRadius::same(r + 3),
+        Stroke::new(2.0, p.accent.gamma_multiply(0.85)),
+        StrokeKind::Middle,
+    );
+}
+
+/// Fills `rect` with a top-to-bottom gradient.
+pub fn paint_vertical_gradient(painter: &egui::Painter, rect: Rect, top: Color32, bottom: Color32) {
+    let mut mesh = Mesh::default();
+    mesh.colored_vertex(rect.left_top(), top);
+    mesh.colored_vertex(rect.right_top(), top);
+    mesh.colored_vertex(rect.right_bottom(), bottom);
+    mesh.colored_vertex(rect.left_bottom(), bottom);
+    mesh.add_triangle(0, 1, 2);
+    mesh.add_triangle(0, 2, 3);
+    painter.add(Shape::mesh(mesh));
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -368,11 +767,12 @@ pub enum ButtonKind {
 /// same height as text fields ([`CONTROL_H`]).
 pub fn button(ui: &mut Ui, kind: ButtonKind, icon: Option<Icon>, text: &str, enabled: bool, p: &Palette) -> Response {
     let (fill, hover, fg, stroke) = match kind {
-        ButtonKind::Primary => (p.accent, lerp_color(p.accent, Color32::WHITE, 0.14), p.on_accent, Stroke::NONE),
+        ButtonKind::Primary => (p.accent, lerp_color(p.accent, Color32::WHITE, 0.12), p.on_accent, Stroke::NONE),
         ButtonKind::Danger => (p.red, lerp_color(p.red, Color32::WHITE, 0.12), Color32::WHITE, Stroke::NONE),
         ButtonKind::Ghost => (p.card, p.card_hover, p.text, Stroke::new(1.0, p.control_border)),
         ButtonKind::Tool => (Color32::TRANSPARENT, p.card_hover, p.text, Stroke::NONE),
     };
+    let solid = matches!(kind, ButtonKind::Primary | ButtonKind::Danger);
     // Disabled buttons use neutral colours in every theme so the label stays readable.
     let (fill, hover, fg, stroke) = if enabled {
         (fill, hover, fg, stroke)
@@ -384,26 +784,69 @@ pub fn button(ui: &mut Ui, kind: ButtonKind, icon: Option<Icon>, text: &str, ena
             ButtonKind::Tool => (Color32::TRANSPARENT, Color32::TRANSPARENT, muted, Stroke::NONE),
         }
     };
-    let galley = ui.painter().layout_no_wrap(text.to_owned(), FontId::proportional(13.5), fg);
+    let family = if solid { crate::theme::semi() } else { egui::FontFamily::Proportional };
+    let galley = ui.painter().layout_no_wrap(text.to_owned(), FontId::new(13.5, family), fg);
     let icon_w = match icon {
         Some(_) if text.is_empty() => 16.0,
-        Some(_) => 23.0,
+        Some(_) => 24.0,
         None => 0.0,
     };
-    let pad = if text.is_empty() { 7.0 } else { 13.0 };
+    let pad = if text.is_empty() { 8.0 } else { 14.0 };
     let size = vec2((galley.size().x + icon_w + pad * 2.0).max(CONTROL_H), CONTROL_H);
     let sense = if enabled { Sense::click() } else { Sense::hover() };
     let (rect, response) = ui.allocate_exact_size(size, sense);
     let painter = ui.painter();
-    let fill = if enabled && response.hovered() { hover } else { fill };
-    painter.rect(rect, CornerRadius::same(8), fill, stroke, StrokeKind::Inside);
-    if enabled && response.has_focus() {
-        painter.rect_stroke(rect.expand(2.0), CornerRadius::same(10), Stroke::new(1.5, p.accent), StrokeKind::Inside);
+    let pressed = enabled && response.is_pointer_button_down_on();
+    let fill = if pressed {
+        if solid { lerp_color(fill, Color32::BLACK, 0.12) } else { p.track }
+    } else if enabled && response.hovered() {
+        hover
+    } else {
+        fill
+    };
+    let corner = CornerRadius::same(radius::MD);
+    if solid && enabled {
+        painter.add(p.glow(fill, if response.hovered() { 18 } else { 12 }).as_shape(rect, corner));
+    } else if kind == ButtonKind::Ghost && enabled && !p.dark {
+        painter.add(p.shadow(1, 3).as_shape(rect, corner));
     }
+    let stroke = if kind == ButtonKind::Ghost && enabled && response.hovered() {
+        Stroke::new(1.0, lerp_color(p.control_border, p.text_dim, 0.4))
+    } else {
+        stroke
+    };
+    if kind == ButtonKind::Primary && enabled {
+        // The accent runs into its partner colour across the button.
+        let (a, b) = p.gradient();
+        let shade = |c: Color32| {
+            if pressed {
+                lerp_color(c, Color32::BLACK, 0.12)
+            } else if response.hovered() {
+                lerp_color(c, Color32::WHITE, 0.1)
+            } else {
+                c
+            }
+        };
+        paint_gradient_rect(painter, rect, radius::MD as f32, shade(a), shade(b), false);
+    } else {
+        painter.rect(rect, corner, fill, stroke, StrokeKind::Inside);
+    }
+    if solid && enabled {
+        // A hairline of light along the top edge gives solid buttons some depth.
+        let top = rect.shrink2(vec2(radius::MD as f32, 0.0));
+        painter.line_segment(
+            [top.left_top() + vec2(0.0, 0.5), top.right_top() + vec2(0.0, 0.5)],
+            Stroke::new(1.0, Color32::from_white_alpha(if pressed { 0 } else { 55 })),
+        );
+    }
+    if enabled && response.has_focus() {
+        focus_ring(ui, rect, radius::MD, p);
+    }
+    let painter = ui.painter();
     let content_w = galley.size().x + icon_w;
     let mut x = rect.center().x - content_w / 2.0;
     if let Some(icon) = icon {
-        let color = if kind == ButtonKind::Tool && enabled { p.accent } else { fg };
+        let color = if kind == ButtonKind::Tool && enabled && !response.hovered() { p.text_dim } else { fg };
         icons::paint(painter, Rect::from_min_size(pos2(x, rect.center().y - 8.0), Vec2::splat(16.0)), icon, color);
         x += icon_w;
     }
@@ -460,7 +903,7 @@ pub fn input_with_button(
 ) -> (Response, bool) {
     ui.horizontal(|ui| {
         let label_w = ui.painter().layout_no_wrap(label.to_owned(), FontId::proportional(13.5), p.text).size().x;
-        let button_w = if label.is_empty() { CONTROL_H } else { label_w + 49.0 };
+        let button_w = if label.is_empty() { CONTROL_H } else { label_w + 52.0 };
         let field_w = (ui.available_width() - button_w - ui.spacing().item_spacing.x).max(80.0);
         let field = ui.add(input(text).hint_text(hint).desired_width(field_w));
         let clicked = button(ui, ButtonKind::Ghost, Some(icon), label, true, p).clicked();
@@ -476,7 +919,7 @@ pub fn folder_field(ui: &mut Ui, dir: &mut String, recent: &[std::path::PathBuf]
     ui.horizontal(|ui| {
         let extra = if recent.is_empty() { 0.0 } else { CONTROL_H + ui.spacing().item_spacing.x };
         let label_w = ui.painter().layout_no_wrap("Browse".to_owned(), FontId::proportional(13.5), p.text).size().x;
-        let field_w = (ui.available_width() - label_w - 49.0 - extra - ui.spacing().item_spacing.x).max(80.0);
+        let field_w = (ui.available_width() - label_w - 52.0 - extra - ui.spacing().item_spacing.x).max(80.0);
         changed |= ui.add(input(dir).desired_width(field_w)).changed();
         if button(ui, ButtonKind::Ghost, Some(Icon::FolderOpen), "Browse", true, p).clicked() {
             let start = std::path::Path::new(dir.trim());
@@ -515,16 +958,23 @@ pub fn segmented<T: PartialEq + Copy>(ui: &mut Ui, value: &mut T, options: &[(T,
         .collect();
     let total = widths.iter().sum::<f32>() + 6.0;
     let (rect, mut response) = ui.allocate_exact_size(vec2(total, CONTROL_H), Sense::hover());
-    ui.painter().rect(rect, CornerRadius::same(8), p.track, Stroke::NONE, StrokeKind::Inside);
+    ui.painter().rect(rect, CornerRadius::same(radius::MD), p.track, Stroke::NONE, StrokeKind::Inside);
     let mut x = rect.left() + 3.0;
     for ((option, label), w) in options.iter().zip(widths) {
         let cell = Rect::from_min_size(pos2(x, rect.top() + 3.0), vec2(w, rect.height() - 6.0));
         let r = ui.interact(cell, response.id.with(label), Sense::click());
         let selected = *value == *option;
         if selected {
-            ui.painter().rect(cell, CornerRadius::same(6), p.card, Stroke::new(1.0, p.border), StrokeKind::Inside);
+            ui.painter().add(p.shadow(1, 4).as_shape(cell, CornerRadius::same(radius::SM)));
+            ui.painter().rect(
+                cell,
+                CornerRadius::same(radius::SM),
+                if p.dark { p.card_hover } else { p.card },
+                Stroke::new(1.0, p.border),
+                StrokeKind::Inside,
+            );
         } else if r.hovered() {
-            ui.painter().rect_filled(cell, CornerRadius::same(6), p.card_hover.gamma_multiply(0.6));
+            ui.painter().rect_filled(cell, CornerRadius::same(radius::SM), p.card_hover.gamma_multiply(0.6));
         }
         let color = if selected { p.text } else { p.text_dim };
         let family = if selected { crate::theme::semi() } else { egui::FontFamily::Proportional };
@@ -583,16 +1033,70 @@ pub fn logo(ui: &mut Ui, size: f32) -> Response {
 
 /// A rounded panel frame.
 pub fn card(p: &Palette) -> egui::Frame {
-    egui::Frame::new()
+    let frame = egui::Frame::new()
         .fill(p.card)
         .stroke(Stroke::new(1.0, p.border))
-        .corner_radius(CornerRadius::same(10))
-        .inner_margin(egui::Margin::same(9))
+        .corner_radius(CornerRadius::same(radius::XL - 2))
+        .inner_margin(egui::Margin::same(16));
+    // Light themes lift cards off the canvas with a soft shadow; dark ones rely on the fill.
+    if p.dark {
+        frame
+    } else {
+        frame.shadow(Shadow { offset: [0, 1], blur: 6, spread: 0, color: Color32::from_black_alpha(10) })
+    }
 }
 
-/// Small upper-case section caption.
+/// Upper-case text in the caption style, for painting.
+pub fn caps_galley(ui: &Ui, text: &str, size: f32, color: Color32) -> std::sync::Arc<egui::Galley> {
+    let mut job = egui::text::LayoutJob::default();
+    job.append(
+        text,
+        0.0,
+        egui::TextFormat {
+            font_id: FontId::new(size, crate::theme::semi()),
+            extra_letter_spacing: CAPS_TRACKING * size / 11.0,
+            color,
+            ..Default::default()
+        },
+    );
+    ui.painter().layout_job(job)
+}
+
+/// Small upper-case section caption, letter-spaced.
 pub fn caption(ui: &mut Ui, text: &str, p: &Palette) {
-    ui.label(egui::RichText::new(text).size(10.5).family(crate::theme::semi()).color(p.text_dim));
+    ui.label(
+        egui::RichText::new(text.to_uppercase())
+            .size(11.0)
+            .family(crate::theme::semi())
+            .extra_letter_spacing(CAPS_TRACKING)
+            .color(p.text_dim),
+    );
+}
+
+/// A card title row: caption on the left and an optional action link on the
+/// right. Returns whether the link was clicked.
+pub fn card_header(ui: &mut Ui, title: &str, link: Option<&str>, p: &Palette) -> bool {
+    let mut clicked = false;
+    ui.horizontal(|ui| {
+        caption(ui, title, p);
+        if let Some(link) = link {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let galley = ui.painter().layout_no_wrap(link.to_owned(), FontId::proportional(12.5), p.accent);
+                let (rect, r) = ui.allocate_exact_size(galley.size() + vec2(18.0, 4.0), Sense::click());
+                let color = if r.hovered() { p.text } else { p.text_dim };
+                ui.painter().text(rect.left_center(), Align2::LEFT_CENTER, link, FontId::proportional(12.5), color);
+                icons::paint(
+                    ui.painter(),
+                    Rect::from_center_size(rect.right_center() - vec2(6.0, 0.0), Vec2::splat(12.0)),
+                    Icon::External,
+                    color,
+                );
+                clicked = r.on_hover_cursor(egui::CursorIcon::PointingHand).clicked();
+            });
+        }
+    });
+    ui.add_space(6.0);
+    clicked
 }
 
 /// A sidebar section title that folds its section away when clicked.
@@ -601,18 +1105,21 @@ pub fn section(ui: &mut Ui, text: &str, p: &Palette) -> bool {
     let id = egui::Id::unique(("stewardget-section", text));
     let open = ui.ctx().data_mut(|d| *d.get_persisted_mut_or(id, true));
     let width = ui.available_width().min(150.0);
-    let (rect, r) = ui.allocate_exact_size(vec2(width, 16.0), Sense::click());
-    let color = if r.hovered() { p.text } else { p.text_dim };
-    let galley = ui.painter().layout_no_wrap(text.to_owned(), egui::FontId::new(10.5, crate::theme::semi()), color);
+    let (rect, r) = ui.allocate_exact_size(vec2(width, 20.0), Sense::click());
+    let color = if r.hovered() { p.text } else { lerp_color(p.text_dim, p.sidebar, 0.15) };
+    let galley = caps_galley(ui, &text.to_uppercase(), 10.5, color);
     let text_w = galley.size().x;
-    ui.painter().galley(pos2(rect.left(), rect.center().y - galley.size().y / 2.0), galley, color);
-    let caret = if open { Icon::CaretDown } else { Icon::CaretUp };
-    icons::paint(
-        ui.painter(),
-        Rect::from_center_size(pos2(rect.left() + text_w + 10.0, rect.center().y), vec2(9.0, 9.0)),
-        caret,
-        color,
-    );
+    let x = rect.left() + 10.0;
+    ui.painter().galley(pos2(x, rect.center().y - galley.size().y / 2.0), galley, color);
+    if r.hovered() {
+        let caret = if open { Icon::CaretDown } else { Icon::CaretUp };
+        icons::paint(
+            ui.painter(),
+            Rect::from_center_size(pos2(x + text_w + 10.0, rect.center().y), vec2(10.0, 10.0)),
+            caret,
+            color,
+        );
+    }
     if r.on_hover_text(if open { "Fold away" } else { "Show" }).clicked() {
         ui.ctx().data_mut(|d| d.insert_persisted(id, !open));
         return !open;
@@ -620,12 +1127,31 @@ pub fn section(ui: &mut Ui, text: &str, p: &Palette) -> bool {
     open
 }
 
-/// Compact metric tile.
+/// Metric tile: icon, label, a large value and an optional caption.
 pub fn stat_tile(ui: &mut Ui, p: &Palette, label: &str, value: &str, caption_text: &str, color: Color32) {
+    stat_tile_with_icon(ui, p, None, label, value, caption_text, color);
+}
+
+pub fn stat_tile_with_icon(
+    ui: &mut Ui,
+    p: &Palette,
+    icon: Option<Icon>,
+    label: &str,
+    value: &str,
+    caption_text: &str,
+    color: Color32,
+) {
     card(p).show(ui, |ui| {
         ui.set_min_width(ui.available_width());
-        ui.label(egui::RichText::new(label).size(12.0).color(p.text_dim));
-        ui.label(egui::RichText::new(value).size(17.0).family(crate::theme::semi()).color(color));
+        ui.horizontal(|ui| {
+            if let Some(icon) = icon {
+                icon_tile(ui, icon, 26.0, color, p);
+                ui.add_space(2.0);
+            }
+            ui.label(egui::RichText::new(label).size(12.5).color(p.text_dim));
+        });
+        ui.add_space(4.0);
+        ui.label(egui::RichText::new(value).size(crate::theme::size::XXL).family(crate::theme::semi()).color(p.text));
         // Always one line, so tiles side by side have the same height.
         let caption_text = if caption_text.is_empty() { "\u{a0}" } else { caption_text };
         ui.label(egui::RichText::new(caption_text).size(12.0).color(p.text_dim));
@@ -637,27 +1163,53 @@ pub fn dot(painter: &egui::Painter, center: Pos2, color: Color32) {
     painter.circle_filled(center, 3.5, color);
 }
 
+/// Paints a status pill (dot and label on a tint of `color`) with its left
+/// edge at `left_center`, clipped to `max_w`. Returns its rect.
+pub fn paint_pill(
+    painter: &egui::Painter,
+    left_center: Pos2,
+    text: &str,
+    color: Color32,
+    max_w: f32,
+    p: &Palette,
+) -> Rect {
+    let galley = painter.layout_no_wrap(text.to_owned(), FontId::new(12.0, crate::theme::semi()), color);
+    let w = (galley.size().x + 26.0).min(max_w);
+    let rect = Rect::from_min_size(pos2(left_center.x, left_center.y - 11.0), vec2(w, 22.0));
+    painter.rect_filled(rect, CornerRadius::same(11), p.tint(color));
+    painter.circle_filled(rect.left_center() + vec2(10.0, 0.0), 3.0, color);
+    painter.with_clip_rect(rect.shrink(1.0)).galley(
+        pos2(rect.left() + 18.0, rect.center().y - galley.size().y / 2.0),
+        galley,
+        color,
+    );
+    rect
+}
+
 /// Pill-shaped status badge.
 pub fn pill(ui: &mut Ui, text: &str, color: Color32) -> Response {
-    let galley = ui.painter().layout_no_wrap(text.to_owned(), FontId::proportional(12.0), color);
-    let size = galley.size() + vec2(14.0, 4.0);
+    let galley = ui.painter().layout_no_wrap(text.to_owned(), FontId::new(12.0, crate::theme::semi()), color);
+    let size = galley.size() + vec2(18.0, 6.0);
     let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
     ui.painter().rect_filled(rect, CornerRadius::same(255), color.gamma_multiply(0.15));
     ui.painter().galley(rect.center() - galley.size() / 2.0, galley, color);
     response
 }
 
-/// A small toggle chip: filled when on.
+/// A small toggle chip: tinted with the accent when on.
 pub fn chip(ui: &mut Ui, label: &str, on: bool, p: &Palette) -> Response {
-    let font = FontId::proportional(12.0);
-    let galley = ui.painter().layout_no_wrap(label.to_owned(), font, p.text);
-    let (rect, response) = ui.allocate_exact_size(galley.size() + vec2(16.0, 8.0), Sense::click());
+    let family = if on { crate::theme::semi() } else { egui::FontFamily::Proportional };
+    let font = FontId::new(12.5, family);
+    let galley = ui.painter().layout_no_wrap(label.to_owned(), font.clone(), p.text);
+    let (rect, response) = ui.allocate_exact_size(galley.size() + vec2(20.0, 10.0), Sense::click());
     let (fill, fg, stroke) = if on {
-        (p.accent, p.on_accent, Stroke::NONE)
+        (p.selected_fill(), p.accent, Stroke::new(1.0, p.accent.gamma_multiply(0.55)))
+    } else if response.hovered() {
+        (p.card_hover, p.text, Stroke::new(1.0, p.control_border))
     } else {
-        (p.card, p.text_dim, Stroke::new(1.0, p.control_border))
+        (p.card, p.text_dim, Stroke::new(1.0, p.border))
     };
-    ui.painter().rect(rect, CornerRadius::same(7), fill, stroke, egui::StrokeKind::Inside);
-    ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, label, FontId::proportional(12.0), fg);
+    ui.painter().rect(rect, CornerRadius::same(255), fill, stroke, egui::StrokeKind::Inside);
+    ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, label, font, fg);
     response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }

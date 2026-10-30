@@ -28,19 +28,33 @@ impl StewardGetApp {
         let week: u64 = snap.stats.recent_days(7, now).iter().map(|d| d.bytes).sum();
 
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-            egui::Frame::new().inner_margin(Margin::symmetric(12, 8)).show(ui, |ui| {
-                // Hero: the live speed over its own graph.
+            egui::Frame::new().inner_margin(Margin { left: 24, right: 24, top: 20, bottom: 20 }).show(ui, |ui| {
+                ui.spacing_mut().item_spacing = vec2(12.0, 6.0);
+                ui.label(
+                    RichText::new("Overview")
+                        .size(crate::theme::size::XL + 2.0)
+                        .family(crate::theme::semi())
+                        .color(p.text),
+                );
+                ui.label(RichText::new(greeting(&snap, waiting)).size(crate::theme::size::SM).color(p.text_dim));
+                ui.add_space(12.0);
+                // Hero: the live speed over its own graph, lit by a soft glow of the accent.
                 card(&p).show(ui, |ui| {
                     ui.set_min_width(ui.available_width());
+                    let glow = ui.painter().add(egui::Shape::Noop);
+                    let top_left = ui.min_rect().min;
                     ui.horizontal(|ui| {
                         ui.vertical(|ui| {
-                            widgets::caption(ui, "RIGHT NOW", &p);
-                            let (value, color) = if snap.speed > 1.0 {
-                                (format_speed(snap.speed), p.accent2)
-                            } else {
-                                ("Idle".to_owned(), p.text_dim)
-                            };
-                            ui.label(RichText::new(value).size(28.0).family(crate::theme::semi()).color(color));
+                            widgets::caption(ui, "Right now", &p);
+                            let live = snap.speed > 1.0;
+                            let value = if live { format_speed(snap.speed) } else { "Idle".to_owned() };
+                            let color = if live { p.text } else { p.text_dim };
+                            ui.label(
+                                RichText::new(value)
+                                    .size(crate::theme::size::DISPLAY)
+                                    .family(crate::theme::semi())
+                                    .color(color),
+                            );
                             let line = match (active.len(), eta) {
                                 (0, _) if waiting > 0 => format!("{waiting} waiting to start"),
                                 (0, _) => "Nothing is downloading. Paste a link to begin.".to_owned(),
@@ -69,33 +83,86 @@ impl StewardGetApp {
                             });
                         });
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            let w = (ui.available_width() - 20.0).clamp(120.0, 520.0);
-                            widgets::area_chart(ui, &snap.history, vec2(w, 84.0), p.accent2, &p);
+                            let w = (ui.available_width() - 20.0).clamp(120.0, 560.0);
+                            widgets::area_chart(ui, &snap.history, vec2(w, 112.0), p.accent2, &p);
                         });
                     });
+                    let card_rect = ui.min_rect();
+                    let glow_rect = egui::Rect::from_min_size(
+                        top_left + vec2(40.0, 30.0),
+                        vec2(card_rect.width() * 0.35, (card_rect.height() - 60.0).max(10.0)),
+                    );
+                    let strength = if snap.speed > 1.0 { 0.32 } else { 0.16 };
+                    ui.painter().set(
+                        glow,
+                        egui::Shadow {
+                            offset: [0, 0],
+                            blur: 160,
+                            spread: 0,
+                            color: p.accent.gamma_multiply(if p.dark { strength * 0.5 } else { strength * 0.3 }),
+                        }
+                        .as_shape(glow_rect, egui::CornerRadius::same(20)),
+                    );
                 });
-                ui.add_space(5.0);
+                ui.add_space(12.0);
 
-                let per_row = if ui.available_width() > 480.0 { 4 } else { 2 };
+                let per_row = if ui.available_width() > 760.0 { 4 } else { 2 };
+                let tile_w = (ui.available_width() - 12.0 * (per_row - 1) as f32) / per_row as f32;
+                let days: Vec<f32> = snap.stats.recent_days(14, now).iter().map(|d| d.bytes as f32).collect();
+                let queued = snap.count(|s| s == Status::Queued);
+                let success = snap.stats.success_rate();
+                let shown = snap.downloads.len().max(1) as f32;
                 let tiles = [
-                    ("Today", format_bytes(snap.stats.today(now)), p.accent),
-                    ("Last 7 days", format_bytes(week), p.accent2),
-                    ("Waiting", waiting.to_string(), p.yellow),
-                    ("Finished all-time", snap.stats.completed.to_string(), p.green),
+                    (
+                        Icon::Download,
+                        "Today",
+                        format_bytes(snap.stats.today(now)),
+                        "Downloaded since midnight".to_owned(),
+                        p.accent,
+                        None,
+                    ),
+                    (
+                        Icon::Calendar,
+                        "Last 7 days",
+                        format_bytes(week),
+                        format!("{} this month", format_bytes(snap.stats.month_total(now))),
+                        p.accent2,
+                        None,
+                    ),
+                    (
+                        Icon::Clock,
+                        "Waiting",
+                        waiting.to_string(),
+                        format!("{queued} queued \u{00b7} {} paused", waiting.saturating_sub(queued)),
+                        p.yellow,
+                        Some(waiting as f32 / shown),
+                    ),
+                    (
+                        Icon::CheckCircle,
+                        "Finished",
+                        snap.stats.completed.to_string(),
+                        success.map_or("All time".to_owned(), |r| format!("{:.0}% of downloads succeed", r * 100.0)),
+                        p.green,
+                        Some(success.unwrap_or(0.0) as f32),
+                    ),
                 ];
-                for chunk in tiles.chunks(per_row) {
-                    ui.columns(per_row, |cols| {
-                        for (col, (label, value, color)) in cols.iter_mut().zip(chunk) {
-                            widgets::stat_tile(col, &p, label, value, "", *color);
+                for (i, chunk) in tiles.chunks(per_row).enumerate() {
+                    ui.horizontal(|ui| {
+                        for (j, (icon, label, value, sub, color, meter)) in chunk.iter().enumerate() {
+                            // The two volume tiles show the last two weeks, or the last one.
+                            let extra = match meter {
+                                Some(f) => widgets::KpiExtra::Meter(*f),
+                                None if i * per_row + j == 0 => widgets::KpiExtra::Spark(&days),
+                                None => widgets::KpiExtra::Spark(&days[days.len().saturating_sub(7)..]),
+                            };
+                            widgets::kpi_tile(ui, tile_w, *icon, *color, label, value, sub, extra, &p);
                         }
                     });
-                    ui.add_space(6.0);
+                    ui.add_space(12.0);
                 }
-                ui.add_space(4.0);
 
                 self.data_cap_card(ui);
                 self.links_card(ui);
-                ui.add_space(5.0);
                 let wide = ui.available_width() > 880.0;
                 let now_block = |this: &mut Self, ui: &mut Ui| this.overview_active(ui, &active);
                 let recent_block = |this: &mut Self, ui: &mut Ui| this.overview_recent(ui, now);
@@ -106,10 +173,10 @@ impl StewardGetApp {
                     });
                 } else {
                     now_block(self, ui);
-                    ui.add_space(5.0);
+                    ui.add_space(12.0);
                     recent_block(self, ui);
                 }
-                ui.add_space(5.0);
+                ui.add_space(12.0);
                 self.overview_habits(ui);
             });
         });
@@ -125,63 +192,61 @@ impl StewardGetApp {
         let p = self.palette;
         card(&p).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
-            ui.horizontal(|ui| {
-                widgets::caption(ui, "DOWNLOADING", &p);
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ui.link(RichText::new("See all").size(12.0).color(p.accent)).clicked() {
-                        self.page = Page::Downloads;
-                        self.filter = ListFilter::All;
-                    }
-                });
-            });
-            ui.add_space(4.0);
+            if widgets::card_header(ui, "Downloading", Some("See all"), &p) {
+                self.page = Page::Downloads;
+                self.filter = ListFilter::All;
+            }
             if active.is_empty() {
-                ui.label(RichText::new("No active downloads.").color(p.text_dim));
+                empty_line(ui, &p, Icon::Download, "Nothing is downloading right now.");
             }
             for d in active.iter().take(6) {
-                let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 46.0), Sense::click());
+                let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 58.0), Sense::click());
                 let painter = ui.painter();
                 if response.hovered() {
-                    painter.rect_filled(rect, egui::CornerRadius::same(8), p.card_hover);
+                    painter.rect_filled(rect.expand2(vec2(6.0, 0.0)), egui::CornerRadius::same(10), p.card_hover);
                 }
                 let color = p.category(d.category);
-                crate::icons::paint(
+                widgets::paint_file_tile(
                     painter,
-                    egui::Rect::from_center_size(rect.left_center() + vec2(16.0, -6.0), vec2(16.0, 16.0)),
+                    egui::Rect::from_min_size(rect.left_top() + vec2(0.0, 6.0), vec2(36.0, 36.0)),
                     Icon::for_category(d.category),
+                    widgets::extension(&d.file_name),
                     color,
+                    &p,
                 );
-                let name_w = rect.width() - 150.0;
+                let text_x = 46.0;
+                let name_w = rect.width() - 170.0;
                 let name = shorten(&d.file_name, (name_w / 7.0) as usize);
                 painter.text(
-                    rect.left_top() + vec2(34.0, 12.0),
+                    rect.left_top() + vec2(text_x, 14.0),
                     egui::Align2::LEFT_CENTER,
                     name,
-                    egui::FontId::new(13.0, crate::theme::semi()),
+                    egui::FontId::new(13.5, crate::theme::semi()),
                     p.text,
                 );
-                let right = format!("{}  ·  {}", format_speed(d.speed), d.eta.map_or("—".into(), format_duration));
+                let right =
+                    format!("{}  \u{00b7}  {}", format_speed(d.speed), d.eta.map_or("—".into(), format_duration));
                 painter.text(
-                    rect.right_top() + vec2(-8.0, 12.0),
+                    rect.right_top() + vec2(0.0, 14.0),
                     egui::Align2::RIGHT_CENTER,
                     right,
-                    egui::FontId::proportional(12.0),
+                    egui::FontId::proportional(12.5),
                     p.text_dim,
                 );
                 widgets::paint_progress(
                     ui,
-                    egui::Rect::from_min_size(rect.left_top() + vec2(34.0, 28.0), vec2(rect.width() - 42.0, 6.0)),
+                    egui::Rect::from_min_size(rect.left_top() + vec2(text_x, 29.0), vec2(rect.width() - text_x, 6.0)),
                     d,
                     &p,
                 );
                 if let Some(insight) = self.insight_for(d) {
                     let c = match insight.tone {
                         stewardget_core::InsightTone::Good => p.green,
-                        stewardget_core::InsightTone::Info => p.accent2,
+                        stewardget_core::InsightTone::Info => p.text_dim,
                         stewardget_core::InsightTone::Warn => p.yellow,
                     };
                     ui.painter().text(
-                        rect.left_top() + vec2(34.0, 41.0),
+                        rect.left_top() + vec2(text_x, 47.0),
                         egui::Align2::LEFT_CENTER,
                         insight.headline,
                         egui::FontId::proportional(12.0),
@@ -204,44 +269,43 @@ impl StewardGetApp {
         let p = self.palette;
         card(&p).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
-            ui.horizontal(|ui| {
-                widgets::caption(ui, "RECENTLY FINISHED", &p);
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ui.link(RichText::new("History").size(12.0).color(p.accent)).clicked() {
-                        self.page = Page::History;
-                    }
-                });
-            });
-            ui.add_space(4.0);
+            if widgets::card_header(ui, "Recently finished", Some("History"), &p) {
+                self.page = Page::History;
+            }
             let recent: Vec<_> = self.history.entries().iter().take(6).cloned().collect();
             if recent.is_empty() {
-                ui.label(RichText::new("Finished downloads will show up here.").color(p.text_dim));
+                empty_line(ui, &p, Icon::CheckCircle, "Finished downloads will show up here.");
             }
             for e in recent {
                 let ok = e.status == Status::Completed;
-                let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 34.0), Sense::click());
+                let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 44.0), Sense::click());
                 let painter = ui.painter();
                 if response.hovered() {
-                    painter.rect_filled(rect, egui::CornerRadius::same(8), p.card_hover);
+                    painter.rect_filled(rect.expand2(vec2(6.0, 0.0)), egui::CornerRadius::same(10), p.card_hover);
                 }
                 let color = if ok { p.category(e.category) } else { p.red };
-                crate::icons::paint(
+                widgets::paint_file_tile(
                     painter,
-                    egui::Rect::from_center_size(rect.left_center() + vec2(16.0, 0.0), vec2(16.0, 16.0)),
+                    egui::Rect::from_min_size(rect.left_center() - vec2(0.0, 16.0), vec2(32.0, 32.0)),
                     if ok { Icon::for_category(e.category) } else { Icon::Alert },
+                    "",
                     color,
+                    &p,
                 );
                 painter.text(
-                    rect.left_center() + vec2(34.0, 0.0),
+                    rect.left_center() + vec2(42.0, 0.0),
                     egui::Align2::LEFT_CENTER,
-                    shorten(&e.file_name, ((rect.width() - 170.0) / 7.0) as usize),
-                    egui::FontId::proportional(13.0),
+                    shorten(&e.file_name, ((rect.width() - 190.0) / 7.0) as usize),
+                    egui::FontId::proportional(13.5),
                     p.text,
                 );
-                let meta =
-                    format!("{}  ·  {}", e.size.map_or("—".into(), format_bytes), format_relative(e.finished_at, now));
+                let meta = format!(
+                    "{}  \u{00b7}  {}",
+                    e.size.map_or("—".into(), format_bytes),
+                    format_relative(e.finished_at, now)
+                );
                 painter.text(
-                    rect.right_center() - vec2(8.0, 0.0),
+                    rect.right_center(),
                     egui::Align2::RIGHT_CENTER,
                     meta,
                     egui::FontId::proportional(12.0),
@@ -380,6 +444,36 @@ impl StewardGetApp {
             }
         });
     }
+}
+
+/// One line under the page title saying how things stand.
+fn greeting(snap: &stewardget_core::EngineSnapshot, waiting: usize) -> String {
+    let active = snap.count(Status::is_active);
+    let failed = snap.count(|s| s == Status::Failed);
+    let mut parts = Vec::new();
+    match active {
+        0 => parts.push("Nothing is downloading".to_owned()),
+        1 => parts.push("1 download in progress".to_owned()),
+        n => parts.push(format!("{n} downloads in progress")),
+    }
+    if waiting > 0 {
+        parts.push(format!("{waiting} waiting"));
+    }
+    if failed > 0 {
+        parts.push(format!("{failed} need attention"));
+    }
+    parts.join(" \u{00b7} ")
+}
+
+/// A quiet placeholder line inside a card with nothing to list.
+fn empty_line(ui: &mut Ui, p: &crate::theme::Palette, icon: Icon, text: &str) {
+    ui.add_space(6.0);
+    ui.horizontal(|ui| {
+        widgets::icon_tile(ui, icon, 30.0, p.text_dim, p);
+        ui.add_space(4.0);
+        ui.label(RichText::new(text).color(p.text_dim));
+    });
+    ui.add_space(6.0);
 }
 
 fn shorten(s: &str, max_chars: usize) -> String {

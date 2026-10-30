@@ -38,17 +38,36 @@ impl StewardGetApp {
             });
             return;
         };
+        if ui.available_width() < 560.0 {
+            self.inspector(ui, &d);
+            return;
+        }
 
         // Header line: icon, name, status, quick actions.
         ui.horizontal(|ui| {
-            widgets::icon(ui, Icon::for_category(d.category), 20.0, p.category(d.category));
-            ui.add(
-                egui::Label::new(RichText::new(&d.file_name).size(15.0).family(theme::semi()).color(p.text)).truncate(),
-            );
-            let (label, color) = status_label(&d, &p);
-            widgets::pill(ui, &label, color);
+            widgets::icon_tile(ui, Icon::for_category(d.category), 38.0, p.category(d.category), &p);
+            ui.add_space(4.0);
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = 2.0;
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(&d.file_name).size(theme::size::LG + 1.0).family(theme::semi()).color(p.text),
+                        )
+                        .truncate(),
+                    );
+                    let (label, color) = status_label(&d, &p);
+                    widgets::pill(ui, &label, color);
+                });
+                let mut sub =
+                    format!("{}  \u{00b7}  {}", self.cfg.category_label(d.category), crate::capture::host_of(&d.url));
+                if let Some(total) = d.total {
+                    sub = format!("{sub}  \u{00b7}  {}", format_bytes(total));
+                }
+                ui.label(RichText::new(sub).size(theme::size::SM).color(p.text_dim));
+            });
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                ui.spacing_mut().item_spacing.x = 2.0;
+                ui.spacing_mut().item_spacing.x = 4.0;
                 if widgets::icon_button(ui, Icon::Close, "Close details", &p).clicked() {
                     self.show_details = false;
                 }
@@ -58,21 +77,22 @@ impl StewardGetApp {
                 if widgets::icon_button(ui, Icon::FolderOpen, "Show in folder", &p).clicked() {
                     self.reveal(&d.path);
                 }
+                ui.add_space(4.0);
                 if d.status == Status::Completed
                     && crate::table::file_exists(&d.path)
-                    && widgets::button(ui, ButtonKind::Tool, Some(Icon::External), "Open", true, &p).clicked()
+                    && widgets::button(ui, ButtonKind::Primary, Some(Icon::External), "Open", true, &p).clicked()
                 {
                     self.open_path(&d.path);
                 }
                 if d.status.can_pause()
-                    && widgets::button(ui, ButtonKind::Tool, Some(Icon::Pause), "Pause", true, &p).clicked()
+                    && widgets::button(ui, ButtonKind::Ghost, Some(Icon::Pause), "Pause", true, &p).clicked()
                 {
                     let r = self.engine.pause(d.id);
                     self.report(r);
                 }
                 if d.status.can_resume() && problem_of(&d) != Some(Problem::Changed) {
                     let label = if d.status == Status::Failed { "Retry" } else { "Resume" };
-                    if widgets::button(ui, ButtonKind::Tool, Some(Icon::Play), label, true, &p).clicked() {
+                    if widgets::button(ui, ButtonKind::Primary, Some(Icon::Play), label, true, &p).clicked() {
                         let r = self.engine.resume(d.id);
                         self.report(r);
                     }
@@ -115,6 +135,191 @@ impl StewardGetApp {
                 self.speed_block(ui, &d, 120.0);
             });
         }
+    }
+
+    /// The details as a column beside the list: the file, a progress ring with
+    /// the live figures, its actions, then connections, speed and information.
+    fn inspector(&mut self, ui: &mut Ui, d: &DownloadView) {
+        let p = self.palette;
+        egui::ScrollArea::vertical().id_salt("inspector").auto_shrink([false, false]).show(ui, |ui| {
+            ui.set_width(ui.available_width() - 6.0);
+            ui.horizontal(|ui| {
+                widgets::caption(ui, "Details", &p);
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if widgets::icon_button(ui, Icon::Close, "Close details", &p).clicked() {
+                        self.show_details = false;
+                    }
+                    if widgets::icon_button(ui, Icon::Sliders, "Properties (F2)", &p).clicked() {
+                        self.open_properties(d);
+                    }
+                });
+            });
+            ui.add_space(6.0);
+
+            // The file.
+            ui.horizontal_top(|ui| {
+                let (tile, _) = ui.allocate_exact_size(vec2(56.0, 56.0), egui::Sense::hover());
+                widgets::paint_file_tile(
+                    ui.painter(),
+                    tile,
+                    Icon::for_category(d.category),
+                    widgets::extension(&d.file_name),
+                    p.category(d.category),
+                    &p,
+                );
+                ui.add_space(6.0);
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing.y = 4.0;
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(&d.file_name).size(theme::size::LG).family(theme::semi()).color(p.text),
+                        )
+                        .wrap(),
+                    );
+                    ui.horizontal(|ui| {
+                        let (label, color) = status_label(d, &p);
+                        widgets::pill(ui, &label, color);
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(crate::capture::host_of(&d.url)).size(theme::size::SM).color(p.text_dim),
+                            )
+                            .truncate(),
+                        );
+                    });
+                });
+            });
+            ui.add_space(14.0);
+
+            // Progress ring and the figures that go with it.
+            let (hero, _) = ui.allocate_exact_size(vec2(ui.available_width(), 128.0), egui::Sense::hover());
+            let painter = ui.painter();
+            painter.rect(
+                hero,
+                egui::CornerRadius::same(theme::radius::LG),
+                p.bg,
+                egui::Stroke::new(1.0, p.border),
+                egui::StrokeKind::Inside,
+            );
+            let center = hero.left_center() + vec2(64.0, 0.0);
+            let (from, to) = widgets::status_gradient(d.status, &p);
+            let live = d.status == Status::Downloading;
+            if live {
+                widgets::paint_glow(painter, center, 80.0, to.gamma_multiply(if p.dark { 0.22 } else { 0.14 }));
+            }
+            let frac = d.fraction().unwrap_or(0.0);
+            widgets::paint_ring(painter, center, 42.0, 8.0, frac, from, to, p.track);
+            let pct = match d.fraction() {
+                Some(f) if f >= 1.0 => "100%".to_owned(),
+                Some(f) => format!("{:.0}%", (f * 100.0).floor()),
+                None => "—".to_owned(),
+            };
+            painter.text(
+                center - vec2(0.0, 6.0),
+                egui::Align2::CENTER_CENTER,
+                pct,
+                egui::FontId::new(theme::size::XL, theme::semi()),
+                p.text,
+            );
+            painter.text(
+                center + vec2(0.0, 14.0),
+                egui::Align2::CENTER_CENTER,
+                if d.status == Status::Completed { "done" } else { "complete" },
+                egui::FontId::proportional(11.0),
+                p.text_dim,
+            );
+            let figures: [(&str, String); 3] = match d.status {
+                Status::Completed => {
+                    let secs = match d.finished_at {
+                        Some(t) if d.active_secs == 0 => t.saturating_sub(d.added_at),
+                        _ => d.active_secs,
+                    }
+                    .max(1);
+                    [
+                        ("Size", format_bytes(d.total.unwrap_or(d.downloaded))),
+                        ("Took", format_duration(secs)),
+                        ("Average", format_speed(d.downloaded as f64 / secs as f64)),
+                    ]
+                }
+                _ => [
+                    ("Speed", if live { format_speed(d.speed) } else { "—".to_owned() }),
+                    ("Time left", d.eta.filter(|_| live).map_or("—".to_owned(), format_duration)),
+                    (
+                        "Downloaded",
+                        match d.total {
+                            Some(t) => format!("{} / {}", format_bytes(d.downloaded), format_bytes(t)),
+                            None => format_bytes(d.downloaded),
+                        },
+                    ),
+                ],
+            };
+            let x = center.x + 64.0;
+            for (i, (k, v)) in figures.iter().enumerate() {
+                let y = hero.top() + 24.0 + i as f32 * 36.0;
+                painter.text(
+                    egui::pos2(x, y - 7.0),
+                    egui::Align2::LEFT_CENTER,
+                    *k,
+                    egui::FontId::proportional(11.5),
+                    p.text_dim,
+                );
+                painter.with_clip_rect(hero.shrink(4.0)).text(
+                    egui::pos2(x, y + 9.0),
+                    egui::Align2::LEFT_CENTER,
+                    v,
+                    egui::FontId::new(if i == 0 { theme::size::LG } else { theme::size::MD }, theme::semi()),
+                    p.text,
+                );
+            }
+            ui.add_space(12.0);
+
+            // Actions.
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
+                if d.status == Status::Completed
+                    && crate::table::file_exists(&d.path)
+                    && widgets::button(ui, ButtonKind::Primary, Some(Icon::External), "Open file", true, &p).clicked()
+                {
+                    self.open_path(&d.path);
+                }
+                if d.status.can_resume() && problem_of(d) != Some(Problem::Changed) {
+                    let label = if d.status == Status::Failed { "Retry" } else { "Resume" };
+                    if widgets::button(ui, ButtonKind::Primary, Some(Icon::Play), label, true, &p).clicked() {
+                        let r = self.engine.resume(d.id);
+                        self.report(r);
+                    }
+                }
+                if d.status.can_pause()
+                    && widgets::button(ui, ButtonKind::Ghost, Some(Icon::Pause), "Pause", true, &p).clicked()
+                {
+                    let r = self.engine.pause(d.id);
+                    self.report(r);
+                }
+                if widgets::button(ui, ButtonKind::Ghost, Some(Icon::FolderOpen), "Folder", true, &p).clicked() {
+                    self.reveal(&d.path);
+                }
+                if widgets::button(ui, ButtonKind::Ghost, Some(Icon::Copy), "Copy link", true, &p).clicked() {
+                    ui.ctx().copy_text(d.url.clone());
+                    let accent = p.accent2;
+                    self.toast("Link copied", accent);
+                }
+            });
+            self.problem_bar(ui, d);
+            if d.status.is_active() {
+                ui.add_space(8.0);
+                self.insight_card(ui, d);
+                self.lanes_card(ui, d);
+            }
+
+            ui.add_space(16.0);
+            self.map_block(ui, d, 84.0);
+            ui.add_space(14.0);
+            self.speed_block(ui, d, 120.0);
+            ui.add_space(16.0);
+            widgets::caption(ui, "Information", &p);
+            ui.add_space(4.0);
+            self.info_grid(ui, d);
+            ui.add_space(12.0);
+        });
     }
 
     /// Explains what went wrong and offers the right way forward; partial data
@@ -165,13 +370,14 @@ impl StewardGetApp {
         let Some(err) = d.error.clone().filter(|_| d.status == Status::Failed) else { return };
         let kind = problem_of(d).unwrap_or(Problem::Other);
         let hint = crate::table::problem_hint(kind, &err);
-        ui.horizontal_wrapped(|ui| {
-            widgets::icon(ui, Icon::Alert, 14.0, p.red);
-            ui.label(RichText::new(crate::app::capitalize(&err)).size(12.5).color(p.red));
+        ui.add_space(8.0);
+        crate::dialogs::callout(ui, &p, p.red, Icon::Alert, |ui| {
+            ui.label(RichText::new(crate::app::capitalize(&err)).size(13.0).family(theme::semi()).color(p.red));
             if !hint.is_empty() {
-                ui.label(RichText::new(hint).size(12.5).color(p.text_dim));
+                ui.add(egui::Label::new(RichText::new(hint).size(12.5).color(p.text_dim)).wrap());
             }
         });
+        ui.add_space(4.0);
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
             if kind == Problem::Changed

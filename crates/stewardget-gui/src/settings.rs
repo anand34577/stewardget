@@ -372,8 +372,8 @@ impl StewardGetApp {
                     row(
                         ui,
                         &p,
-                        "Compact rows",
-                        "One line per download. Off shows the kind of file and the site under each name. Right-click the list's header to pick columns.",
+                        "List view",
+                        "One dense line per download, with sortable columns (right-click the header to pick them). Off shows each download as a card.",
                         |ui| {
                             toggle(ui, &mut draft.compact_rows, &p);
                         },

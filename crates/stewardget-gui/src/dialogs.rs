@@ -27,9 +27,9 @@ fn modal_frame(p: &Palette) -> Frame {
     Frame::new()
         .fill(p.card)
         .stroke(Stroke::new(1.0, p.border))
-        .corner_radius(CornerRadius::same(14))
-        .inner_margin(Margin::same(18))
-        .shadow(p.shadow(14, 44))
+        .corner_radius(CornerRadius::same(theme::radius::XL + 2))
+        .inner_margin(Margin::same(24))
+        .shadow(p.shadow(20, 60))
 }
 
 pub(crate) fn modal(id: &str, p: &Palette) -> egui::Modal {
@@ -38,18 +38,16 @@ pub(crate) fn modal(id: &str, p: &Palette) -> egui::Modal {
 
 pub(crate) fn title(ui: &mut Ui, p: &Palette, icon: Icon, text: &str) {
     ui.horizontal(|ui| {
-        let (rect, _) = ui.allocate_exact_size(egui::vec2(34.0, 34.0), egui::Sense::hover());
-        ui.painter().rect_filled(rect, CornerRadius::same(9), p.accent.gamma_multiply(if p.dark { 0.2 } else { 0.12 }));
-        crate::icons::paint(ui.painter(), rect.shrink(9.0), icon, p.accent);
-        ui.add_space(4.0);
-        ui.label(RichText::new(text).size(17.0).family(theme::semi()).color(p.text));
+        widgets::icon_tile(ui, icon, 40.0, p.accent, p);
+        ui.add_space(6.0);
+        ui.label(RichText::new(text).size(theme::size::XL).family(theme::semi()).color(p.text));
     });
-    ui.add_space(4.0);
+    ui.add_space(12.0);
 }
 
 /// Right-aligned button row at the bottom of a dialog.
 pub(crate) fn footer(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
-    ui.add_space(8.0);
+    ui.add_space(16.0);
     ui.with_layout(Layout::right_to_left(Align::Center), add);
 }
 
@@ -562,10 +560,13 @@ Connections are shared across all of them.",
                 if widgets::button(ui, ButtonKind::Ghost, None, "Cancel", true, &p).clicked() {
                     close = true;
                 }
-                let arrow = if dialog.advanced { Icon::CaretUp } else { Icon::CaretDown };
-                if widgets::button(ui, ButtonKind::Tool, Some(arrow), "Advanced", true, &p).clicked() {
-                    dialog.advanced = !dialog.advanced;
-                }
+                // A disclosure, not an action: it sits apart at the left edge.
+                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                    let arrow = if dialog.advanced { Icon::CaretUp } else { Icon::CaretDown };
+                    if widgets::button(ui, ButtonKind::Tool, Some(arrow), "Advanced", true, &p).clicked() {
+                        dialog.advanced = !dialog.advanced;
+                    }
+                });
             });
         });
 

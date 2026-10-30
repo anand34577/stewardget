@@ -9,11 +9,34 @@ use stewardget_core::{Accent, Category, Status, Theme};
 
 /// Height shared by buttons, text fields, combo boxes and sliders, so rows of
 /// mixed controls line up.
-pub const CONTROL_H: f32 = 28.0;
+pub const CONTROL_H: f32 = 32.0;
+
+/// Type scale (points). Body text is `MD`; everything else steps from it.
+pub mod size {
+    pub const SM: f32 = 12.5;
+    pub const MD: f32 = 14.0;
+    pub const LG: f32 = 16.0;
+    pub const XL: f32 = 20.0;
+    pub const XXL: f32 = 26.0;
+    pub const DISPLAY: f32 = 34.0;
+}
+
+/// Corner radii.
+pub mod radius {
+    pub const SM: u8 = 6;
+    pub const MD: u8 = 9;
+    pub const LG: u8 = 12;
+    pub const XL: u8 = 16;
+}
+
+/// Letter spacing for short upper-case labels (about 7% of their size).
+pub const CAPS_TRACKING: f32 = 0.8;
 
 #[derive(Clone, Copy)]
 pub struct Palette {
+    /// The canvas: the rounded surface pages are drawn on.
     pub bg: Color32,
+    /// The window shell around the canvas: sidebar, header and status bar.
     pub sidebar: Color32,
     pub card: Color32,
     pub card_hover: Color32,
@@ -45,16 +68,16 @@ impl Palette {
         let rgb = Color32::from_rgb;
         let mut p = match theme {
             Theme::Light | Theme::System => Self {
-                bg: rgb(245, 246, 250),
-                sidebar: rgb(255, 255, 255),
+                bg: rgb(252, 252, 253),
+                sidebar: rgb(241, 242, 246),
                 card: rgb(255, 255, 255),
-                card_hover: rgb(240, 242, 247),
-                border: rgb(228, 231, 238),
-                control_border: rgb(203, 208, 220),
+                card_hover: rgb(243, 244, 248),
+                border: rgb(228, 230, 237),
+                control_border: rgb(208, 212, 223),
                 input_bg: rgb(255, 255, 255),
-                track: rgb(229, 232, 240),
-                text: rgb(17, 20, 28),
-                text_dim: rgb(92, 101, 120),
+                track: rgb(232, 234, 241),
+                text: rgb(15, 17, 26),
+                text_dim: rgb(86, 94, 114),
                 accent: Color32::TRANSPARENT,
                 on_accent: Color32::WHITE,
                 accent2: Color32::TRANSPARENT,
@@ -65,42 +88,42 @@ impl Palette {
                 dark: false,
             },
             Theme::Dark => Self {
-                bg: rgb(13, 15, 20),
-                sidebar: rgb(18, 21, 28),
-                card: rgb(24, 28, 37),
-                card_hover: rgb(31, 36, 47),
-                border: rgb(38, 44, 57),
-                control_border: rgb(56, 63, 80),
-                input_bg: rgb(15, 18, 24),
-                track: rgb(36, 41, 54),
-                text: rgb(233, 235, 242),
-                text_dim: rgb(143, 151, 170),
+                bg: rgb(16, 18, 24),
+                sidebar: rgb(10, 11, 15),
+                card: rgb(22, 25, 33),
+                card_hover: rgb(30, 34, 45),
+                border: rgb(36, 40, 52),
+                control_border: rgb(54, 60, 77),
+                input_bg: rgb(12, 14, 19),
+                track: rgb(37, 42, 55),
+                text: rgb(237, 239, 245),
+                text_dim: rgb(150, 157, 176),
                 ..Self::dark_base()
             },
             Theme::Midnight => Self {
-                bg: rgb(0, 0, 0),
-                sidebar: rgb(9, 9, 11),
-                card: rgb(15, 15, 18),
-                card_hover: rgb(24, 24, 28),
+                bg: rgb(9, 9, 11),
+                sidebar: rgb(0, 0, 0),
+                card: rgb(16, 16, 19),
+                card_hover: rgb(25, 25, 30),
                 border: rgb(32, 32, 38),
                 control_border: rgb(52, 52, 60),
-                input_bg: rgb(6, 6, 8),
-                track: rgb(30, 30, 36),
-                text: rgb(237, 237, 241),
-                text_dim: rgb(140, 140, 152),
+                input_bg: rgb(5, 5, 7),
+                track: rgb(31, 31, 37),
+                text: rgb(238, 238, 242),
+                text_dim: rgb(145, 145, 157),
                 ..Self::dark_base()
             },
             Theme::Ocean => Self {
-                bg: rgb(9, 17, 30),
-                sidebar: rgb(12, 23, 40),
-                card: rgb(17, 31, 52),
-                card_hover: rgb(23, 40, 66),
-                border: rgb(31, 49, 78),
+                bg: rgb(11, 21, 37),
+                sidebar: rgb(7, 14, 26),
+                card: rgb(16, 29, 50),
+                card_hover: rgb(23, 39, 65),
+                border: rgb(30, 48, 77),
                 control_border: rgb(46, 68, 104),
-                input_bg: rgb(10, 20, 35),
+                input_bg: rgb(8, 17, 31),
                 track: rgb(29, 46, 73),
-                text: rgb(228, 236, 248),
-                text_dim: rgb(140, 158, 186),
+                text: rgb(229, 237, 249),
+                text_dim: rgb(143, 161, 189),
                 ..Self::dark_base()
             },
         };
@@ -172,26 +195,58 @@ impl Palette {
         }
     }
 
+    /// Soft background for something drawn in `color`: icon tiles, pills, badges.
+    pub fn tint(&self, color: Color32) -> Color32 {
+        color.gamma_multiply(if self.dark { 0.16 } else { 0.11 })
+    }
+
+    /// The signature gradient: the accent leaning towards its partner colour,
+    /// kept close enough to the accent that `on_accent` text stays readable.
+    pub fn gradient(&self) -> (Color32, Color32) {
+        let mix = |a: Color32, b: Color32, t: f32| {
+            let l = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
+            Color32::from_rgb(l(a.r(), b.r()), l(a.g(), b.g()), l(a.b(), b.b()))
+        };
+        // Shaded away from the label colour, so the label keeps its contrast across the button.
+        let away = if self.on_accent == Color32::WHITE { Color32::BLACK } else { Color32::WHITE };
+        (mix(self.accent, away, 0.06), mix(mix(self.accent, self.accent2, 0.35), away, 0.14))
+    }
+
+    /// Text drawn on a solid fill of `color`.
+    pub fn on_tile(&self, color: Color32) -> Color32 {
+        if luminance(color) > 0.55 { Color32::from_rgb(17, 20, 28) } else { Color32::WHITE }
+    }
+
+    /// Fill of the selected row or navigation entry.
+    pub fn selected_fill(&self) -> Color32 {
+        self.accent.gamma_multiply(if self.dark { 0.17 } else { 0.10 })
+    }
+
     /// Dimmed backdrop behind modal dialogs.
     pub fn backdrop(&self) -> Color32 {
-        if self.dark { Color32::from_black_alpha(150) } else { Color32::from_black_alpha(70) }
+        if self.dark { Color32::from_black_alpha(165) } else { Color32::from_rgba_unmultiplied(15, 17, 26, 90) }
     }
 
     pub fn shadow(&self, offset: i8, blur: u8) -> Shadow {
-        let alpha = if self.dark { 110 } else { 28 };
+        let alpha = if self.dark { 120 } else { 22 };
         Shadow { offset: [0, offset], blur, spread: 0, color: Color32::from_black_alpha(alpha) }
+    }
+
+    /// Coloured halo under primary buttons and live progress.
+    pub fn glow(&self, color: Color32, blur: u8) -> Shadow {
+        Shadow { offset: [0, 3], blur, spread: 0, color: color.gamma_multiply(if self.dark { 0.35 } else { 0.28 }) }
     }
 
     pub fn apply(&self, ctx: &egui::Context) {
         let mut visuals = if self.dark { Visuals::dark() } else { Visuals::light() };
         visuals.dark_mode = self.dark;
-        visuals.panel_fill = self.bg;
+        visuals.panel_fill = self.sidebar;
         visuals.window_fill = self.card;
         visuals.window_stroke = Stroke::new(1.0, self.border);
-        visuals.window_corner_radius = CornerRadius::same(14);
-        visuals.menu_corner_radius = CornerRadius::same(10);
-        visuals.window_shadow = self.shadow(12, 40);
-        visuals.popup_shadow = self.shadow(6, 20);
+        visuals.window_corner_radius = CornerRadius::same(radius::XL);
+        visuals.menu_corner_radius = CornerRadius::same(radius::LG);
+        visuals.window_shadow = self.shadow(16, 48);
+        visuals.popup_shadow = self.shadow(8, 24);
         visuals.extreme_bg_color = self.input_bg;
         visuals.text_edit_bg_color = Some(self.input_bg);
         visuals.code_bg_color = self.card_hover;
@@ -206,7 +261,7 @@ impl Palette {
         visuals.handle_shape = egui::style::HandleShape::Circle;
         visuals.striped = false;
 
-        let radius = CornerRadius::same(8);
+        let radius = CornerRadius::same(radius::MD);
         let w = &mut visuals.widgets;
         w.noninteractive.bg_fill = self.card;
         w.noninteractive.weak_bg_fill = self.card;
@@ -230,26 +285,29 @@ impl Palette {
         // Slider rails and checkbox boxes use the inactive fill.
         w.inactive.bg_fill = self.track;
 
-        ctx.set_visuals(visuals);
-        ctx.global_style_mut(|style| {
+        // Both slots: `set_theme` only takes effect on a later frame, so the
+        // "current" theme may still be the other one right now.
+        ctx.set_visuals_of(egui::Theme::Dark, visuals.clone());
+        ctx.set_visuals_of(egui::Theme::Light, visuals);
+        ctx.all_styles_mut(|style| {
             style.text_styles = [
-                (TextStyle::Heading, FontId::new(19.0, semi())),
-                (TextStyle::Body, FontId::new(13.5, FontFamily::Proportional)),
-                (TextStyle::Button, FontId::new(13.5, FontFamily::Proportional)),
-                (TextStyle::Small, FontId::new(12.0, FontFamily::Proportional)),
-                (TextStyle::Monospace, FontId::new(12.5, FontFamily::Monospace)),
+                (TextStyle::Heading, FontId::new(size::XL, semi())),
+                (TextStyle::Body, FontId::new(size::MD, FontFamily::Proportional)),
+                (TextStyle::Button, FontId::new(size::MD, FontFamily::Proportional)),
+                (TextStyle::Small, FontId::new(size::SM, FontFamily::Proportional)),
+                (TextStyle::Monospace, FontId::new(13.0, FontFamily::Monospace)),
             ]
             .into();
             let s = &mut style.spacing;
-            s.item_spacing = egui::vec2(8.0, 4.0);
-            s.button_padding = egui::vec2(10.0, 4.0);
+            s.item_spacing = egui::vec2(8.0, 6.0);
+            s.button_padding = egui::vec2(12.0, 5.0);
             s.interact_size = egui::vec2(40.0, CONTROL_H);
             s.combo_height = 320.0;
-            s.window_margin = Margin::same(14);
+            s.window_margin = Margin::same(20);
             s.menu_margin = Margin::same(6);
             s.slider_width = 180.0;
-            s.icon_width = 16.0;
-            s.icon_width_inner = 9.0;
+            s.icon_width = 18.0;
+            s.icon_width_inner = 10.0;
             s.icon_spacing = 8.0;
             s.scroll = egui::style::ScrollStyle::floating();
             style.interaction.selectable_labels = false;
@@ -343,6 +401,9 @@ mod tests {
                 }
                 let on = contrast(p.on_accent, p.accent);
                 assert!(on >= 3.0, "{theme:?}/{accent:?}: text on the accent is {on:.1}:1");
+                // Primary buttons run into the gradient's lighter end.
+                let end = contrast(p.on_accent, p.gradient().1);
+                assert!(end >= 3.0, "{theme:?}/{accent:?}: text on the gradient's end is {end:.1}:1");
             }
         }
     }
