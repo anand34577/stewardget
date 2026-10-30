@@ -6,6 +6,8 @@ All notable changes to StewardGet are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-10-30
+
 ### Changed
 - **A redesigned window.** The sidebar now runs the full height, menus, search and *Add download* share one header, and pages sit on a rounded canvas instead of under three stacked toolbars.
 - What you can do with the selection (Resume, Pause, Restart, Refresh link, Remove) now appears in the list's own header, and only while something is selected. With nothing selected, the same spot offers *Start all* and *Pause all*.
