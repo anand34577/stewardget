@@ -385,6 +385,30 @@ async fn refreshed_link_resumes_partial_data() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn unnamed_capture_refreshes_the_only_waiting_download() {
+    // A link that expired before its size was ever known, and a browser that
+    // hasn't chosen a file name yet: the one waiting download still gets it.
+    let fresh = serve(256 * 1024, ServerOpts { ranges: true, ..Default::default() }).await;
+    let dir = temp_dir("refresh-unnamed");
+    let engine = Engine::start(EngineOptions::in_memory().with_config(config(&dir))).unwrap();
+    let mut dead = NewDownload::new("http://127.0.0.1:9/file.zip");
+    dead.paused = true;
+    let id = engine.add(dead).unwrap();
+    engine.await_new_link(id, true).unwrap();
+
+    let (got, action) = engine
+        .capture(stewardget_core::Capture {
+            url: fresh.url.clone(),
+            size: Some(fresh.data.len() as u64),
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!((got, action), (id, stewardget_core::CaptureAction::Refreshed));
+    assert_eq!(wait_for(&engine, id, Status::Completed, 30).await, Status::Completed);
+    assert_eq!(engine.snapshot().downloads.len(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn browser_api_accepts_extensions_and_rejects_web_pages() {
     let server = serve(64 * 1024, ServerOpts { ranges: true, ..Default::default() }).await;
     let dir = temp_dir("api");

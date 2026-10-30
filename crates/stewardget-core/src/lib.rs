@@ -78,7 +78,9 @@ pub use crawl::{GrabOptions, GrabResult};
 pub use engine::{Engine, EngineOptions};
 pub use error::Error;
 pub use history::{History, HistoryEntry, HostSummary, host_of, quietest_in};
-pub use insight::{Fix, Insight, InsightContext, Kind as InsightKind, Tone as InsightTone, explain as explain_speed};
+pub use insight::{
+    Fix, Insight, InsightContext, Kind as InsightKind, Tone as InsightTone, explain as explain_speed, limit_notices,
+};
 pub use media::{
     MediaInfo, MediaOption, MediaPart, Mux, Stream as MuxStream, find_tool, merge as merge_media, tool_version,
 };

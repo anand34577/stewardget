@@ -186,6 +186,8 @@ pub struct StewardGetApp {
     pub tools: crate::toolbox::ToolsState,
     /// Results of "Send test" in the notification settings.
     pub notify_tests: crate::push::TestResults,
+    /// The speed explanation last shown per download and since when, so it holds still for a few seconds.
+    pub insight_memo: std::cell::RefCell<HashMap<DownloadId, (std::time::Instant, stewardget_core::Insight)>>,
     /// Queue whose deletion is being confirmed.
     pub delete_queue: Option<QueueId>,
     /// "Keep running?" prompt after the close button; holds "remember my choice".
@@ -204,7 +206,7 @@ pub struct StewardGetApp {
     /// start never shows even the first frame eframe insists on presenting.
     cloaked: Option<windows_hwnd::Hwnd>,
     /// The header is the title bar (the system one is hidden); fixed at start-up.
-    custom_frame: bool,
+    pub(crate) custom_frame: bool,
     had_work: bool,
     /// The window has been checked against the screen's work area.
     fitted: bool,
@@ -342,6 +344,7 @@ impl StewardGetApp {
             media_dialog: None,
             tools: Default::default(),
             notify_tests: Default::default(),
+            insight_memo: Default::default(),
             delete_queue: None,
             close_prompt: None,
             quitting: false,
@@ -1116,6 +1119,7 @@ impl StewardGetApp {
         let r = ui
             .add(
                 egui::Label::new(RichText::new(format!("{n} selected")).size(theme::size::SM).color(p.text_dim))
+                    .extend()
                     .sense(Sense::click()),
             )
             .on_hover_text("Clear the selection (Esc)")

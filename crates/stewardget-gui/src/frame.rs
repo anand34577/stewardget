@@ -29,6 +29,59 @@ pub fn drag_area(ui: &Ui, rect: Rect, id: &str) {
     }
 }
 
+/// Height of the title bar StewardGet draws on its small windows.
+pub const DIALOG_BAR_H: f32 = 34.0;
+
+/// A small window's content under StewardGet's own title bar (title, drag
+/// area, close and, if wanted, minimise), the same as the main window has when
+/// the system title bar is switched off. With `own_bar` false the system draws
+/// the bar and `add` simply runs. Returns what `add` returned and the height
+/// the bar took, which is part of the window's height.
+pub fn dialog_body<R>(
+    ui: &mut Ui,
+    p: &Palette,
+    title: &str,
+    own_bar: bool,
+    minimize: bool,
+    add: impl FnOnce(&mut Ui) -> R,
+) -> (R, f32) {
+    if !own_bar || !OWN_BUTTONS {
+        return (add(ui), 0.0);
+    }
+    let full = ui.max_rect();
+    let bar = Rect::from_min_size(full.min, vec2(full.width(), DIALOG_BAR_H));
+    ui.painter().rect_filled(bar, CornerRadius::ZERO, p.sidebar);
+    drag_area(ui, bar, "dialog");
+    ui.scope_builder(
+        egui::UiBuilder::new().max_rect(bar).layout(egui::Layout::left_to_right(egui::Align::Center)),
+        |ui| {
+            // The buttons are placed first so a long title is cut short instead of pushing them out.
+            crate::widgets::split_row(
+                ui,
+                |ui| {
+                    ui.add_space(12.0);
+                    crate::widgets::logo(ui, 16.0);
+                    ui.add_space(4.0);
+                    ui.add(egui::Label::new(egui::RichText::new(title).size(12.5).color(p.text_dim)).truncate());
+                },
+                |ui| {
+                    ui.spacing_mut().item_spacing.x = 2.0;
+                    if caption_button(ui, Caption::Close, "Close", p).clicked() {
+                        ui.ctx().send_viewport_cmd(ViewportCommand::Close);
+                    }
+                    if minimize && caption_button(ui, Caption::Minimize, "Minimise", p).clicked() {
+                        ui.ctx().send_viewport_cmd(ViewportCommand::Minimized(true));
+                    }
+                },
+            );
+        },
+    );
+    ui.painter().hline(bar.x_range(), bar.bottom(), Stroke::new(1.0, p.border));
+    let body = full.with_min_y(bar.bottom() + 1.0);
+    let inner = ui.scope_builder(egui::UiBuilder::new().max_rect(body), add).inner;
+    (inner, DIALOG_BAR_H + 1.0)
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Caption {
     Minimize,

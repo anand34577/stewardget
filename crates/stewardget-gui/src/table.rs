@@ -1096,7 +1096,7 @@ impl StewardGetApp {
             ui.add(egui::Label::new(RichText::new(sub).color(p.text_dim)).wrap());
             ui.add_space(6.0);
             if self.snap.downloads.is_empty() {
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     ui.add_space(((ui.available_width() - 420.0) / 2.0).max(0.0));
                     if widgets::button(ui, ButtonKind::Primary, Some(Icon::Plus), "Add URL", true, &p).clicked() {
                         self.open_add(None);

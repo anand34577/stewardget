@@ -114,7 +114,7 @@ impl StewardGetApp {
             );
             ui.add_space(4.0);
             let running = t.dup_job.is_some();
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.label(RichText::new("Ignore files smaller than").size(12.5).color(p.text));
                 ui.add_enabled(!running, egui::DragValue::new(&mut t.min_mb).range(0..=10_000).suffix(" MB"));
                 if running {
@@ -209,7 +209,7 @@ impl StewardGetApp {
             );
             ui.add_space(4.0);
             let running = t.left_job.is_some();
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 if widgets::button(ui, ButtonKind::Ghost, Some(Icon::Search), "Look for leftovers", !running, &p).clicked() {
                     let slot = Slot::default();
                     let (engine, out, ctx) = (self.engine.clone(), Arc::clone(&slot), ui.ctx().clone());
@@ -282,7 +282,7 @@ impl StewardGetApp {
                 .filter(|l| l.starts_with("http://") || l.starts_with("https://") || l.starts_with("ftp://"))
                 .take(200)
                 .collect::<Vec<_>>();
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 if widgets::button(ui, ButtonKind::Ghost, Some(Icon::CheckCircle), "Check", !links.is_empty(), &p).clicked() {
                     let results = Arc::new(Mutex::new(links.iter().map(|l| (l.clone(), None)).collect::<Vec<_>>()));
                     let gate = Arc::new(tokio::sync::Semaphore::new(4));

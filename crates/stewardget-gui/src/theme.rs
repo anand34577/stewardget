@@ -327,6 +327,9 @@ impl Palette {
                 ..egui::style::ScrollStyle::floating()
             };
             style.interaction.selectable_labels = false;
+            // Text that doesn't fit wraps (labels that say `truncate` still cut) instead of
+            // widening the row, which would push its neighbours and the window's edge out.
+            style.wrap_mode = Some(egui::TextWrapMode::Wrap);
         });
     }
 }

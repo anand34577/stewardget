@@ -1,7 +1,8 @@
 //! Queue management: the queue editor, deleting a queue, and what the close
 //! button does.
 
-use egui::{Align, CornerRadius, Frame, Layout, Margin, RichText, Stroke, Ui};
+use egui::{CornerRadius, Frame, Margin, RichText, Stroke, Ui};
+use stewardget_core::notifiers::{Events, Kind, QueueEvents, Target};
 use stewardget_core::{CloseAction, DownloadId, MAIN_QUEUE, Queue, QueueId, Schedule};
 
 use crate::app::{ListFilter, StewardGetApp, capitalize, hhmm};
@@ -22,9 +23,11 @@ pub struct QueueDialog {
     schedule: Schedule,
     /// Downloads to move into the new queue once it exists.
     move_ids: Vec<DownloadId>,
-    /// Notification destinations and whether they cover this queue (id, label,
-    /// on); filled in when the window first draws.
-    notify: Option<Vec<(u32, String, bool)>>,
+    /// Notification destinations as this window edits them; filled in when it
+    /// first draws.
+    notify: Option<Vec<QueueTarget>>,
+    /// The destination whose address and login fields are open.
+    open_target: Option<u32>,
     error: Option<String>,
     focus: bool,
 }
@@ -39,6 +42,7 @@ impl QueueDialog {
             schedule: queue.schedule.clone(),
             move_ids: Vec::new(),
             notify: None,
+            open_target: None,
             error: None,
             focus: false,
         }
@@ -53,10 +57,22 @@ impl QueueDialog {
             schedule: Schedule::default(),
             move_ids,
             notify: None,
+            open_target: None,
             error: None,
             focus: true,
         }
     }
+}
+
+/// A notification destination as a queue's window shows it.
+struct QueueTarget {
+    target: Target,
+    /// Added in this window, so it doesn't exist yet.
+    new: bool,
+    /// Whether it hears about this queue.
+    on: bool,
+    /// What it is told about this queue.
+    events: Events,
 }
 
 /// One line describing a queue's limit and schedule, e.g. "2 at a time · 02:00–07:00, Mon–Fri".
@@ -153,46 +169,124 @@ impl StewardGetApp {
             widgets::caption(ui, "SCHEDULE", &p);
             ui.add_space(4.0);
             schedule_editor(ui, &p, "queue", &mut d.schedule);
+            let queue_id = d.id;
             let notify = d.notify.get_or_insert_with(|| {
                 let config = self.engine.config();
                 config
                     .remote_notify
                     .targets
                     .iter()
-                    .map(|t| {
-                        let label = format!("{} ({})", t.name.trim(), t.service.kind().name());
-                        let on = t.queues.is_empty() || d.id.is_some_and(|id| t.queues.contains(&id));
-                        (t.id, label, on)
+                    .map(|t| QueueTarget {
+                        target: t.clone(),
+                        new: false,
+                        on: t.queues.is_empty() || queue_id.is_some_and(|id| t.queues.contains(&id)),
+                        events: queue_id.map_or(t.events, |id| t.events_for(id)),
                     })
                     .collect()
             });
             ui.add_space(6.0);
             widgets::caption(ui, "NOTIFICATIONS", &p);
             ui.add_space(4.0);
-            if notify.is_empty() {
-                ui.horizontal_wrapped(|ui| {
-                    crate::dialogs::note(ui, "No phone or email destinations yet.", p.text_dim);
-                    if widgets::button(ui, ButtonKind::Tool, Some(Icon::Plus), "Add one in Settings", true, &p).clicked() {
-                        close = true;
-                        self.open_settings(crate::settings::Tab::General);
+            crate::dialogs::note(
+                ui,
+                "Who hears about this queue, and about what. Each person, phone or mailbox is a destination: switch it on for this queue and pick what it is told. Other queues can tell other people.",
+                p.text_dim,
+            );
+            ui.add_space(4.0);
+            let mut open_target = d.open_target;
+            let mut remove = None;
+            let height = (ctx.content_rect().height() * 0.4).max(160.0);
+            egui::ScrollArea::vertical().max_height(height).auto_shrink([true, true]).show(ui, |ui| {
+                for (i, n) in notify.iter_mut().enumerate() {
+                    Frame::new()
+                        .fill(p.card_hover)
+                        .corner_radius(CornerRadius::same(theme::radius::MD))
+                        .inner_margin(Margin::symmetric(10, 8))
+                        .show(ui, |ui| {
+                            ui.set_width(ui.available_width());
+                            let id = n.target.id;
+                            let (is_new, on) = (n.new, &mut n.on);
+                            let name = n.target.name.trim();
+                            let kind = n.target.service.kind().name();
+                            let title = if name.is_empty() { kind.to_owned() } else { format!("{name} \u{b7} {kind}") };
+                            widgets::split_row(
+                                ui,
+                                |ui| {
+                                    widgets::toggle(ui, on, &p);
+                                    ui.add(
+                                        egui::Label::new(RichText::new(title).family(theme::semi()).color(p.text))
+                                            .truncate(),
+                                    );
+                                },
+                                |ui| {
+                                    if is_new
+                                        && widgets::button(ui, ButtonKind::Tool, Some(Icon::Trash), "", true, &p)
+                                            .on_hover_text("Remove")
+                                            .clicked()
+                                    {
+                                        remove = Some(i);
+                                    }
+                                    let (label, icon) = if open_target == Some(id) {
+                                        ("Hide details", Icon::CaretUp)
+                                    } else {
+                                        ("Details", Icon::CaretDown)
+                                    };
+                                    if widgets::button(ui, ButtonKind::Tool, Some(icon), label, true, &p).clicked() {
+                                        open_target = if open_target == Some(id) { None } else { Some(id) };
+                                    }
+                                },
+                            );
+                            if n.on {
+                                ui.horizontal_wrapped(|ui| {
+                                    ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+                                    for (label, on) in [
+                                        ("Download finished", &mut n.events.finished),
+                                        ("Download failed", &mut n.events.failed),
+                                        ("Queue finished", &mut n.events.queue_finished),
+                                    ] {
+                                        if widgets::chip(ui, label, *on, &p).clicked() {
+                                            *on = !*on;
+                                        }
+                                    }
+                                });
+                            } else {
+                                crate::dialogs::note(ui, "Not told about this queue.", p.text_dim);
+                            }
+                            if open_target == Some(id) {
+                                ui.add_space(4.0);
+                                crate::push::target_fields(ui, &mut n.target, &[], false, &p);
+                            }
+                        });
+                    ui.add_space(4.0);
+                }
+            });
+            if let Some(i) = remove {
+                notify.remove(i);
+            }
+            let mut add = None;
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                for kind in Kind::ALL {
+                    if widgets::button(ui, ButtonKind::Ghost, Some(Icon::Plus), kind.name(), true, &p)
+                        .on_hover_text(format!("Add a {} destination for this queue", kind.name()))
+                        .clicked()
+                    {
+                        add = Some(kind);
                     }
-                });
-            } else {
-                crate::dialogs::note(
-                    ui,
-                    "Destinations that hear about this queue's downloads. Events and services are set in Settings > General.",
-                    p.text_dim,
-                );
-                ui.add_space(2.0);
-                ui.horizontal_wrapped(|ui| {
-                    ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
-                    for (_, label, on) in notify.iter_mut() {
-                        if widgets::chip(ui, label, *on, &p).clicked() {
-                            *on = !*on;
-                        }
-                    }
+                }
+            });
+            if let Some(kind) = add {
+                let saved = self.engine.config().remote_notify.targets.iter().map(|t| t.id).max().unwrap_or(0);
+                let id = notify.iter().map(|n| n.target.id).max().unwrap_or(0).max(saved) + 1;
+                open_target = Some(id);
+                notify.push(QueueTarget {
+                    target: Target::new(id, kind.service()),
+                    new: true,
+                    on: true,
+                    events: Events::default(),
                 });
             }
+            d.open_target = open_target;
             if let Some(e) = &d.error {
                 ui.add_space(6.0);
                 crate::dialogs::note(ui, e.as_str(), p.red);
@@ -240,7 +334,7 @@ impl StewardGetApp {
                     None => queues.push(queue),
                 }) {
                     Ok(()) => {
-                        self.save_queue_destinations(id, d.notify.as_deref().unwrap_or_default());
+                        self.save_queue_targets(id, d.notify.as_deref().unwrap_or_default());
                         if !d.move_ids.is_empty() {
                             let r = self.engine.set_queue(&d.move_ids, id);
                             self.report(r);
@@ -265,16 +359,29 @@ impl StewardGetApp {
         }
     }
 
-    /// Applies the destination chips of the queue window to the notification settings.
-    fn save_queue_destinations(&mut self, queue: QueueId, chosen: &[(u32, String, bool)]) {
+    /// Applies the destinations of the queue window to the notification settings.
+    fn save_queue_targets(&mut self, queue: QueueId, chosen: &[QueueTarget]) {
         let mut config = self.engine.config();
         let all: Vec<QueueId> = config.queues.iter().map(|q| q.id).collect();
-        let mut changed = false;
-        for (id, _, on) in chosen {
-            let Some(t) = config.remote_notify.targets.iter_mut().find(|t| t.id == *id) else { continue };
-            changed |= cover_queue(t, queue, *on, &all);
+        let before = config.remote_notify.clone();
+        for n in chosen {
+            if n.new {
+                if n.on {
+                    let mut t = n.target.clone();
+                    t.id = config.remote_notify.next_id();
+                    t.queues = if all.len() > 1 { vec![queue] } else { Vec::new() };
+                    set_queue_events(&mut t, queue, n.events);
+                    config.remote_notify.targets.push(t);
+                }
+                continue;
+            }
+            let Some(t) = config.remote_notify.targets.iter_mut().find(|t| t.id == n.target.id) else { continue };
+            t.name = n.target.name.clone();
+            t.service = n.target.service.clone();
+            cover_queue(t, queue, n.on, &all);
+            set_queue_events(t, queue, n.events);
         }
-        if !changed {
+        if config.remote_notify == before {
             return;
         }
         if let Some(draft) = &mut self.settings_draft {
@@ -455,17 +562,20 @@ pub fn queue_card(ui: &mut Ui, p: &Palette, q: &Queue, count: usize) -> QueueCar
         .inner_margin(Margin::symmetric(14, 10))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
-            ui.horizontal(|ui| {
-                crate::widgets::icon(ui, Icon::Queue, 18.0, p.accent);
-                ui.vertical(|ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new(&q.name).family(theme::semi()).color(p.text));
-                        let n = if count == 1 { "1 download".to_owned() } else { format!("{count} downloads") };
-                        ui.label(RichText::new(n).size(12.0).color(p.text_dim));
+            widgets::split_row(
+                ui,
+                |ui| {
+                    crate::widgets::icon(ui, Icon::Queue, 18.0, p.accent);
+                    ui.vertical(|ui| {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(RichText::new(&q.name).family(theme::semi()).color(p.text));
+                            let n = if count == 1 { "1 download".to_owned() } else { format!("{count} downloads") };
+                            ui.label(RichText::new(n).size(12.0).color(p.text_dim));
+                        });
+                        ui.label(RichText::new(summary(q)).size(12.0).color(p.text_dim));
                     });
-                    ui.label(RichText::new(summary(q)).size(12.0).color(p.text_dim));
-                });
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                },
+                |ui| {
                     if q.id != MAIN_QUEUE
                         && widgets::button(ui, ButtonKind::Tool, Some(Icon::Trash), "", true, p)
                             .on_hover_text("Delete queue")
@@ -476,8 +586,8 @@ pub fn queue_card(ui: &mut Ui, p: &Palette, q: &Queue, count: usize) -> QueueCar
                     if widgets::button(ui, ButtonKind::Ghost, Some(Icon::Edit), "Edit", true, p).clicked() {
                         action = QueueCardAction::Edit;
                     }
-                });
-            });
+                },
+            );
         });
     ui.add_space(6.0);
     action
@@ -489,11 +599,19 @@ pub enum QueueCardAction {
     Delete,
 }
 
+/// Sets what `t` is told about `queue`; the destination's usual events need no entry.
+fn set_queue_events(t: &mut Target, queue: QueueId, events: Events) {
+    t.queue_events.retain(|q| q.queue != queue);
+    if events != t.events {
+        t.queue_events.push(QueueEvents { queue, events });
+    }
+}
+
 /// Makes `t` cover `queue` or not. An empty queue list means every queue, so
 /// leaving one out lists all the others; a destination left with no queue at
 /// all is switched off rather than falling back to every queue. Returns
 /// whether anything changed.
-fn cover_queue(t: &mut stewardget_core::notifiers::Target, queue: QueueId, on: bool, all: &[QueueId]) -> bool {
+fn cover_queue(t: &mut Target, queue: QueueId, on: bool, all: &[QueueId]) -> bool {
     let covered = t.queues.is_empty() || t.queues.contains(&queue);
     if covered == on {
         return false;

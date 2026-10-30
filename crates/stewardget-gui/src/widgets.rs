@@ -136,33 +136,30 @@ pub fn paint_ring(
     to: Color32,
     track: Color32,
 ) {
-    painter.circle_stroke(center, radius, Stroke::new(width, track));
-    let fraction = fraction.clamp(0.0, 1.0);
+    arc(painter, center, radius, width, 1.0, track, track);
+    arc(painter, center, radius, width, fraction.clamp(0.0, 1.0), from, to);
+}
+
+/// An arc from twelve o'clock, `fraction` of the way round, shaded from `from`
+/// to `to`: short strokes with a dot at each joint, which the tessellator
+/// smooths (a hand-built mesh would leave jagged edges).
+fn arc(painter: &egui::Painter, center: Pos2, radius: f32, width: f32, fraction: f32, from: Color32, to: Color32) {
     if fraction <= 0.0 {
         return;
     }
-    let steps = ((96.0 * fraction).ceil() as usize).max(2);
+    let steps = ((160.0 * fraction).ceil() as usize).max(2);
     let start = -std::f32::consts::FRAC_PI_2;
-    let (ri, ro) = (radius - width / 2.0, radius + width / 2.0);
-    let mut mesh = Mesh::default();
-    for i in 0..=steps {
-        let t = i as f32 / steps as f32;
+    let at = |t: f32| {
         let a = start + std::f32::consts::TAU * fraction * t;
-        let n = vec2(a.cos(), a.sin());
-        let c = lerp_color(from, to, t);
-        mesh.colored_vertex(center + n * ri, c);
-        mesh.colored_vertex(center + n * ro, c);
-        if i > 0 {
-            let v = i as u32 * 2;
-            mesh.add_triangle(v - 2, v - 1, v);
-            mesh.add_triangle(v - 1, v + 1, v);
-        }
+        center + vec2(a.cos(), a.sin()) * radius
+    };
+    painter.circle_filled(at(0.0), width / 2.0, from);
+    for i in 1..=steps {
+        let t = i as f32 / steps as f32;
+        let color = lerp_color(from, to, t);
+        painter.line_segment([at((i - 1) as f32 / steps as f32), at(t)], Stroke::new(width, color));
+        painter.circle_filled(at(t), width / 2.0, color);
     }
-    painter.add(Shape::mesh(mesh));
-    // Round caps.
-    let end = start + std::f32::consts::TAU * fraction;
-    painter.circle_filled(center + vec2(start.cos(), start.sin()) * radius, width / 2.0, from);
-    painter.circle_filled(center + vec2(end.cos(), end.sin()) * radius, width / 2.0, to);
 }
 
 /// The file-type mark used for downloads: a tile shaded in the category colour

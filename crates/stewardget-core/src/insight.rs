@@ -24,6 +24,9 @@ pub struct InsightContext {
     pub configured_connections: usize,
     /// Mean speed earlier downloads from the same host reached, if any.
     pub host_average: Option<f64>,
+    /// The limits are shown on their own ([`limit_notices`]), so [`explain`]
+    /// leaves them out and says what else is going on.
+    pub limits_separate: bool,
 }
 
 /// What kind of situation the download is in.
@@ -147,39 +150,41 @@ pub fn explain(d: &DownloadView, cx: &InsightContext) -> Option<Insight> {
     }
 
     // Limits come first: they are the one cause the user can lift immediately.
-    let own = d.options.speed_limit;
-    if own > 0 && d.speed >= own as f64 * AT_LIMIT {
-        return Some(insight(
-            Kind::DownloadLimit,
-            Tone::Info,
-            format!("Held at this download's limit ({})", format_speed(own as f64)),
-            "You set a speed limit on this download. It would go faster without it.",
-            Some(Fix::RemoveDownloadLimit),
-        ));
-    }
-    let global = cx.scheduled_limit.unwrap_or(cx.global_limit);
-    if global > 0 && cx.aggregate_speed >= global as f64 * AT_LIMIT {
-        let scheduled = cx.scheduled_limit.is_some();
-        return Some(insight(
-            Kind::GlobalLimit,
-            Tone::Info,
-            format!("Held at the overall limit ({})", format_speed(global as f64)),
-            if scheduled {
-                "A time-of-day speed limit is active. It ends at the hour set in Settings."
-            } else {
-                "The speed limit in the status bar applies to all downloads together."
-            },
-            (!scheduled).then_some(Fix::RemoveGlobalLimit),
-        ));
-    }
-    if cx.queue_limit > 0 && cx.aggregate_speed >= cx.queue_limit as f64 * AT_LIMIT {
-        return Some(insight(
-            Kind::QueueLimit,
-            Tone::Info,
-            format!("Held at the queue's limit ({})", format_speed(cx.queue_limit as f64)),
-            "This download's queue shares a speed cap between its downloads.",
-            None,
-        ));
+    if !cx.limits_separate {
+        let own = d.options.speed_limit;
+        if own > 0 && d.speed >= own as f64 * AT_LIMIT {
+            return Some(insight(
+                Kind::DownloadLimit,
+                Tone::Info,
+                format!("Held at this download's limit ({})", format_speed(own as f64)),
+                "You set a speed limit on this download. It would go faster without it.",
+                Some(Fix::RemoveDownloadLimit),
+            ));
+        }
+        let global = cx.scheduled_limit.unwrap_or(cx.global_limit);
+        if global > 0 && cx.aggregate_speed >= global as f64 * AT_LIMIT {
+            let scheduled = cx.scheduled_limit.is_some();
+            return Some(insight(
+                Kind::GlobalLimit,
+                Tone::Info,
+                format!("Held at the overall limit ({})", format_speed(global as f64)),
+                if scheduled {
+                    "A time-of-day speed limit is active. It ends at the hour set in Settings."
+                } else {
+                    "The speed limit in the status bar applies to all downloads together."
+                },
+                (!scheduled).then_some(Fix::RemoveGlobalLimit),
+            ));
+        }
+        if cx.queue_limit > 0 && cx.aggregate_speed >= cx.queue_limit as f64 * AT_LIMIT {
+            return Some(insight(
+                Kind::QueueLimit,
+                Tone::Info,
+                format!("Held at the queue's limit ({})", format_speed(cx.queue_limit as f64)),
+                "This download's queue shares a speed cap between its downloads.",
+                None,
+            ));
+        }
     }
 
     if d.connections > 0 && d.reconnecting * 2 >= d.connections {
@@ -274,6 +279,51 @@ pub fn explain(d: &DownloadView, cx: &InsightContext) -> Option<Insight> {
         ),
         None,
     ))
+}
+
+/// The speed limits that apply to `d`, one notice each, for as long as they
+/// are set: they don't come and go with the speed, which sits near a limit
+/// without always reaching it. Empty unless the download is transferring.
+pub fn limit_notices(d: &DownloadView, cx: &InsightContext) -> Vec<Insight> {
+    let mut out = Vec::new();
+    if d.status != Status::Downloading {
+        return out;
+    }
+    let own = d.options.speed_limit;
+    if own > 0 {
+        out.push(insight(
+            Kind::DownloadLimit,
+            Tone::Info,
+            format!("This download is limited to {}", format_speed(own as f64)),
+            "You set a speed limit on this download. It would go faster without it.",
+            Some(Fix::RemoveDownloadLimit),
+        ));
+    }
+    let global = cx.scheduled_limit.unwrap_or(cx.global_limit);
+    if global > 0 {
+        let scheduled = cx.scheduled_limit.is_some();
+        out.push(insight(
+            Kind::GlobalLimit,
+            Tone::Info,
+            format!("Overall limit: {}", format_speed(global as f64)),
+            if scheduled {
+                "A time-of-day speed limit is active. It ends at the hour set in Settings."
+            } else {
+                "The speed limit in the status bar applies to all downloads together."
+            },
+            (!scheduled).then_some(Fix::RemoveGlobalLimit),
+        ));
+    }
+    if cx.queue_limit > 0 {
+        out.push(insight(
+            Kind::QueueLimit,
+            Tone::Info,
+            format!("Queue limit: {}", format_speed(cx.queue_limit as f64)),
+            "This download's queue shares a speed cap between its downloads.",
+            None,
+        ));
+    }
+    out
 }
 
 fn plural(n: usize) -> &'static str {

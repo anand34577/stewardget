@@ -209,7 +209,8 @@ impl StewardGetApp {
         let p = self.palette;
         let id = ViewportId::from_hash_of("stewardget-new-download");
         let single = w.single();
-        let width = if single { 470.0 } else { 580.0 };
+        let own_bar = self.custom_frame;
+        let width = if single { 500.0 } else { 580.0 };
         let waiting: usize = self.inbox.lock().unwrap().iter().map(Vec::len).sum();
         let title = if single { "New download" } else { "New downloads" };
         let height = if single { w.height.max(240.0) } else { LIST_HEIGHT };
@@ -218,6 +219,7 @@ impl StewardGetApp {
             .with_position(pos)
             .with_title(format!("{title} – StewardGet"))
             .with_app_id("dev.stewardget.StewardGet")
+            .with_decorations(!own_bar)
             // A single download fits its content; the list has a fixed start size and can be resized.
             .with_inner_size([width, if single { w.height.max(240.0) } else { LIST_HEIGHT }])
             .with_min_inner_size([420.0, 220.0])
@@ -227,6 +229,7 @@ impl StewardGetApp {
             .with_icon(crate::app_icon());
 
         let mut decision: Option<Decision> = None;
+        let window_title = format!("{title} – StewardGet");
         ctx.show_viewport_immediate(id, builder, |ui, class| {
             if std::mem::take(&mut w.focus_pending) && class == egui::ViewportClass::Immediate {
                 ui.ctx().send_viewport_cmd(egui::ViewportCommand::Focus);
@@ -236,25 +239,31 @@ impl StewardGetApp {
             }
             let full = ui.max_rect();
             ui.painter().rect_filled(full, CornerRadius::ZERO, p.card);
-            let inner = Frame::new().inner_margin(Margin::symmetric(14, 12)).show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                ui.spacing_mut().item_spacing.y = 6.0;
-                if single {
-                    // The title bar already says what this is: no header, like IDM's compact window.
-                    self.single_body(ui, &mut w, waiting);
-                } else {
-                    header(ui, &p, Icon::Layers, title, waiting);
-                    self.list_body(ui, &mut w);
-                }
-                self.common_fields(ui, &mut w);
-                if let Some(e) = &w.error {
-                    ui.add_space(6.0);
-                    ui.label(RichText::new(e).size(12.5).color(p.red));
-                }
-                decision = footer(ui, &p, &w, waiting).or(decision);
+            let (inner, bar) = crate::frame::dialog_body(ui, &p, &window_title, own_bar, true, |ui| {
+                Frame::new().inner_margin(Margin::symmetric(14, 12)).show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.spacing_mut().item_spacing.y = 6.0;
+                    if single {
+                        // The title bar already says what this is: no header, like IDM's compact window.
+                        self.single_body(ui, &mut w, waiting);
+                    } else {
+                        header(ui, &p, Icon::Layers, title, waiting);
+                        self.list_body(ui, &mut w);
+                    }
+                    self.common_fields(ui, &mut w);
+                    if let Some(e) = &w.error {
+                        ui.add_space(6.0);
+                        ui.label(RichText::new(e).size(12.5).color(p.red));
+                    }
+                    decision = footer(ui, &p, &w, waiting).or(decision);
+                })
             });
+            if class == egui::ViewportClass::Immediate && !single {
+                crate::frame::resize_edges(ui.ctx());
+                crate::frame::outline(ui.ctx(), &p);
+            }
             // Fit the window to its content (single) or keep at least that much (list).
-            let wanted = inner.response.rect.height() + 2.0;
+            let wanted = inner.response.rect.height() + bar + 2.0;
             if class == egui::ViewportClass::Immediate && (wanted - w.height).abs() > 1.5 {
                 w.height = wanted;
                 if single {
@@ -362,7 +371,8 @@ impl StewardGetApp {
                 );
                 widgets::path_label(ui, &folder, 12.0, p.text_dim);
                 let mut choice = w.existing.unwrap_or(default_existing);
-                ui.horizontal(|ui| {
+                // Wraps to a second line when the window is too narrow for both.
+                ui.horizontal_wrapped(|ui| {
                     if widgets::button(ui, ButtonKind::Tool, Some(Icon::FolderOpen), "Open existing", true, &p)
                         .on_hover_text("Show the file in its folder and cancel this download")
                         .clicked()
@@ -475,7 +485,8 @@ impl StewardGetApp {
         });
         ui.add_space(5.0);
         ui.horizontal(|ui| {
-            ui.add(widgets::input(&mut w.search).hint_text("Filter by name or link").desired_width(260.0));
+            let field_w = (ui.available_width() - 150.0).clamp(100.0, 260.0);
+            ui.add(widgets::input(&mut w.search).hint_text("Filter by name or link").desired_width(field_w));
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 // Both act on the links the filter shows.
                 let search = w.search.clone();

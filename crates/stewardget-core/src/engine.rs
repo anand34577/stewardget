@@ -509,19 +509,34 @@ impl Engine {
     fn refresh_waiting(&self, capture: &Capture) -> Result<Option<DownloadId>, Error> {
         let url = parse_url(&capture.url)?;
         let hinted_name = hinted_name(capture, &url);
+        // Whether the browser really named the file; the link's last segment (often an id) says nothing.
+        let named = browser_name(capture, &url).is_some();
         let waiting = {
             let st = self.inner.lock();
-            st.items
-                .iter()
-                .filter(|i| i.rec.awaiting_link)
-                .find(|i| {
-                    let same_size = capture.size.is_some() && capture.size == i.rec.total;
-                    let same_name = hinted_name.as_deref().is_some_and(|n| same_file_name(n, &i.rec.file_name));
-                    // A size alone could be any other file; resuming with it would corrupt the partial data.
-                    (same_size && (same_name || hinted_name.is_none()))
-                        || (same_name && (capture.size.is_none() || i.rec.total.is_none()))
-                })
-                .map(|i| i.rec.id)
+            let waiting: Vec<_> = st.items.iter().filter(|i| i.rec.awaiting_link).collect();
+            let related = |i: &&crate::engine::Item| {
+                let same_page = capture.referrer.is_some() && capture.referrer == i.rec.options.referrer;
+                same_page || crate::history::host_of(url.as_str()) == crate::history::host_of(&i.rec.url)
+            };
+            let strict = waiting.iter().find(|i| {
+                let same_size = capture.size.is_some() && capture.size == i.rec.total;
+                let same_name = hinted_name.as_deref().is_some_and(|n| same_file_name(n, &i.rec.file_name));
+                // A size alone could be any other file; resuming with it would corrupt the partial data.
+                (same_size && (same_name || (!named && related(i))))
+                    || (same_name && (capture.size.is_none() || i.rec.total.is_none()))
+            });
+            // The browser often hasn't a name yet when it starts a download, and a link that
+            // failed early never learned its size. With one download waiting, from the same
+            // site, and nothing downloaded that a different file could corrupt, it is that one.
+            let only = (waiting.len() == 1).then(|| waiting[0]).filter(|i| {
+                let sizes_agree = match (capture.size, i.rec.total) {
+                    (Some(a), Some(b)) => a == b,
+                    _ => true,
+                };
+                let safe = i.rec.downloaded == 0 || (capture.size.is_some() && capture.size == i.rec.total);
+                sizes_agree && safe && related(i)
+            });
+            strict.copied().or(only).map(|i| i.rec.id)
         };
         if let Some(id) = waiting {
             self.inner.with_item(id, |item, _| {
