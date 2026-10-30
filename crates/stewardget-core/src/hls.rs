@@ -462,9 +462,9 @@ impl Fetcher<'_> {
 
 fn decrypt(key: &[u8; 16], iv: &[u8; 16], data: &[u8]) -> Result<Vec<u8>, Error> {
     use cbc::cipher::block_padding::Pkcs7;
-    use cbc::cipher::{BlockDecryptMut, KeyIvInit};
+    use cbc::cipher::{BlockModeDecrypt, KeyIvInit};
     cbc::Decryptor::<aes::Aes128>::new(key.into(), iv.into())
-        .decrypt_padded_vec_mut::<Pkcs7>(data)
+        .decrypt_padded_vec::<Pkcs7>(data)
         .map_err(|_| Error::Unsupported("a stream piece could not be decrypted (wrong key?)".into()))
 }
 
@@ -517,10 +517,10 @@ mod tests {
     #[test]
     fn decrypts_aes_128() {
         use cbc::cipher::block_padding::Pkcs7;
-        use cbc::cipher::{BlockEncryptMut, KeyIvInit};
+        use cbc::cipher::{BlockModeEncrypt, KeyIvInit};
         let (key, iv) = ([7u8; 16], [9u8; 16]);
         let plain = b"one piece of a video stream".to_vec();
-        let enc = cbc::Encryptor::<aes::Aes128>::new(&key.into(), &iv.into()).encrypt_padded_vec_mut::<Pkcs7>(&plain);
+        let enc = cbc::Encryptor::<aes::Aes128>::new(&key.into(), &iv.into()).encrypt_padded_vec::<Pkcs7>(&plain);
         assert_eq!(decrypt(&key, &iv, &enc).unwrap(), plain);
         assert!(decrypt(&[1u8; 16], &iv, &enc).is_err() || decrypt(&[1u8; 16], &iv, &enc).unwrap() != plain);
     }
