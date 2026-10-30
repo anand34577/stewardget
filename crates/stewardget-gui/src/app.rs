@@ -381,6 +381,14 @@ impl StewardGetApp {
         self.toasts.push(Toast { text: text.into(), color, born: Instant::now() });
     }
 
+    /// Shows a file in its folder; says so when that isn't possible.
+    pub fn reveal(&mut self, path: &std::path::Path) {
+        if let Err(e) = stewardget_core::util::reveal_in_file_manager(path) {
+            let red = self.palette.red;
+            self.toast(format!("Couldn't open the folder: {e}"), red);
+        }
+    }
+
     pub fn report(&mut self, result: Result<(), stewardget_core::Error>) {
         if let Err(e) = result {
             let red = self.palette.red;

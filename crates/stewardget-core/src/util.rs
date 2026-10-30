@@ -122,30 +122,48 @@ pub fn format_relative(unix_secs: u64, now: u64) -> String {
 /// Opens the system file manager with `path` selected (or its folder opened).
 pub fn reveal_in_file_manager(path: &Path) -> std::io::Result<()> {
     use std::process::Command;
+    let path = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    let exists = path.exists();
+    // A file that is gone: open the closest folder that is still there.
+    let folder = path.ancestors().skip(1).find(|p| p.is_dir()).unwrap_or(&path).to_path_buf();
     #[cfg(target_os = "windows")]
     {
-        if path.exists() {
-            let mut arg = std::ffi::OsString::from("/select,");
-            arg.push(path);
-            Command::new("explorer").arg(arg).spawn()?;
+        use std::os::windows::process::CommandExt;
+        if exists {
+            // Explorer wants `/select,"C: bile"` with the quotes around the path only; a
+            // normal argument would be quoted as a whole, and Explorer would open Documents.
+            Command::new("explorer").raw_arg(explorer_select_arg(&path)).spawn()?;
         } else {
-            Command::new("explorer").arg(path.parent().unwrap_or(path)).spawn()?;
+            Command::new("explorer").arg(windows_path(&folder)).spawn()?;
         }
     }
     #[cfg(target_os = "macos")]
     {
-        if path.exists() {
-            Command::new("open").arg("-R").arg(path).spawn()?;
+        if exists {
+            Command::new("open").arg("-R").arg(&path).spawn()?;
         } else {
-            Command::new("open").arg(path.parent().unwrap_or(path)).spawn()?;
+            Command::new("open").arg(&folder).spawn()?;
         }
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
-        let dir = if path.is_dir() { path } else { path.parent().unwrap_or(path) };
+        let dir = if path.is_dir() { path.clone() } else { folder };
+        let _ = exists;
         Command::new("xdg-open").arg(dir).spawn()?;
     }
     Ok(())
+}
+
+/// `C: bile` with backslashes only, which is all Explorer understands.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn windows_path(path: &Path) -> String {
+    path.display().to_string().replace('/', "\\")
+}
+
+/// The command line Explorer needs to open a folder with `path` selected.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn explorer_select_arg(path: &Path) -> String {
+    format!("/select,\"{}\"", windows_path(path))
 }
 
 /// Opens a file with the system's default application.
@@ -522,6 +540,13 @@ fn substitute(text: &str, values: &[(&str, &str)]) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn explorer_gets_the_path_in_quotes_with_backslashes() {
+        use super::explorer_select_arg;
+        let arg = explorer_select_arg(std::path::Path::new("C:/Users/me/My Files/report v2.pdf"));
+        assert_eq!(arg, r#"/select,"C:\Users\me\My Files\report v2.pdf""#);
+    }
+
     #[test]
     fn tokens_are_random_and_compared_fully() {
         use super::{random_token, secrets_equal};

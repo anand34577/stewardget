@@ -6,6 +6,10 @@ All notable changes to StewardGet are listed here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- **Show in folder** opened Documents instead of the downloaded file when the path had spaces (Windows). It now opens the folder with the file selected; if the file is gone it opens the nearest folder that still exists, and says so when the folder can't be opened at all.
+- The new-download window for browser downloads now notices that a file with that name is already in the folder and offers *Open existing*, *Save with another name* or *Replace it*, like the Add window.
+
 ## [0.9.0] - 2026-10-30
 
 ### Added

@@ -475,7 +475,7 @@ impl StewardGetApp {
                 ui.close();
             }
             if menu_item(ui, &p, Icon::FolderOpen, "Show in folder", true) {
-                let _ = stewardget_core::util::reveal_in_file_manager(&d.path);
+                self.reveal(&d.path);
                 ui.close();
             }
             ui.separator();

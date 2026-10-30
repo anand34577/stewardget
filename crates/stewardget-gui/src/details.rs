@@ -56,7 +56,7 @@ impl StewardGetApp {
                     self.open_properties(&d);
                 }
                 if widgets::icon_button(ui, Icon::FolderOpen, "Show in folder", &p).clicked() {
-                    let _ = stewardget_core::util::reveal_in_file_manager(&d.path);
+                    self.reveal(&d.path);
                 }
                 if d.status == Status::Completed
                     && crate::table::file_exists(&d.path)

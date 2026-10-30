@@ -12,7 +12,7 @@ use egui::{Align, CornerRadius, Frame, Layout, Margin, RichText, Ui, ViewportId,
 use stewardget_core::util::format_bytes;
 
 use crate::table::free_space;
-use stewardget_core::{Category, Config, LinkInfo, MAIN_QUEUE, NewDownload, QueueId, Status};
+use stewardget_core::{Category, Config, ExistingFile, LinkInfo, MAIN_QUEUE, NewDownload, QueueId, Status};
 
 use crate::app::{ListFilter, Page, StewardGetApp, capitalize};
 use crate::icons::Icon;
@@ -56,6 +56,10 @@ pub struct CaptureWindow {
     focus_pending: bool,
     /// "Show it" on the download already in the list.
     show_existing: Option<stewardget_core::DownloadId>,
+    /// What to do when a file by this name is already in the folder; `None` = the setting's choice.
+    existing: Option<ExistingFile>,
+    /// "Open existing": show this file and cancel.
+    reveal_existing: Option<PathBuf>,
     /// Where it opened, picked once so it never jumps.
     pos: Option<egui::Pos2>,
     /// When the window appeared: Enter pressed for something else just before must not accept it.
@@ -88,6 +92,8 @@ impl CaptureWindow {
             height: 0.0,
             focus_pending: true,
             show_existing: None,
+            existing: None,
+            reveal_existing: None,
             pos: None,
             opened: std::time::Instant::now(),
             items,
@@ -150,6 +156,28 @@ impl CaptureWindow {
             (None, Some(Ok(info))) => Some(info.file_name),
             (None, _) => None,
         }
+    }
+
+    /// A file this download would collide with: one already in the folder under
+    /// the name shown, or the finished download of the same link. Only for a
+    /// single download whose name is known.
+    fn conflict(&self, app: &StewardGetApp) -> Option<PathBuf> {
+        if !self.single() || self.dir.trim().is_empty() {
+            return None;
+        }
+        let in_list = app
+            .snap
+            .downloads
+            .iter()
+            .find(|d| {
+                d.url == self.items[0].new.url && d.status == Status::Completed && crate::table::file_exists(&d.path)
+            })
+            .map(|d| d.path.clone());
+        let by_name = self
+            .chosen_name()
+            .filter(|n| !n.trim().is_empty())
+            .map(|n| PathBuf::from(self.dir.trim()).join(stewardget_core::filename::sanitize(&n)));
+        in_list.or_else(|| by_name.filter(|p| crate::table::file_exists(p)))
     }
 
     /// Where the download(s) go unless the user picks a folder.
@@ -249,6 +277,10 @@ impl StewardGetApp {
             }
         });
 
+        if let Some(path) = w.reveal_existing.take() {
+            let _ = stewardget_core::util::reveal_in_file_manager(&path);
+            decision = Some(Decision::Cancel);
+        }
         if let Some(id) = w.show_existing.take() {
             // Its progress window, or "Download complete" if it is done.
             self.open_progress(id);
@@ -316,14 +348,49 @@ impl StewardGetApp {
                         .on_hover_text(url);
                 });
             });
-        if w.items[0].known
+        let conflict = w.conflict(self);
+        if let Some(path) = &conflict {
+            let default_existing = self.engine.config().existing_file;
+            crate::dialogs::callout(ui, &p, p.yellow, Icon::Warning, |ui| {
+                let file = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                let folder = path.parent().map(|d| d.display().to_string()).unwrap_or_default();
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(format!("“{file}” is already downloaded")).family(theme::semi()).color(p.text),
+                    )
+                    .truncate(),
+                );
+                ui.add(egui::Label::new(RichText::new(folder).size(12.0).color(p.text_dim)).truncate());
+                let mut choice = w.existing.unwrap_or(default_existing);
+                ui.horizontal(|ui| {
+                    if widgets::button(ui, ButtonKind::Tool, Some(Icon::FolderOpen), "Open existing", true, &p)
+                        .on_hover_text("Show the file in its folder and cancel this download")
+                        .clicked()
+                    {
+                        w.reveal_existing = Some(path.clone());
+                    }
+                    widgets::segmented(
+                        ui,
+                        &mut choice,
+                        &[(ExistingFile::Rename, "Save with another name"), (ExistingFile::Overwrite, "Replace it")],
+                        &p,
+                    );
+                });
+                w.existing = Some(choice);
+                let hint = match choice {
+                    ExistingFile::Rename => "Both files are kept; the new one gets a number in its name.",
+                    ExistingFile::Overwrite => "The old file is replaced when the download finishes.",
+                };
+                ui.label(RichText::new(hint).size(12.0).color(p.text_dim));
+            });
+        } else {
+            w.existing = None;
+        }
+        if conflict.is_none()
+            && w.items[0].known
             && let Some(d) = self.snap.downloads.iter().find(|d| d.url == w.items[0].new.url)
         {
-            let text = if d.status == Status::Completed {
-                format!("You already downloaded this: {}", d.file_name)
-            } else {
-                format!("Already in your list: {} ({})", d.file_name, d.status.label().to_lowercase())
-            };
+            let text = format!("Already in your list: {} ({})", d.file_name, d.status.label().to_lowercase());
             ui.horizontal(|ui| {
                 widgets::icon(ui, Icon::Info, 13.0, p.yellow);
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -527,6 +594,9 @@ impl StewardGetApp {
                 // download picks its category folder once it knows the name.)
                 // Keep the category folder shown in the window, even if settings change meanwhile.
                 new.options.directory = new.options.directory.or_else(|| Some(dir.clone()));
+            }
+            if single && w.existing.is_some() {
+                new.options.existing = w.existing;
             }
             new.queue = Some(w.queue);
             new.paused = later;
