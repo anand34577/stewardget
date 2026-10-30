@@ -6,6 +6,8 @@ All notable changes to StewardGet are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-10-30
+
 ### Fixed
 - **Show in folder** opened Documents instead of the downloaded file when the path had spaces (Windows). It now opens the folder with the file selected; if the file is gone it opens the nearest folder that still exists, and says so when the folder can't be opened at all.
 - Opening a file or folder from StewardGet no longer fails silently: if the system can't open it, a message says so.
