@@ -698,6 +698,37 @@ pub fn problem_of(d: &DownloadView) -> Option<Problem> {
     })
 }
 
+/// One plain sentence on what to do about a failure; empty when there is nothing useful to add.
+pub fn problem_hint(kind: Problem, error: &str) -> &'static str {
+    match kind {
+        Problem::Expired => "The link has probably expired. Refresh it to continue from where it stopped.",
+        Problem::NotFound => "Check that the link is right, or open the page and start the download again.",
+        Problem::Denied => {
+            "The site wants you to be logged in. Start the download from your browser so StewardGet gets its cookies, or refresh the link."
+        }
+        Problem::Changed => {
+            "Your partial data is kept. If it is still the same file (e.g. a re-signed link), resume anyway; otherwise start over."
+        }
+        Problem::SizeChanged => "This looks like a different file now. Refresh the link, or start over.",
+        Problem::NoResume => "The partial data can't be continued from this server. Try a fresh link, or start over.",
+        Problem::DiskFull => "Free up space or move the download to another drive, then retry.",
+        Problem::Checksum => "The file is corrupt or the checksum is wrong. Start over, or edit the checksum.",
+        Problem::Other => {
+            if error.contains("timed out") || error.contains("network error") {
+                "Check your internet connection (or proxy settings), then press Resume."
+            } else if error.contains("server is busy") {
+                "The server asked for a pause. StewardGet will try again by itself."
+            } else if error.contains("disk error") {
+                "Check that the folder exists, is writable and the drive is connected."
+            } else if error.contains("invalid URL") {
+                "The link looks incomplete. Edit it in Properties (F2)."
+            } else {
+                ""
+            }
+        }
+    }
+}
+
 pub fn problem(error: &str) -> Problem {
     if error.contains("remote file changed") {
         Problem::Changed
