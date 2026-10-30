@@ -149,6 +149,7 @@ pub struct StewardGetApp {
     pub settings_draft: Option<Config>,
     pub settings_tab: crate::settings::Tab,
     pub settings_search: String,
+    pub palette_box: Option<crate::palette::Palette>,
     pub limit_text: String,
     pub toasts: Vec<Toast>,
     pub pending_removal: Option<PendingRemoval>,
@@ -308,6 +309,7 @@ impl StewardGetApp {
             settings_draft: None,
             settings_tab: crate::settings::Tab::General,
             settings_search: String::new(),
+            palette_box: None,
             limit_text: String::new(),
             toasts: Vec::new(),
             pending_removal: None,
@@ -808,12 +810,20 @@ impl StewardGetApp {
             || self.close_prompt.is_some()
             || self.capture.is_some()
             || self.shortcuts_open
+            || self.palette_box.is_some()
     }
 
     fn shortcuts(&mut self, ctx: &egui::Context) {
         if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::Q)) {
             self.quit(ctx);
             return;
+        }
+        if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::K)) {
+            if self.palette_box.is_some() {
+                self.palette_box = None;
+            } else {
+                self.open_palette();
+            }
         }
         if ctx.input(|i| i.key_pressed(egui::Key::F1)) {
             self.shortcuts_open = !self.shortcuts_open;
@@ -1960,6 +1970,7 @@ impl eframe::App for StewardGetApp {
         self.close_prompt(&ctx);
         self.capture_window(&ctx);
         self.shortcuts_dialog(&ctx);
+        self.palette_dialog(&ctx);
         self.progress_windows(&ctx);
         self.drag_overlay(&ctx);
         self.draw_toasts(&ctx);

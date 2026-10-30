@@ -9,7 +9,8 @@ use crate::icons::Icon;
 use crate::widgets::{self, ButtonKind};
 
 /// Shortcut, what it does.
-const SHORTCUTS: [(&str, &str); 17] = [
+const SHORTCUTS: [(&str, &str); 18] = [
+    ("Ctrl+K", "Command palette: find any page, setting, action or download"),
     ("Ctrl+N", "Add downloads"),
     ("Ctrl+V", "Add the link on the clipboard"),
     ("Ctrl+O", "Import links from a file"),

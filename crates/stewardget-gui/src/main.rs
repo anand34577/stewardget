@@ -17,6 +17,7 @@ mod lanes;
 mod media;
 mod menubar;
 mod notify;
+mod palette;
 mod overview;
 mod progress;
 mod queues;

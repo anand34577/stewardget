@@ -26,7 +26,7 @@ pub enum Tab {
 }
 
 impl Tab {
-    const ALL: [(Tab, Icon, &'static str); 10] = [
+    pub(crate) const ALL: [(Tab, Icon, &'static str); 10] = [
         (Tab::General, Icon::Gear, "General"),
         (Tab::Appearance, Icon::Palette, "Appearance"),
         (Tab::Connection, Icon::Gauge, "Downloads"),

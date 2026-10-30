@@ -310,3 +310,40 @@ pub fn install_fonts(ctx: &egui::Context) {
     fonts.families.insert(icon_family(), vec!["lucide".to_owned()]);
     ctx.set_fonts(fonts);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn luminance(c: Color32) -> f32 {
+        let f = |v: u8| {
+            let v = v as f32 / 255.0;
+            if v <= 0.03928 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+        };
+        0.2126 * f(c.r()) + 0.7152 * f(c.g()) + 0.0722 * f(c.b())
+    }
+
+    fn contrast(a: Color32, b: Color32) -> f32 {
+        let (x, y) = (luminance(a), luminance(b));
+        (x.max(y) + 0.05) / (x.min(y) + 0.05)
+    }
+
+    /// Body text must be clearly readable and dimmed text at least AA-large readable
+    /// on every surface it sits on, in every theme and accent.
+    #[test]
+    fn text_is_readable_in_every_theme() {
+        for theme in [Theme::Light, Theme::Dark, Theme::Midnight, Theme::Ocean] {
+            for accent in Accent::ALL {
+                let p = Palette::new(theme, accent, false);
+                for (name, bg) in [("bg", p.bg), ("card", p.card), ("sidebar", p.sidebar)] {
+                    let body = contrast(p.text, bg);
+                    let dim = contrast(p.text_dim, bg);
+                    assert!(body >= 7.0, "{theme:?}/{accent:?}: text on {name} is {body:.1}:1");
+                    assert!(dim >= 3.5, "{theme:?}/{accent:?}: dim text on {name} is {dim:.1}:1");
+                }
+                let on = contrast(p.on_accent, p.accent);
+                assert!(on >= 3.0, "{theme:?}/{accent:?}: text on the accent is {on:.1}:1");
+            }
+        }
+    }
+}
