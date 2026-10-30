@@ -176,6 +176,16 @@ pub(crate) fn free_space(_dir: &Path) -> Option<u64> {
     None
 }
 
+/// Whether two paths name the same file: Windows and macOS file systems ignore
+/// case, so `Setup.exe` and `setup.exe` collide there.
+pub(crate) fn same_path(a: &Path, b: &Path) -> bool {
+    if cfg!(any(windows, target_os = "macos")) {
+        a.as_os_str().to_string_lossy().to_lowercase() == b.as_os_str().to_string_lossy().to_lowercase()
+    } else {
+        a == b
+    }
+}
+
 /// Moves a file, copying across volumes when a rename isn't possible.
 pub(crate) fn move_file(from: &Path, to: &Path) -> io::Result<()> {
     if let Some(dir) = to.parent() {

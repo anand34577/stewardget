@@ -8,6 +8,12 @@ All notable changes to StewardGet are listed here. The format follows
 
 ### Fixed
 - **Show in folder** opened Documents instead of the downloaded file when the path had spaces (Windows). It now opens the folder with the file selected; if the file is gone it opens the nearest folder that still exists, and says so when the folder can't be opened at all.
+- Opening a file or folder from StewardGet no longer fails silently: if the system can't open it, a message says so.
+- Linux: *Show in folder* now opens the file manager with the file selected (Nautilus, Dolphin, Nemo, Thunar and other freedesktop file managers); helper programs it starts are cleaned up instead of lingering.
+- Linux and macOS: the completion sound now plays (when `canberra-gtk-play`, `paplay` or macOS `afplay` is available).
+- *When all downloads finish → sleep / shut down* reports it when the system command fails (for example no systemd) instead of looking like it worked.
+- Windows and macOS: two downloads whose names differ only in capitals (`Setup.exe`, `setup.exe`) no longer try to use the same file.
+- The *move* step for finished files no longer leaves a second copy behind when the original is merely in use.
 - The new-download window for browser downloads now notices that a file with that name is already in the folder and offers *Open existing*, *Save with another name* or *Replace it*, like the Add window.
 
 ## [0.9.0] - 2026-10-30

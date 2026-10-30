@@ -692,7 +692,9 @@ impl Engine {
         let case_only = cfg!(any(windows, target_os = "macos"))
             && to.as_os_str().to_string_lossy().to_lowercase()
                 == item.rec.path.as_os_str().to_string_lossy().to_lowercase();
-        if !case_only && (to.exists() || part_path(&to).exists() || reserved.contains(&to)) {
+        if !case_only
+            && (to.exists() || part_path(&to).exists() || reserved.iter().any(|r| crate::fsio::same_path(r, &to)))
+        {
             return Err(Error::Io(format!("\u{201c}{name}\u{201d} already exists in that folder")));
         }
         let from = item.rec.path.clone();
@@ -1993,7 +1995,7 @@ impl Hooks for EngineHooks {
             let overwrite = rec.options.existing.unwrap_or(config.existing_file) == ExistingFile::Overwrite;
             // Re-adding a URL whose partial download is still on disk resumes it.
             let candidate = dir.join(&name);
-            let resumable_here = !reserved.contains(&candidate)
+            let resumable_here = !reserved.iter().any(|r| crate::fsio::same_path(r, &candidate))
                 && part_path(&candidate).exists()
                 && ControlFile::load(&meta_path(&candidate)).is_some_and(|c| {
                     c.url == rec.url || c.matches(probe.total, probe.etag.as_deref(), probe.last_modified.as_deref())
@@ -2002,7 +2004,9 @@ impl Hooks for EngineHooks {
                 candidate
             } else {
                 filename::unique_path(&dir, &name, |p| {
-                    (p.exists() && !overwrite) || part_path(p).exists() || reserved.iter().any(|r| r == p)
+                    (p.exists() && !overwrite)
+                        || part_path(p).exists()
+                        || reserved.iter().any(|r| crate::fsio::same_path(r, p))
                 })
             };
             rec.file_name = rec.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or(name);

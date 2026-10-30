@@ -735,7 +735,7 @@ impl StewardGetApp {
                                 )
                                 .clicked()
                                 {
-                                    let _ = stewardget_core::util::open_with_system(&dir);
+                                    self.open_path(&dir);
                                 }
                             },
                         );
@@ -1145,7 +1145,7 @@ impl StewardGetApp {
             if let Some(dir) = dir {
                 row(ui, &p, "Data folder", &dir.display().to_string(), |ui| {
                     if widgets::button(ui, ButtonKind::Ghost, Some(Icon::FolderOpen), "Open", true, &p).clicked() {
-                        let _ = stewardget_core::util::open_with_system(&dir);
+                        self.open_path(&dir);
                     }
                 });
             }

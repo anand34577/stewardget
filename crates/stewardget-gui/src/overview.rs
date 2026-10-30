@@ -248,7 +248,7 @@ impl StewardGetApp {
                     p.text_dim,
                 );
                 if response.on_hover_text("Open").on_hover_cursor(egui::CursorIcon::PointingHand).clicked() && ok {
-                    let _ = stewardget_core::util::open_with_system(&e.path);
+                    self.open_path(&e.path);
                 }
             }
         });

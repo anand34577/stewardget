@@ -188,7 +188,7 @@ impl StewardGetApp {
         if menu_item(ui, &p, Icon::FolderOpen, "Open data folder", self.engine.data_dir().is_some())
             && let Some(dir) = self.engine.data_dir()
         {
-            let _ = stewardget_core::util::open_with_system(&dir);
+            self.open_path(&dir);
             ui.close();
         }
         if menu_item(ui, &p, Icon::External, "StewardGet on GitHub", true) {

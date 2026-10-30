@@ -370,11 +370,8 @@ fn move_to(path: &Path, dir: &Path) -> io::Result<PathBuf> {
         n += 1;
         target = dir.join(format!("{stem} ({n}){ext}"));
     }
-    if fs::rename(path, &target).is_err() {
-        // Another drive: copy, then remove.
-        fs::copy(path, &target)?;
-        fs::remove_file(path)?;
-    }
+    // Copies across drives, but leaves the file alone when it is merely in use.
+    crate::fsio::move_file(path, &target)?;
     Ok(target)
 }
 

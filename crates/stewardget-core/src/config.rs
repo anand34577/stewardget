@@ -588,6 +588,7 @@ impl Config {
 fn default_download_dir() -> PathBuf {
     directories::UserDirs::new()
         .and_then(|u| u.download_dir().map(PathBuf::from).or_else(|| Some(u.home_dir().join("Downloads"))))
+        .or_else(|| std::env::current_dir().ok())
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
