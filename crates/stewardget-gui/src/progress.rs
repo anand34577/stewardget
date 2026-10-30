@@ -241,7 +241,7 @@ fn running_body(
             ui.label(RichText::new("Speed limit").color(p.text_dim));
             let current = d.options.speed_limit;
             let label = |v: u64| if v == 0 { "Unlimited".to_owned() } else { format!("{}/s", format_bytes(v)) };
-            egui::ComboBox::from_id_salt(("progress-limit", d.id)).width(120.0).selected_text(label(current)).show_ui(
+            widgets::dropdown(p, ("progress-limit", d.id)).width(120.0).selected_text(label(current)).show_ui(
                 ui,
                 |ui| {
                     for v in LIMITS {
@@ -261,7 +261,7 @@ fn running_body(
         Frame::new()
             .fill(p.yellow.gamma_multiply(if p.dark { 0.14 } else { 0.1 }))
             .stroke(Stroke::new(1.0, p.yellow.gamma_multiply(0.5)))
-            .corner_radius(CornerRadius::same(8))
+            .corner_radius(CornerRadius::same(crate::theme::radius::MD))
             .inner_margin(Margin::symmetric(10, 8))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
@@ -344,8 +344,7 @@ fn complete_body(ui: &mut Ui, p: &Palette, d: &DownloadView, w: &ProgressWindow)
             ui.end_row();
         }
         ui.label(RichText::new("Saved to").color(p.text_dim));
-        ui.add(egui::Label::new(RichText::new(d.path.display().to_string()).color(p.text)).truncate())
-            .on_hover_text(d.path.display().to_string());
+        widgets::path_label(ui, &d.path.display().to_string(), crate::theme::size::MD, p.text);
         ui.end_row();
     });
     if d.checksum_verified {

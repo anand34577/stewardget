@@ -321,7 +321,7 @@ impl StewardGetApp {
         let category = self.cfg.categorize(&name);
         Frame::new()
             .fill(p.card_hover)
-            .corner_radius(CornerRadius::same(8))
+            .corner_radius(CornerRadius::same(crate::theme::radius::MD))
             .inner_margin(Margin::symmetric(10, 8))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
@@ -360,7 +360,7 @@ impl StewardGetApp {
                     )
                     .truncate(),
                 );
-                ui.add(egui::Label::new(RichText::new(folder).size(12.0).color(p.text_dim)).truncate());
+                widgets::path_label(ui, &folder, 12.0, p.text_dim);
                 let mut choice = w.existing.unwrap_or(default_existing);
                 ui.horizontal(|ui| {
                     if widgets::button(ui, ButtonKind::Tool, Some(Icon::FolderOpen), "Open existing", true, &p)
@@ -494,7 +494,7 @@ impl StewardGetApp {
         Frame::new()
             .fill(p.bg)
             .stroke(egui::Stroke::new(1.0, p.border))
-            .corner_radius(CornerRadius::same(8))
+            .corner_radius(CornerRadius::same(crate::theme::radius::MD))
             .inner_margin(Margin::symmetric(4, 4))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
@@ -507,15 +507,29 @@ impl StewardGetApp {
                     |ui, range| {
                         for &i in &rows[range] {
                             let item = &mut w.items[i];
-                            ui.horizontal(|ui| {
-                                ui.set_height(ROW_H);
-                                ui.checkbox(&mut item.selected, "");
-                                widgets::icon(ui, Icon::for_category(item.category), 15.0, p.category(item.category));
-                                ui.add(egui::Label::new(RichText::new(&item.name).size(13.0).color(p.text)).truncate())
-                                    .on_hover_text(&item.new.url);
-                                if item.known {
-                                    widgets::pill(ui, "in list", p.yellow);
-                                }
+                            ui.allocate_ui(egui::vec2(ui.available_width(), ROW_H), |ui| {
+                                widgets::split_row(
+                                    ui,
+                                    |ui| {
+                                        ui.checkbox(&mut item.selected, "");
+                                        widgets::icon(
+                                            ui,
+                                            Icon::for_category(item.category),
+                                            15.0,
+                                            p.category(item.category),
+                                        );
+                                        ui.add(
+                                            egui::Label::new(RichText::new(&item.name).size(13.0).color(p.text))
+                                                .truncate(),
+                                        )
+                                        .on_hover_text(&item.new.url);
+                                    },
+                                    |ui| {
+                                        if item.known {
+                                            widgets::pill(ui, "in list", p.yellow);
+                                        }
+                                    },
+                                );
                             });
                         }
                     },
@@ -545,7 +559,7 @@ impl StewardGetApp {
             None
         };
         widgets::form_row(ui, LABEL_W, "Queue", &p, |ui| {
-            egui::ComboBox::from_id_salt("capture-queue")
+            widgets::dropdown(&p, "capture-queue")
                 .width(170.0)
                 .selected_text(config.queue(w.queue).name.clone())
                 .show_ui(ui, |ui| {
@@ -677,7 +691,11 @@ fn link_status(ui: &mut Ui, p: &Palette, check: &Option<Result<LinkInfo, String>
 fn header(ui: &mut Ui, p: &Palette, icon: Icon, text: &str, waiting: usize) {
     ui.horizontal(|ui| {
         let (rect, _) = ui.allocate_exact_size(vec2(32.0, 32.0), egui::Sense::hover());
-        ui.painter().rect_filled(rect, CornerRadius::same(9), p.accent.gamma_multiply(if p.dark { 0.2 } else { 0.12 }));
+        ui.painter().rect_filled(
+            rect,
+            CornerRadius::same(crate::theme::radius::MD),
+            p.accent.gamma_multiply(if p.dark { 0.2 } else { 0.12 }),
+        );
         crate::icons::paint(ui.painter(), rect.shrink(8.0), icon, p.accent);
         ui.add_space(4.0);
         ui.label(RichText::new(text).size(17.0).family(theme::semi()).color(p.text));
@@ -743,7 +761,7 @@ fn chip(ui: &mut Ui, p: &Palette, icon: Icon, color: egui::Color32, label: &str,
     } else {
         (p.card, egui::Stroke::new(1.0, p.control_border))
     };
-    ui.painter().rect(rect, CornerRadius::same(14), fill, stroke, egui::StrokeKind::Inside);
+    ui.painter().rect(rect, CornerRadius::same(crate::theme::radius::LG), fill, stroke, egui::StrokeKind::Inside);
     crate::icons::paint(
         ui.painter(),
         egui::Rect::from_center_size(rect.left_center() + vec2(17.0, 0.0), vec2(14.0, 14.0)),

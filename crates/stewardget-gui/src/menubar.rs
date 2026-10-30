@@ -31,13 +31,34 @@ const SHORTCUTS: [(&str, &str); 18] = [
 ];
 
 impl StewardGetApp {
-    pub fn menu_bar(&mut self, ui: &mut Ui) {
-        egui::MenuBar::new().ui(ui, |ui| {
-            ui.menu_button("File", |ui| self.file_menu(ui));
-            ui.menu_button("Tasks", |ui| self.tasks_menu(ui));
-            ui.menu_button("Tools", |ui| self.tools_menu(ui));
-            ui.menu_button("Help", |ui| self.help_menu(ui));
-        });
+    /// The menu titles. Returns where the last one ends, as the menu bar
+    /// itself takes the whole row.
+    pub fn menu_bar(&mut self, ui: &mut Ui) -> f32 {
+        egui::MenuBar::new()
+            .ui(ui, |ui| {
+                ui.menu_button("File", |ui| self.file_menu(ui));
+                ui.menu_button("Tasks", |ui| self.tasks_menu(ui));
+                ui.menu_button("Tools", |ui| self.tools_menu(ui));
+                ui.menu_button("Help", |ui| self.help_menu(ui)).response.rect.right()
+            })
+            .inner
+    }
+
+    /// The same menus folded into one, for narrow windows.
+    pub fn menu_bar_compact(&mut self, ui: &mut Ui) -> f32 {
+        egui::MenuBar::new()
+            .ui(ui, |ui| {
+                ui.menu_button("Menu", |ui| {
+                    ui.menu_button("File", |ui| self.file_menu(ui));
+                    ui.menu_button("Tasks", |ui| self.tasks_menu(ui));
+                    ui.menu_button("Tools", |ui| self.tools_menu(ui));
+                    ui.menu_button("Help", |ui| self.help_menu(ui));
+                })
+                .response
+                .rect
+                .right()
+            })
+            .inner
     }
 
     fn file_menu(&mut self, ui: &mut Ui) {

@@ -33,6 +33,8 @@ tar = "0.4.46"
 flate2 = "1.1.10"
 bytes = "1.12.1"
 roxmltree = "0.21.2"
+# Email notifications, on the same rustls stack reqwest uses.
+lettre = { version = "0.11.23", default-features = false, features = ["builder", "smtp-transport", "tokio1-rustls", "aws-lc-rs", "rustls-platform-verifier"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys.workspace = true

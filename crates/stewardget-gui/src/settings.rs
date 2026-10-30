@@ -220,123 +220,127 @@ impl StewardGetApp {
     fn settings_tab_body(&mut self, ui: &mut Ui, draft: &mut Config) {
         let p = self.palette;
         match self.settings_tab {
-            Tab::General => section(ui, &p, "General", |ui| {
-                row(ui, &p, "Download folder", "Where new downloads are saved.", |ui| {
-                    let mut dir = draft.download_dir.display().to_string();
-                    let (_, browse) = widgets::input_with_button(ui, &mut dir, "", Icon::FolderOpen, "Browse", &p);
-                    if browse
-                        && let Some(folder) = rfd::FileDialog::new().set_directory(&draft.download_dir).pick_folder()
-                    {
-                        dir = folder.display().to_string();
-                    }
-                    draft.download_dir = dir.into();
-                });
-                row(
-                    ui,
-                    &p,
-                    "Sort into category folders",
-                    "Video, Music, Archives… each get their own sub-folder.",
-                    |ui| {
-                        toggle(ui, &mut draft.auto_categorize, &p);
-                    },
-                );
-                row(
-                    ui,
-                    &p,
-                    "Start with your computer",
-                    "Opens StewardGet minimised when you sign in, so browser downloads always reach it. Applies right away.",
-                    |ui| {
-                        let mut on = self.autostart.unwrap_or(false);
-                        if toggle(ui, &mut on, &p).clicked() {
-                            if let Err(e) = crate::autostart::set(on) {
-                                let red = self.palette.red;
-                                self.toast(format!("Could not change the login item: {e}"), red);
-                            }
-                            self.autostart = Some(crate::autostart::is_enabled());
+            Tab::General => {
+                section(ui, &p, "General", |ui| {
+                    row(ui, &p, "Download folder", "Where new downloads are saved.", |ui| {
+                        let mut dir = draft.download_dir.display().to_string();
+                        let (_, browse) = widgets::input_with_button(ui, &mut dir, "", Icon::FolderOpen, "Browse", &p);
+                        if browse
+                            && let Some(folder) =
+                                rfd::FileDialog::new().set_directory(&draft.download_dir).pick_folder()
+                        {
+                            dir = folder.display().to_string();
                         }
-                    },
-                );
-                row(ui, &p, "Resume on start", "Continue unfinished downloads when StewardGet opens.", |ui| {
-                    toggle(ui, &mut draft.resume_on_start, &p);
-                });
-                row(ui, &p, "Watch clipboard", "Offer to download file links you copy anywhere.", |ui| {
-                    toggle(ui, &mut draft.clipboard_monitor, &p);
-                });
-                row(
-                    ui,
-                    &p,
-                    "New-download window",
-                    "For downloads from the browser, show name, size, folder and queue first, with Download now and Download later.",
-                    |ui| {
-                        toggle(ui, &mut draft.capture_dialog, &p);
-                    },
-                );
-                row(
-                    ui,
-                    &p,
-                    "Progress window",
-                    "Open a small window with the speed, each connection's progress and Pause for each download you start on its own, also while StewardGet is in the tray (batches don't open one each). It turns into Download complete when the file is done. Double-click a download to open it any time.",
-                    |ui| {
-                        toggle(ui, &mut draft.progress_window, &p);
-                    },
-                );
-                row(
-                    ui,
-                    &p,
-                    "Closing the window",
-                    "Keep running minimises StewardGet, so downloads continue and the browser can still hand it new ones.",
-                    |ui| {
-                        widgets::segmented(
-                            ui,
-                            &mut draft.close_action,
-                            &[
-                                (CloseAction::Ask, "Ask"),
-                                (CloseAction::Background, "Keep running"),
-                                (CloseAction::Quit, "Quit"),
-                            ],
-                            &p,
-                        );
-                    },
-                );
-                if cfg!(any(windows, target_os = "macos")) {
+                        draft.download_dir = dir.into();
+                    });
                     row(
                         ui,
                         &p,
-                        "Minimise to the tray",
-                        "The minimise button and Keep running hide StewardGet in the notification area instead of the taskbar. Click its icon to bring it back.",
+                        "Sort into category folders",
+                        "Video, Music, Archives… each get their own sub-folder.",
                         |ui| {
-                            toggle(ui, &mut draft.minimize_to_tray, &p);
+                            toggle(ui, &mut draft.auto_categorize, &p);
                         },
                     );
-                }
-                row(
-                    ui,
-                    &p,
-                    "Download complete window",
-                    "Also show Download complete, with Open and Show in folder, for downloads that had no progress window open, such as the files of a batch.",
-                    |ui| {
-                        toggle(ui, &mut draft.completion_dialog, &p);
-                    },
-                );
-                row(
-                    ui,
-                    &p,
-                    "Completion sound",
-                    "Play the system sound when a download finishes while StewardGet is in the background.",
-                    |ui| {
-                        toggle(ui, &mut draft.completion_sound, &p);
-                    },
-                );
-                row(
-                    ui,
-                    &p,
-                    "Notifications",
-                    "A system notification when a download finishes or fails while StewardGet is in the background.",
-                    |ui| {
-                        toggle(ui, &mut draft.notifications, &p);
-                    },
-                );
-            }),
+                    row(
+                        ui,
+                        &p,
+                        "Start with your computer",
+                        "Opens StewardGet minimised when you sign in, so browser downloads always reach it. Applies right away.",
+                        |ui| {
+                            let mut on = self.autostart.unwrap_or(false);
+                            if toggle(ui, &mut on, &p).clicked() {
+                                if let Err(e) = crate::autostart::set(on) {
+                                    let red = self.palette.red;
+                                    self.toast(format!("Could not change the login item: {e}"), red);
+                                }
+                                self.autostart = Some(crate::autostart::is_enabled());
+                            }
+                        },
+                    );
+                    row(ui, &p, "Resume on start", "Continue unfinished downloads when StewardGet opens.", |ui| {
+                        toggle(ui, &mut draft.resume_on_start, &p);
+                    });
+                    row(ui, &p, "Watch clipboard", "Offer to download file links you copy anywhere.", |ui| {
+                        toggle(ui, &mut draft.clipboard_monitor, &p);
+                    });
+                    row(
+                        ui,
+                        &p,
+                        "New-download window",
+                        "For downloads from the browser, show name, size, folder and queue first, with Download now and Download later.",
+                        |ui| {
+                            toggle(ui, &mut draft.capture_dialog, &p);
+                        },
+                    );
+                    row(
+                        ui,
+                        &p,
+                        "Progress window",
+                        "Open a small window with the speed, each connection's progress and Pause for each download you start on its own, also while StewardGet is in the tray (batches don't open one each). It turns into Download complete when the file is done. Double-click a download to open it any time.",
+                        |ui| {
+                            toggle(ui, &mut draft.progress_window, &p);
+                        },
+                    );
+                    row(
+                        ui,
+                        &p,
+                        "Closing the window",
+                        "Keep running minimises StewardGet, so downloads continue and the browser can still hand it new ones.",
+                        |ui| {
+                            widgets::segmented(
+                                ui,
+                                &mut draft.close_action,
+                                &[
+                                    (CloseAction::Ask, "Ask"),
+                                    (CloseAction::Background, "Keep running"),
+                                    (CloseAction::Quit, "Quit"),
+                                ],
+                                &p,
+                            );
+                        },
+                    );
+                    if cfg!(any(windows, target_os = "macos")) {
+                        row(
+                            ui,
+                            &p,
+                            "Minimise to the tray",
+                            "The minimise button and Keep running hide StewardGet in the notification area instead of the taskbar. Click its icon to bring it back.",
+                            |ui| {
+                                toggle(ui, &mut draft.minimize_to_tray, &p);
+                            },
+                        );
+                    }
+                    row(
+                        ui,
+                        &p,
+                        "Download complete window",
+                        "Also show Download complete, with Open and Show in folder, for downloads that had no progress window open, such as the files of a batch.",
+                        |ui| {
+                            toggle(ui, &mut draft.completion_dialog, &p);
+                        },
+                    );
+                    row(
+                        ui,
+                        &p,
+                        "Completion sound",
+                        "Play the system sound when a download finishes while StewardGet is in the background.",
+                        |ui| {
+                            toggle(ui, &mut draft.completion_sound, &p);
+                        },
+                    );
+                    row(
+                        ui,
+                        &p,
+                        "Notifications",
+                        "A system notification when a download finishes or fails while StewardGet is in the background.",
+                        |ui| {
+                            toggle(ui, &mut draft.notifications, &p);
+                        },
+                    );
+                });
+                self.push_sections(ui, draft);
+            }
             Tab::Appearance => {
                 section(ui, &p, "Theme", |ui| {
                     ui.horizontal_wrapped(|ui| {
@@ -372,10 +376,28 @@ impl StewardGetApp {
                     row(
                         ui,
                         &p,
-                        "List view",
-                        "One dense line per download, with sortable columns (right-click the header to pick them). Off shows each download as a card.",
+                        "Compact rows",
+                        "One line per download. Off shows the kind of file and the site under each name. Right-click the list's header to pick columns.",
                         |ui| {
                             toggle(ui, &mut draft.compact_rows, &p);
+                        },
+                    );
+                    row(
+                        ui,
+                        &p,
+                        "Card view",
+                        "Show downloads as cards with a summary of speed, progress and disk space above them, instead of the list.",
+                        |ui| {
+                            toggle(ui, &mut draft.card_view, &p);
+                        },
+                    );
+                    row(
+                        ui,
+                        &p,
+                        "System title bar",
+                        "Use the operating system's title bar and window buttons instead of StewardGet's own header. Takes effect the next time StewardGet starts.",
+                        |ui| {
+                            toggle(ui, &mut draft.system_title_bar, &p);
                         },
                     );
                 });
@@ -384,9 +406,7 @@ impl StewardGetApp {
             Tab::Connection => {
                 section(ui, &p, "Queue", |ui| {
                     row(ui, &p, "Simultaneous downloads", "How many files transfer at the same time.", |ui| {
-                        ui.add(
-                            egui::Slider::new(&mut draft.max_concurrent, 1..=16).clamping(egui::SliderClamping::Edits),
-                        );
+                        widgets::slider(ui, &mut draft.max_concurrent, 1..=16, "", None, &p);
                     });
                     row(ui, &p, "Global speed limit", "For example 2M or 500k. Leave empty for unlimited.", |ui| {
                         widgets::speed_input(ui, "global", &mut draft.speed_limit, 150.0);
@@ -436,13 +456,11 @@ impl StewardGetApp {
                         "Connections per file",
                         "Parallel connections for each download. 8–16 suits most servers; StewardGet automatically backs off when a server limits connections.",
                         |ui| {
-                            ui.add(
-                                egui::Slider::new(&mut draft.connections, 1..=32).clamping(egui::SliderClamping::Edits),
-                            );
+                            widgets::slider(ui, &mut draft.connections, 1..=32, "", None, &p);
                         },
                     );
                     row(ui, &p, "Minimum segment size", "Ranges are never split below this.", |ui| {
-                        egui::ComboBox::from_id_salt("min-split")
+                        widgets::dropdown(&p, "min-split")
                             .width(120.0)
                             .selected_text(format_bytes(draft.min_split_size))
                             .show_ui(ui, |ui| {
@@ -464,7 +482,7 @@ impl StewardGetApp {
                         "Retries per connection",
                         "Network errors are retried right away with exponential back-off.",
                         |ui| {
-                            ui.add(egui::Slider::new(&mut draft.max_retries, 0..=50));
+                            widgets::slider(ui, &mut draft.max_retries, 0..=50, "", None, &p);
                         },
                     );
                     row(
@@ -473,11 +491,11 @@ impl StewardGetApp {
                         "Retry failed downloads",
                         "When a download still fails because of the network or the server, try it again later. 0 turns this off.",
                         |ui| {
-                            ui.add(egui::Slider::new(&mut draft.auto_retry, 0..=20).suffix(" times"));
+                            widgets::slider(ui, &mut draft.auto_retry, 0..=20, " times", None, &p);
                         },
                     );
                     row(ui, &p, "First retry after", "The pause doubles with every attempt.", |ui| {
-                        ui.add(egui::Slider::new(&mut draft.auto_retry_delay_secs, 5..=600).suffix(" s"));
+                        widgets::slider(ui, &mut draft.auto_retry_delay_secs, 5..=600, " s", None, &p);
                     });
                 });
                 section(ui, &p, "When a download finishes", |ui| {
@@ -533,10 +551,10 @@ impl StewardGetApp {
             }
             Tab::Network => section(ui, &p, "Network", |ui| {
                 row(ui, &p, "Connect timeout", "Seconds to wait for a server to accept a connection.", |ui| {
-                    ui.add(egui::Slider::new(&mut draft.connect_timeout_secs, 3..=120).suffix(" s"));
+                    widgets::slider(ui, &mut draft.connect_timeout_secs, 3..=120, " s", None, &p);
                 });
                 row(ui, &p, "Stall timeout", "Reconnect when no data arrives for this long.", |ui| {
-                    ui.add(egui::Slider::new(&mut draft.read_timeout_secs, 5..=300).suffix(" s"));
+                    widgets::slider(ui, &mut draft.read_timeout_secs, 5..=300, " s", None, &p);
                 });
                 row(ui, &p, "User agent", "Some servers only serve browser-like clients.", |ui| {
                     ui.add(widgets::input(&mut draft.user_agent).desired_width(ui.available_width().min(440.0)));
@@ -638,10 +656,13 @@ impl StewardGetApp {
                             .find(|x| x.id == id)
                             .map(|x| x.extensions.iter().map(|e| format!(".{e}")).collect::<Vec<_>>().join(" "))
                             .unwrap_or_default();
-                        ui.horizontal(|ui| {
-                            ui.add_space(36.0);
-                            ui.add(egui::Label::new(RichText::new(exts).size(12.0).color(p.text_dim)).truncate());
-                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        widgets::split_row(
+                            ui,
+                            |ui| {
+                                ui.add_space(36.0);
+                                ui.add(egui::Label::new(RichText::new(exts).size(12.0).color(p.text_dim)).truncate());
+                            },
+                            |ui| {
                                 if widgets::button(ui, ButtonKind::Tool, Some(Icon::Trash), "", true, &p)
                                     .on_hover_text("Delete category")
                                     .clicked()
@@ -654,8 +675,8 @@ impl StewardGetApp {
                                 {
                                     self.category_dialog = Some(crate::categories::CategoryDialog::edit(x));
                                 }
-                            });
-                        });
+                            },
+                        );
                     }
                 }
             }),
@@ -817,11 +838,11 @@ fn tab_button(ui: &mut Ui, icon: Icon, label: &str, selected: bool, p: &Palette,
     if selected {
         ui.painter().rect_filled(
             rect,
-            CornerRadius::same(8),
+            CornerRadius::same(crate::theme::radius::MD),
             p.accent.gamma_multiply(if p.dark { 0.18 } else { 0.12 }),
         );
     } else if response.hovered() {
-        ui.painter().rect_filled(rect, CornerRadius::same(8), p.card_hover);
+        ui.painter().rect_filled(rect, CornerRadius::same(crate::theme::radius::MD), p.card_hover);
     }
     let color = if selected { p.accent } else { p.text_dim };
     icons::paint(
@@ -914,7 +935,7 @@ fn theme_card(ui: &mut Ui, theme_choice: Theme, accent: Accent, selected: bool, 
     };
     let painter = ui.painter();
     // The preview fills the top of the card, so its top corners follow the card's.
-    const RADIUS: u8 = 10;
+    const RADIUS: u8 = crate::theme::radius::LG;
     painter.rect_filled(rect, CornerRadius::same(RADIUS), p.card);
     let shot = egui::Rect::from_min_size(rect.min, vec2(rect.width(), 72.0));
     let paint_shot = |painter: &egui::Painter, area: egui::Rect, q: &Palette| {
@@ -975,7 +996,7 @@ fn accent_swatch(ui: &mut Ui, accent: Accent, selected: bool, p: &Palette) -> eg
     let painter = ui.painter();
     let bg = if selected { p.card_hover } else { p.card };
     let stroke = if selected { Stroke::new(2.0, color) } else { Stroke::new(1.0, p.border) };
-    painter.rect(rect, CornerRadius::same(9), bg, stroke, StrokeKind::Inside);
+    painter.rect(rect, CornerRadius::same(crate::theme::radius::MD), bg, stroke, StrokeKind::Inside);
     painter.circle_filled(rect.left_center() + vec2(18.0, 0.0), 8.0, color);
     painter.text(
         rect.left_center() + vec2(32.0, 0.0),
@@ -994,7 +1015,7 @@ pub(crate) fn day_chip(ui: &mut Ui, label: &str, on: bool, p: &Palette) -> egui:
     } else {
         (p.card, p.text_dim, Stroke::new(1.0, p.control_border))
     };
-    ui.painter().rect(rect, CornerRadius::same(8), fill, stroke, StrokeKind::Inside);
+    ui.painter().rect(rect, CornerRadius::same(crate::theme::radius::MD), fill, stroke, StrokeKind::Inside);
     ui.painter().text(rect.center(), Align2::CENTER_CENTER, label, FontId::proportional(12.5), fg);
     response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }

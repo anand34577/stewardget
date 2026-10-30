@@ -168,7 +168,7 @@ pub fn paint_ring(
 /// The file-type mark used for downloads: a tile shaded in the category colour
 /// with its icon, and (when there is room) the file extension in a tag below.
 pub fn paint_file_tile(painter: &egui::Painter, rect: Rect, icon: Icon, ext: &str, color: Color32, p: &Palette) {
-    let r = (rect.height() * 0.28).round().clamp(5.0, 14.0);
+    let r = (rect.height() * 0.22).round().clamp(radius::XS as f32, radius::LG as f32);
     let (top, bottom) = if p.dark {
         (color.gamma_multiply(0.30), color.gamma_multiply(0.10))
     } else {
@@ -193,7 +193,7 @@ pub fn paint_file_tile(painter: &egui::Painter, rect: Rect, icon: Icon, ext: &st
             pos2(rect.center().x, rect.bottom() - size * 0.95),
             vec2(galley.size().x + 8.0, size + 4.0),
         );
-        painter.rect_filled(tag, CornerRadius::same(4), color);
+        painter.rect_filled(tag, CornerRadius::same(radius::XS), color);
         painter.galley(tag.center() - galley.size() / 2.0, galley, p.on_tile(color));
     }
 }
@@ -240,6 +240,7 @@ pub fn paint_sparkline(painter: &egui::Painter, rect: Rect, values: &[f32], colo
 
 /// What a KPI tile shows below its value.
 pub enum KpiExtra<'a> {
+    None,
     /// Recent samples, drawn as a sparkline.
     Spark(&'a [f32]),
     /// A share in `0..=1`, drawn as a bar.
@@ -260,30 +261,20 @@ pub fn kpi_tile(
     extra: KpiExtra<'_>,
     p: &Palette,
 ) -> Response {
-    let (rect, response) = ui.allocate_exact_size(vec2(width, 104.0), Sense::click());
+    let (rect, response) = ui.allocate_exact_size(vec2(width, 96.0), Sense::click());
     let painter = ui.painter();
-    let corner = CornerRadius::same(radius::LG + 2);
+    let corner = CornerRadius::same(radius::LG);
     if !p.dark {
         painter.add(p.shadow(2, 10).as_shape(rect, corner));
     }
     let fill = if response.hovered() { p.card_hover } else { p.card };
     painter.rect(rect, corner, fill, Stroke::new(1.0, p.border), StrokeKind::Inside);
-    // A wash of the tile's colour from the top-left corner.
-    let wash = Rect::from_min_size(rect.min, vec2(rect.width(), rect.height() * 0.65));
-    paint_gradient_rect(
-        &painter.with_clip_rect(rect.shrink(1.0)),
-        wash.shrink(1.0),
-        (radius::LG + 1) as f32,
-        color.gamma_multiply(if p.dark { 0.10 } else { 0.07 }),
-        Color32::TRANSPARENT,
-        false,
-    );
     let inner = rect.shrink2(vec2(14.0, 12.0));
-    let tile = Rect::from_min_size(inner.min, Vec2::splat(26.0));
+    let tile = Rect::from_min_size(inner.min, Vec2::splat(24.0));
     paint_icon_tile(painter, tile, icon, color, p);
     let label_galley = caps_galley(ui, &label.to_uppercase(), 10.5, p.text_dim);
     painter.galley(pos2(tile.right() + 9.0, tile.center().y - label_galley.size().y / 2.0), label_galley, p.text_dim);
-    let value_pos = pos2(inner.left(), tile.bottom() + 8.0);
+    let value_pos = pos2(inner.left(), tile.bottom() + 6.0);
     let vg = painter.text(
         value_pos,
         Align2::LEFT_TOP,
@@ -301,6 +292,7 @@ pub fn kpi_tile(
             p.text_dim,
         );
     match extra {
+        KpiExtra::None => {}
         KpiExtra::Spark(values) => {
             let spark = Rect::from_min_max(
                 pos2(inner.right() - inner.width() * 0.42, inner.top() + 30.0),
@@ -642,9 +634,9 @@ pub fn hour_bars(ui: &mut Ui, hours: &[u32; 24], p: &Palette, height: f32) {
 /// bytes. `days` is oldest first and should end today.
 pub fn heatmap(ui: &mut Ui, days: &[DayTotal], p: &Palette) {
     const GAP: f32 = 3.0;
-    // Weeks fill the card; cells stay square between 9 and 20 points.
+    // Weeks fill the card; cells stay square between 9 and 22 points.
     let weeks = days.len().div_ceil(7) + 1;
-    let cell_size = ((ui.available_width() - 4.0) / weeks as f32 - GAP).clamp(9.0, 20.0);
+    let cell_size = ((ui.available_width() - 4.0) / weeks as f32 - GAP).clamp(9.0, 22.0);
     let size = vec2(weeks as f32 * (cell_size + GAP), 7.0 * (cell_size + GAP));
     let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width().max(size.x), size.y), Sense::hover());
     let painter = ui.painter_at(rect);
@@ -694,7 +686,7 @@ pub fn icon(ui: &mut Ui, icon: Icon, size: f32, color: Color32) -> Response {
 /// Paints `icon` on a rounded square tinted with its own colour: the file-type
 /// and section marks used in lists, cards and dialog titles.
 pub fn paint_icon_tile(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color32, p: &Palette) {
-    let r = (rect.height() * 0.3).round().clamp(4.0, 12.0) as u8;
+    let r = (rect.height() * 0.25).round().clamp(radius::XS as f32, radius::LG as f32) as u8;
     painter.rect_filled(rect, CornerRadius::same(r), p.tint(color));
     let glyph = (rect.height() * 0.52).round();
     icons::paint(painter, Rect::from_center_size(rect.center(), Vec2::splat(glyph)), icon, color);
@@ -712,7 +704,7 @@ pub fn paint_badge(painter: &egui::Painter, right_center: Pos2, text: &str, fg: 
     let galley = painter.layout_no_wrap(text.to_owned(), FontId::proportional(11.5), fg);
     let size = vec2((galley.size().x + 12.0).max(22.0), 18.0);
     let rect = Rect::from_min_size(pos2(right_center.x - size.x, right_center.y - size.y / 2.0), size);
-    painter.rect_filled(rect, CornerRadius::same(9), fill);
+    painter.rect_filled(rect, CornerRadius::same(255), fill);
     painter.galley(rect.center() - galley.size() / 2.0, galley, fg);
     rect
 }
@@ -1036,7 +1028,7 @@ pub fn card(p: &Palette) -> egui::Frame {
     let frame = egui::Frame::new()
         .fill(p.card)
         .stroke(Stroke::new(1.0, p.border))
-        .corner_radius(CornerRadius::same(radius::XL - 2))
+        .corner_radius(CornerRadius::same(radius::LG))
         .inner_margin(egui::Margin::same(16));
     // Light themes lift cards off the canvas with a soft shadow; dark ones rely on the fill.
     if p.dark {
@@ -1127,37 +1119,6 @@ pub fn section(ui: &mut Ui, text: &str, p: &Palette) -> bool {
     open
 }
 
-/// Metric tile: icon, label, a large value and an optional caption.
-pub fn stat_tile(ui: &mut Ui, p: &Palette, label: &str, value: &str, caption_text: &str, color: Color32) {
-    stat_tile_with_icon(ui, p, None, label, value, caption_text, color);
-}
-
-pub fn stat_tile_with_icon(
-    ui: &mut Ui,
-    p: &Palette,
-    icon: Option<Icon>,
-    label: &str,
-    value: &str,
-    caption_text: &str,
-    color: Color32,
-) {
-    card(p).show(ui, |ui| {
-        ui.set_min_width(ui.available_width());
-        ui.horizontal(|ui| {
-            if let Some(icon) = icon {
-                icon_tile(ui, icon, 26.0, color, p);
-                ui.add_space(2.0);
-            }
-            ui.label(egui::RichText::new(label).size(12.5).color(p.text_dim));
-        });
-        ui.add_space(4.0);
-        ui.label(egui::RichText::new(value).size(crate::theme::size::XXL).family(crate::theme::semi()).color(p.text));
-        // Always one line, so tiles side by side have the same height.
-        let caption_text = if caption_text.is_empty() { "\u{a0}" } else { caption_text };
-        ui.label(egui::RichText::new(caption_text).size(12.0).color(p.text_dim));
-    });
-}
-
 /// Coloured status dot.
 pub fn dot(painter: &egui::Painter, center: Pos2, color: Color32) {
     painter.circle_filled(center, 3.5, color);
@@ -1212,4 +1173,204 @@ pub fn chip(ui: &mut Ui, label: &str, on: bool, p: &Palette) -> Response {
     ui.painter().rect(rect, CornerRadius::same(255), fill, stroke, egui::StrokeKind::Inside);
     ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, label, font, fg);
     response.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+/// A drop-down styled like the text fields: a field-coloured box with a
+/// chevron, and an open list with roomy rows and the accent tint on the
+/// chosen one. Use it in place of `egui::ComboBox::from_id_salt`.
+pub fn dropdown(p: &Palette, id_salt: impl std::hash::Hash + std::fmt::Debug) -> egui::ComboBox<'static> {
+    let p = *p;
+    egui::ComboBox::from_id_salt(id_salt)
+        .icon(move |ui, rect, _visuals, open| {
+            let (icon, color) = if open { (Icon::CaretUp, p.accent) } else { (Icon::CaretDown, p.text_dim) };
+            icons::paint(ui.painter(), Rect::from_center_size(rect.center(), Vec2::splat(13.0)), icon, color);
+        })
+        .popup_style(egui::style::StyleModifier::new(move |style| {
+            style.spacing.button_padding = vec2(10.0, 6.0);
+            style.spacing.item_spacing.y = 2.0;
+            style.spacing.interact_size.y = 30.0;
+            let v = &mut style.visuals;
+            v.selection.bg_fill = p.selected_fill();
+            v.selection.stroke = Stroke::new(1.0, p.text);
+            v.widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
+            v.widgets.inactive.bg_stroke = Stroke::NONE;
+            v.widgets.hovered.weak_bg_fill = p.card_hover;
+            v.widgets.hovered.bg_stroke = Stroke::NONE;
+            v.widgets.active.weak_bg_fill = p.track;
+            v.widgets.active.bg_stroke = Stroke::NONE;
+            for w in [&mut v.widgets.inactive, &mut v.widgets.hovered, &mut v.widgets.active] {
+                w.corner_radius = CornerRadius::same(radius::SM);
+            }
+        }))
+}
+
+/// A slim slider: a thin rail filled with the accent up to a small round
+/// handle, and the value beside it in an editable box. Drag or click the rail,
+/// or focus it and use the arrow keys. `format` replaces the number in the box
+/// with words (for example "Global limit" for 0).
+pub fn slider<T: egui::emath::Numeric>(
+    ui: &mut Ui,
+    value: &mut T,
+    range: std::ops::RangeInclusive<T>,
+    suffix: &str,
+    format: Option<fn(f64) -> String>,
+    p: &Palette,
+) -> Response {
+    ui.horizontal(|ui| {
+        let (lo, hi) = (range.start().to_f64(), range.end().to_f64());
+        let width = ui.spacing().slider_width;
+        let (rect, mut response) = ui.allocate_exact_size(vec2(width, CONTROL_H), Sense::click_and_drag());
+        let r = 7.0;
+        let (x0, x1) = (rect.left() + r, rect.right() - r);
+        let set = |v: f64, value: &mut T, response: &mut Response| {
+            let v = if T::INTEGRAL { v.round() } else { v }.clamp(lo, hi);
+            let new = T::from_f64(v);
+            if new != *value {
+                *value = new;
+                response.mark_changed();
+            }
+        };
+        if let Some(pos) = response.interact_pointer_pos() {
+            let t = ((pos.x - x0) / (x1 - x0)).clamp(0.0, 1.0) as f64;
+            set(lo + (hi - lo) * t, value, &mut response);
+        }
+        if response.has_focus() {
+            let step = if T::INTEGRAL { 1.0 } else { (hi - lo) / 100.0 };
+            let (left, right) =
+                ui.input(|i| (i.key_pressed(egui::Key::ArrowLeft) as i32, i.key_pressed(egui::Key::ArrowRight) as i32));
+            if left + right > 0 {
+                set(value.to_f64() + step * (right - left) as f64, value, &mut response);
+            }
+        }
+        let t = if hi > lo { ((value.to_f64() - lo) / (hi - lo)).clamp(0.0, 1.0) as f32 } else { 0.0 };
+        let cx = x0 + (x1 - x0) * t;
+        let cy = rect.center().y;
+        let painter = ui.painter();
+        let rail = Rect::from_min_max(pos2(x0, cy - 2.0), pos2(x1, cy + 2.0));
+        painter.rect_filled(rail, CornerRadius::same(2), p.track);
+        if cx > x0 {
+            painter.rect_filled(Rect::from_min_max(rail.min, pos2(cx, rail.max.y)), CornerRadius::same(2), p.accent);
+        }
+        let hot = response.hovered() || response.dragged();
+        if hot || response.has_focus() {
+            painter.circle_filled(pos2(cx, cy), r + 5.0, p.accent.gamma_multiply(0.15));
+        }
+        painter.add(
+            p.shadow(1, 4)
+                .as_shape(Rect::from_center_size(pos2(cx, cy), Vec2::splat(2.0 * r)), CornerRadius::same(255)),
+        );
+        painter.circle(pos2(cx, cy), r, if p.dark { p.text } else { Color32::WHITE }, Stroke::new(2.0, p.accent));
+        let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
+
+        let mut drag = egui::DragValue::new(value).range(range).clamp_existing_to_range(false).suffix(suffix);
+        if let Some(f) = format {
+            drag = drag.custom_formatter(move |v, _| f(v));
+        }
+        let dv = ui.add(drag);
+        response.union(dv)
+    })
+    .inner
+}
+
+/// `text` shortened with a trailing ellipsis so it fits `max_w` in `font`.
+pub fn fit_text(painter: &egui::Painter, text: &str, font: &FontId, max_w: f32) -> String {
+    let width = |s: &str| painter.layout_no_wrap(s.to_owned(), font.clone(), Color32::WHITE).size().x;
+    if max_w <= 0.0 {
+        return String::new();
+    }
+    if width(text) <= max_w {
+        return text.to_owned();
+    }
+    let chars: Vec<char> = text.chars().collect();
+    // The longest prefix that fits together with the ellipsis.
+    let (mut lo, mut hi) = (0, chars.len());
+    while lo < hi {
+        let mid = (lo + hi).div_ceil(2);
+        let candidate: String = chars[..mid].iter().collect::<String>().trim_end().to_owned() + "\u{2026}";
+        if width(&candidate) <= max_w { lo = mid } else { hi = mid - 1 }
+    }
+    chars[..lo].iter().collect::<String>().trim_end().to_owned() + "\u{2026}"
+}
+
+/// `text` shortened in the middle ("C:\Users\…\Downloads\file.iso") so both
+/// ends stay readable: the drive and the file name of a path.
+pub fn elide_middle(painter: &egui::Painter, text: &str, font: &FontId, max_w: f32) -> String {
+    let width = |s: &str| painter.layout_no_wrap(s.to_owned(), font.clone(), Color32::WHITE).size().x;
+    if width(text) <= max_w {
+        return text.to_owned();
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let build = |keep: usize| {
+        // Two thirds of what is kept goes to the end, where the file name is.
+        let tail = (keep * 2).div_ceil(3).min(chars.len());
+        let head = keep - tail;
+        chars[..head].iter().collect::<String>() + "\u{2026}" + &chars[chars.len() - tail..].iter().collect::<String>()
+    };
+    let (mut lo, mut hi) = (0, chars.len());
+    while lo < hi {
+        let mid = (lo + hi).div_ceil(2);
+        if width(&build(mid)) <= max_w { lo = mid } else { hi = mid - 1 }
+    }
+    build(lo)
+}
+
+/// A row whose right part (laid out right to left: buttons, sizes) is placed
+/// first, so the left part, usually a truncated label, gets exactly the room
+/// that is left instead of pushing the right part out of view.
+pub fn split_row<R>(ui: &mut Ui, left: impl FnOnce(&mut Ui), right: impl FnOnce(&mut Ui) -> R) -> R {
+    ui.horizontal(|ui| {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let r = right(ui);
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), left);
+            r
+        })
+        .inner
+    })
+    .inner
+}
+
+/// A file in a result list: its name, then its folder dimmed and shortened in
+/// the middle, with `trailing` (sizes, buttons) right-aligned. The full path
+/// shows on hover.
+pub fn file_row(ui: &mut Ui, path: &std::path::Path, p: &Palette, trailing: impl FnOnce(&mut Ui)) {
+    split_row(
+        ui,
+        |ui| {
+            let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 26.0), Sense::hover());
+            let painter = ui.painter();
+            let name_font = FontId::proportional(13.0);
+            let dir_font = FontId::proportional(12.0);
+            let name =
+                path.file_name().map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into_owned());
+            let name = fit_text(painter, &name, &name_font, rect.width() * 0.62);
+            let g = painter.text(rect.left_center(), Align2::LEFT_CENTER, name, name_font, p.text);
+            if let Some(dir) = path.parent().map(|d| d.display().to_string()) {
+                let room = rect.right() - g.right() - 12.0;
+                if room > 40.0 {
+                    let dir = elide_middle(painter, &dir, &dir_font, room);
+                    painter.text(
+                        pos2(g.right() + 12.0, rect.center().y),
+                        Align2::LEFT_CENTER,
+                        dir,
+                        dir_font,
+                        p.text_dim,
+                    );
+                }
+            }
+            response.on_hover_text(path.display().to_string());
+        },
+        trailing,
+    );
+}
+
+/// A path as one line of text, shortened in the middle so the file name stays
+/// visible; the full path shows on hover.
+pub fn path_label(ui: &mut Ui, path: &str, size: f32, color: Color32) -> Response {
+    let font = FontId::proportional(size);
+    let width = ui.available_width().max(40.0);
+    let text = elide_middle(ui.painter(), path, &font, width);
+    let galley = ui.painter().layout_no_wrap(text, font, color);
+    let (rect, response) = ui.allocate_exact_size(vec2(galley.size().x, galley.size().y), Sense::hover());
+    ui.painter().galley(rect.min, galley, color);
+    response.on_hover_text(path)
 }

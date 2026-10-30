@@ -27,7 +27,7 @@ fn modal_frame(p: &Palette) -> Frame {
     Frame::new()
         .fill(p.card)
         .stroke(Stroke::new(1.0, p.border))
-        .corner_radius(CornerRadius::same(theme::radius::XL + 2))
+        .corner_radius(CornerRadius::same(theme::radius::XL))
         .inner_margin(Margin::same(24))
         .shadow(p.shadow(20, 60))
 }
@@ -60,7 +60,7 @@ pub(crate) fn callout(ui: &mut Ui, p: &Palette, color: Color32, icon: Icon, add:
     Frame::new()
         .fill(color.gamma_multiply(if p.dark { 0.12 } else { 0.08 }))
         .stroke(Stroke::new(1.0, color.gamma_multiply(0.35)))
-        .corner_radius(CornerRadius::same(9))
+        .corner_radius(CornerRadius::same(theme::radius::MD))
         .inner_margin(Margin::symmetric(12, 10))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
@@ -412,7 +412,7 @@ impl StewardGetApp {
                         egui::Label::new(RichText::new(format!("“{name}” is already downloaded")).family(theme::semi()).color(p.text))
                             .truncate(),
                     );
-                    ui.add(egui::Label::new(RichText::new(folder).size(12.0).color(p.text_dim)).truncate());
+                    widgets::path_label(ui, &folder, 12.0, p.text_dim);
                     let mut choice = dialog.existing.unwrap_or(default_existing);
                     ui.horizontal(|ui| {
                         if widgets::button(ui, ButtonKind::Tool, Some(Icon::FolderOpen), "Open existing", true, &p)
@@ -479,7 +479,7 @@ impl StewardGetApp {
                 ui.add_enabled(n <= 1, widgets::input(&mut dialog.name).hint_text(hint).desired_width(f32::INFINITY));
             });
             widgets::form_row(ui, LABEL_W, "Queue", &p, |ui| {
-                egui::ComboBox::from_id_salt("add-queue")
+                widgets::dropdown(&p, "add-queue")
                     .width(220.0)
                     .selected_text(config.queue(dialog.queue).name.clone())
                     .show_ui(ui, |ui| {
@@ -492,7 +492,7 @@ impl StewardGetApp {
             if dialog.advanced {
                 ui.add_space(4.0);
                 widgets::form_row(ui, LABEL_W, "Connections", &p, |ui| {
-                    ui.add(egui::Slider::new(&mut dialog.connections, 1..=32));
+                    widgets::slider(ui, &mut dialog.connections, 1..=32, "", None, &p);
                 });
                 widgets::form_row(ui, LABEL_W, "Speed limit", &p, |ui| {
                     ui.add(widgets::input(&mut dialog.limit).hint_text("unlimited, or e.g. 2M").desired_width(170.0));
@@ -634,7 +634,7 @@ Connections are shared across all of them.",
         let p = self.palette;
         Frame::new()
             .fill(p.card_hover)
-            .corner_radius(CornerRadius::same(10))
+            .corner_radius(CornerRadius::same(theme::radius::LG))
             .inner_margin(Margin::symmetric(12, 10))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
@@ -944,7 +944,7 @@ impl StewardGetApp {
                 });
             });
             widgets::form_row(ui, LABEL_W, "Connections", &p, |ui| {
-                ui.add(egui::Slider::new(&mut d.connections, 1..=32));
+                widgets::slider(ui, &mut d.connections, 1..=32, "", None, &p);
             });
             widgets::form_row(ui, LABEL_W, "Speed limit", &p, |ui| {
                 ui.add(widgets::input(&mut d.limit).hint_text("unlimited").desired_width(170.0));
@@ -1333,7 +1333,11 @@ impl StewardGetApp {
 fn step(ui: &mut Ui, p: &Palette, icon: Icon, label: &str, add: impl FnOnce(&mut Ui)) {
     ui.horizontal_top(|ui| {
         let (rect, _) = ui.allocate_exact_size(egui::vec2(30.0, 30.0), egui::Sense::hover());
-        ui.painter().rect_filled(rect, CornerRadius::same(8), p.accent.gamma_multiply(if p.dark { 0.2 } else { 0.12 }));
+        ui.painter().rect_filled(
+            rect,
+            CornerRadius::same(theme::radius::MD),
+            p.accent.gamma_multiply(if p.dark { 0.2 } else { 0.12 }),
+        );
         crate::icons::paint(ui.painter(), rect.shrink(8.0), icon, p.accent);
         ui.add_space(4.0);
         ui.vertical(|ui| {

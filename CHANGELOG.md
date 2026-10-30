@@ -6,6 +6,28 @@ All notable changes to StewardGet are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-10-30
+
+### Added
+- **Phone and email notifications.** Send messages to **Gotify**, **ntfy** (ntfy.sh or your own server) and **email over SMTP**, also while the window is closed or with `stewardget serve`. Add as many destinations as you like, one per person, device or team, under *Settings > General*. Each picks its own events (a download finished, a download failed, a queue finished, everything finished) and, if you want, only some queues; the queue window shows and changes which destinations hear about that queue. Email can go to several addresses at once. Every destination has a *Send test* button that shows the server's answer. Tokens and the mail password stay on this computer and are left out of backups.
+
+### Changed
+- **StewardGet's own title bar.** The header with the menus, search and *Add download* is now the window's title bar, with minimise, maximise and close buttons on the right (macOS keeps its traffic lights). Drag it to move the window and double-click it to maximise; the edges resize the window. The separate system title bar is gone, so pages get that space. Prefer the system one? Turn on *Settings > Appearance > System title bar* (applies after a restart).
+- **The list is the default view again**, with your saved choices kept. 0.10.0 reused the *Compact rows* setting for the new card view, so upgrading switched most people to cards. Cards now have a setting of their own, off by default: the *List | Cards* switch above the downloads, or *Settings > Appearance > Card view*. *Compact rows* means what it did before: one line per download, or the name with the file type and site under it.
+- In card view, the cards and summary tiles are more compact, so more downloads fit on screen. A button next to *Sort by* hides or shows the summary tiles, and the choice is remembered.
+- History shows its totals in one line under the title instead of four large tiles.
+- Corners are rounded consistently: buttons, fields and drop-downs one way, cards and tiles a little more, dialogs and the page canvas the most. Some cards and dialogs were noticeably rounder than everything around them.
+- Sliders have a slim rail and a small round handle in the accent colour instead of a large outlined circle, everywhere: settings (including the network timeouts), the Add and Properties windows, queues and Grab.
+- Long file names and paths are shortened with an ellipsis instead of being cut off mid-letter or running into the sizes and buttons next to them. Paths are shortened in the middle, so the file name stays visible, and the full text shows on hover. This covers the list, cards, sidebar, details, Tools, Statistics, the Overview and the browser download window.
+- Drop-down lists match the text fields: the same fill and outline, a thin chevron instead of the filled triangle, and roomier choices with the current one highlighted in the accent colour.
+- In a narrow window the header folds File, Tasks, Tools and Help into one *Menu* and gives the search box the room that is left, and the status bar keeps only the essentials, so nothing overlaps.
+- Statistics, History and Tools use the same page layout, spacing and titles as the rest of the app. Tools no longer shows three filled buttons at once.
+
+### Fixed
+- The last entry of the sidebar looked faded even when the whole list fit. The fade now only appears when there is more to scroll to.
+- In a short window the details pane took most of the height; it now starts at about 40% of it, and its header no longer runs under its buttons.
+- On Statistics, figures such as the peak speed could break onto several lines one character at a time, and the tiles ended up with different heights. The page now shows four tiles of equal height, in one row when there is room.
+
 ## [0.10.0] - 2026-10-30
 
 ### Changed

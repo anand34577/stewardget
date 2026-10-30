@@ -43,29 +43,16 @@ impl StewardGetApp {
             return;
         }
 
-        // Header line: icon, name, status, quick actions.
+        // Header line: icon, then the actions on the right, and the name, status
+        // and details in the room that leaves (truncated, never under the buttons).
+        let status = status_label(&d, &p);
+        let mut sub = format!("{}  \u{00b7}  {}", self.cfg.category_label(d.category), crate::capture::host_of(&d.url));
+        if let Some(total) = d.total {
+            sub = format!("{sub}  \u{00b7}  {}", format_bytes(total));
+        }
         ui.horizontal(|ui| {
             widgets::icon_tile(ui, Icon::for_category(d.category), 38.0, p.category(d.category), &p);
             ui.add_space(4.0);
-            ui.vertical(|ui| {
-                ui.spacing_mut().item_spacing.y = 2.0;
-                ui.horizontal(|ui| {
-                    ui.add(
-                        egui::Label::new(
-                            RichText::new(&d.file_name).size(theme::size::LG + 1.0).family(theme::semi()).color(p.text),
-                        )
-                        .truncate(),
-                    );
-                    let (label, color) = status_label(&d, &p);
-                    widgets::pill(ui, &label, color);
-                });
-                let mut sub =
-                    format!("{}  \u{00b7}  {}", self.cfg.category_label(d.category), crate::capture::host_of(&d.url));
-                if let Some(total) = d.total {
-                    sub = format!("{sub}  \u{00b7}  {}", format_bytes(total));
-                }
-                ui.label(RichText::new(sub).size(theme::size::SM).color(p.text_dim));
-            });
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
                 if widgets::icon_button(ui, Icon::Close, "Close details", &p).clicked() {
@@ -97,6 +84,28 @@ impl StewardGetApp {
                         self.report(r);
                     }
                 }
+                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                    ui.vertical(|ui| {
+                        ui.spacing_mut().item_spacing.y = 3.0;
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(&d.file_name)
+                                    .size(theme::size::LG + 1.0)
+                                    .family(theme::semi())
+                                    .color(p.text),
+                            )
+                            .truncate(),
+                        )
+                        .on_hover_text(&d.file_name);
+                        ui.horizontal(|ui| {
+                            widgets::pill(ui, &status.0, status.1);
+                            ui.add(
+                                egui::Label::new(RichText::new(&sub).size(theme::size::SM).color(p.text_dim))
+                                    .truncate(),
+                            );
+                        });
+                    });
+                });
             });
         });
         self.problem_bar(ui, &d);
@@ -262,13 +271,9 @@ impl StewardGetApp {
                     egui::FontId::proportional(11.5),
                     p.text_dim,
                 );
-                painter.with_clip_rect(hero.shrink(4.0)).text(
-                    egui::pos2(x, y + 9.0),
-                    egui::Align2::LEFT_CENTER,
-                    v,
-                    egui::FontId::new(if i == 0 { theme::size::LG } else { theme::size::MD }, theme::semi()),
-                    p.text,
-                );
+                let font = egui::FontId::new(if i == 0 { theme::size::LG } else { theme::size::MD }, theme::semi());
+                let v = widgets::fit_text(painter, v, &font, hero.right() - 12.0 - x);
+                painter.text(egui::pos2(x, y + 9.0), egui::Align2::LEFT_CENTER, v, font, p.text);
             }
             ui.add_space(12.0);
 
@@ -435,7 +440,7 @@ impl StewardGetApp {
                 ui.end_row();
             }
             key(ui, "Saved to");
-            value(ui, d.path.display().to_string());
+            widgets::path_label(ui, &d.path.display().to_string(), 12.5, p.text);
             ui.end_row();
             key(ui, "Queue");
             value(ui, self.engine.config().queue(d.queue).name.clone());

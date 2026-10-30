@@ -45,7 +45,7 @@ impl StewardGetApp {
         egui::Frame::new()
             .fill(color.gamma_multiply(if p.dark { 0.10 } else { 0.08 }))
             .stroke(Stroke::new(1.0, color.gamma_multiply(0.35)))
-            .corner_radius(CornerRadius::same(10))
+            .corner_radius(CornerRadius::same(crate::theme::radius::LG))
             .inner_margin(egui::Margin::symmetric(12, 8))
             .show(ui, |ui| {
                 ui.set_min_width(ui.available_width());

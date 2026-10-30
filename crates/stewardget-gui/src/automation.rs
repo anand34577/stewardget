@@ -167,13 +167,13 @@ impl StewardGetApp {
                 ui.push_id(("post-rule", i), |ui| {
                     egui::Frame::new()
                         .fill(p.card_hover.gamma_multiply(0.5))
-                        .corner_radius(egui::CornerRadius::same(8))
+                        .corner_radius(egui::CornerRadius::same(crate::theme::radius::MD))
                         .inner_margin(egui::Margin::symmetric(10, 7))
                         .show(ui, |ui| {
                             ui.set_min_width(ui.available_width());
                             ui.horizontal(|ui| {
                                 toggle(ui, &mut rule.enabled, &p);
-                                action_picker(ui, i, &mut rule.action);
+                                action_picker(ui, i, &mut rule.action, &p);
                                 ui.add(
                                     widgets::input(&mut rule.name).hint_text(rule.action.label()).desired_width(150.0),
                                 );
@@ -301,11 +301,11 @@ fn kind(a: &PostAction) -> usize {
     }
 }
 
-fn action_picker(ui: &mut Ui, i: usize, action: &mut PostAction) {
+fn action_picker(ui: &mut Ui, i: usize, action: &mut PostAction, p: &crate::theme::Palette) {
     let current = kind(action);
     let names = ["Scan for malware", "Unpack", "Move to folder", "Run program", "Tag", "Rename"];
     let mut chosen = current;
-    egui::ComboBox::from_id_salt(("post-kind", i)).width(140.0).selected_text(names[current]).show_ui(ui, |ui| {
+    widgets::dropdown(p, ("post-kind", i)).width(140.0).selected_text(names[current]).show_ui(ui, |ui| {
         for (k, name) in names.iter().enumerate() {
             ui.selectable_value(&mut chosen, k, *name);
         }

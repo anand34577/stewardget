@@ -121,11 +121,18 @@ impl StewardGetApp {
             });
             widgets::form_row(ui, LABEL_W, "Follow links", &p, |ui| {
                 ui.add_enabled_ui(!running, |ui| {
-                    ui.add(egui::Slider::new(&mut d.depth, 0..=3).custom_formatter(|v, _| match v as u8 {
-                        0 => "This page only".to_owned(),
-                        1 => "1 level deeper".to_owned(),
-                        n => format!("{n} levels deeper"),
-                    }));
+                    widgets::slider(
+                        ui,
+                        &mut d.depth,
+                        0..=3,
+                        "",
+                        Some(|v| match v as u8 {
+                            0 => "This page only".to_owned(),
+                            1 => "1 level deeper".to_owned(),
+                            n => format!("{n} levels deeper"),
+                        }),
+                        &p,
+                    );
                 });
             });
             widgets::form_row(ui, LABEL_W, "File types", &p, |ui| {

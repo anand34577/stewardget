@@ -184,6 +184,8 @@ pub struct StewardGetApp {
     pub grab_dialog: Option<crate::grab::GrabDialog>,
     pub media_dialog: Option<crate::media::MediaDialog>,
     pub tools: crate::toolbox::ToolsState,
+    /// Results of "Send test" in the notification settings.
+    pub notify_tests: crate::push::TestResults,
     /// Queue whose deletion is being confirmed.
     pub delete_queue: Option<QueueId>,
     /// "Keep running?" prompt after the close button; holds "remember my choice".
@@ -201,6 +203,8 @@ pub struct StewardGetApp {
     /// The window is cloaked (Windows) until it has been put away, so a login
     /// start never shows even the first frame eframe insists on presenting.
     cloaked: Option<windows_hwnd::Hwnd>,
+    /// The header is the title bar (the system one is hidden); fixed at start-up.
+    custom_frame: bool,
     had_work: bool,
     /// The window has been checked against the screen's work area.
     fitted: bool,
@@ -220,6 +224,10 @@ pub struct StewardGetApp {
 impl StewardGetApp {
     pub fn new(cc: &eframe::CreationContext<'_>, runtime: Runtime, engine: Engine, launch: crate::Launch) -> Self {
         theme::install_fonts(&cc.egui_ctx);
+        let custom_frame = !engine.config().system_title_bar;
+        if custom_frame {
+            windows_hwnd::round_corners(cc);
+        }
         let show_requested = Arc::new(AtomicBool::new(false));
         {
             let (flag, ctx) = (show_requested.clone(), cc.egui_ctx.clone());
@@ -333,6 +341,7 @@ impl StewardGetApp {
             grab_dialog: None,
             media_dialog: None,
             tools: Default::default(),
+            notify_tests: Default::default(),
             delete_queue: None,
             close_prompt: None,
             quitting: false,
@@ -341,6 +350,7 @@ impl StewardGetApp {
             show_requested,
             start_minimized: launch.background,
             cloaked: launch.background.then(|| windows_hwnd::cloak(cc)).flatten(),
+            custom_frame,
             had_work: false,
             fitted: false,
             applied_look: None,
@@ -945,6 +955,11 @@ impl StewardGetApp {
     /// do with the selected downloads lives in the downloads page itself.
     fn toolbar(&mut self, ui: &mut Ui, compact: bool, collapsed: bool) {
         let p = self.palette;
+        if self.custom_frame {
+            crate::frame::drag_area(ui, ui.max_rect(), "header");
+        }
+        // Too narrow for four menu titles, the search box and the buttons: fold the menus.
+        let fold_menus = ui.available_width() < 960.0;
         ui.horizontal_centered(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
             let tip = if collapsed { "Expand sidebar" } else { "Collapse sidebar" };
@@ -952,20 +967,26 @@ impl StewardGetApp {
                 self.sidebar_pref = Some(!collapsed);
             }
             ui.add_space(2.0);
-            ui.scope(|ui| {
-                // Menu titles read as quiet text until hovered.
-                let w = &mut ui.visuals_mut().widgets;
-                w.inactive.fg_stroke.color = p.text_dim;
-                w.inactive.weak_bg_fill = Color32::TRANSPARENT;
-                w.hovered.weak_bg_fill = p.card_hover;
-                w.hovered.bg_stroke = Stroke::NONE;
-                w.open.weak_bg_fill = p.card_hover;
-                w.open.bg_stroke = Stroke::NONE;
-                ui.spacing_mut().button_padding = vec2(10.0, 6.0);
-                self.menu_bar(ui);
-            });
+            let menus_end = ui
+                .scope(|ui| {
+                    // Menu titles read as quiet text until hovered.
+                    let w = &mut ui.visuals_mut().widgets;
+                    w.inactive.fg_stroke.color = p.text_dim;
+                    w.inactive.weak_bg_fill = Color32::TRANSPARENT;
+                    w.hovered.weak_bg_fill = p.card_hover;
+                    w.hovered.bg_stroke = Stroke::NONE;
+                    w.open.weak_bg_fill = p.card_hover;
+                    w.open.bg_stroke = Stroke::NONE;
+                    ui.spacing_mut().button_padding = vec2(10.0, 6.0);
+                    if fold_menus { self.menu_bar_compact(ui) } else { self.menu_bar(ui) }
+                })
+                .inner;
 
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if self.custom_frame && crate::frame::OWN_BUTTONS {
+                    crate::frame::window_buttons(ui, &p);
+                    ui.add_space(10.0);
+                }
                 ui.spacing_mut().item_spacing.x = 6.0;
                 if widgets::icon_button(
                     ui,
@@ -1001,7 +1022,9 @@ impl StewardGetApp {
                     self.grab_dialog = Some(crate::grab::GrabDialog::new(None));
                 }
                 ui.add_space(6.0);
-                let width = if compact { 200.0 } else { 320.0 };
+                // Whatever is left between the menus and the buttons, up to a comfortable width.
+                let room = ui.available_rect_before_wrap().right() - menus_end - 16.0;
+                let width = room.clamp(120.0, if compact { 240.0 } else { 320.0 });
                 self.search_box(ui, width);
             });
         });
@@ -1130,7 +1153,7 @@ impl StewardGetApp {
             );
             ui.painter().rect(
                 key,
-                CornerRadius::same(5),
+                CornerRadius::same(theme::radius::XS),
                 p.card_hover,
                 Stroke::new(1.0, p.border),
                 egui::StrokeKind::Inside,
@@ -1200,12 +1223,20 @@ impl StewardGetApp {
         let p = self.palette;
         // Same height as the header, so the brand lines up with it.
         let (brand, _) = ui.allocate_exact_size(vec2(ui.available_width(), 54.0), Sense::hover());
+        if self.custom_frame {
+            crate::frame::drag_area(ui, brand.expand2(vec2(10.0, 0.0)), "brand");
+        }
+        // The macOS traffic lights sit at the top left, over this row.
+        let lights = if self.custom_frame { crate::frame::TRAFFIC_LIGHTS_W } else { 0.0 };
         ui.scope_builder(egui::UiBuilder::new().max_rect(brand), |ui| {
             ui.horizontal_centered(|ui| {
+                if collapsed && lights > 0.0 {
+                    return;
+                }
                 if collapsed {
                     ui.add_space((ui.available_width() - 28.0) / 2.0 - 4.0);
                 } else {
-                    ui.add_space(6.0);
+                    ui.add_space(6.0 + lights);
                 }
                 widgets::logo(ui, 30.0);
                 if !collapsed {
@@ -1228,7 +1259,7 @@ impl StewardGetApp {
         let live_h = if collapsed { 0.0 } else { 72.0 + 8.0 + ui.spacing().item_spacing.y * 2.0 };
         let list_h = (ui.available_height() - 3.0 * entry_h - 8.0 - live_h).max(60.0);
         ui.allocate_ui(vec2(ui.available_width(), list_h), |ui| {
-            egui::ScrollArea::vertical().id_salt("nav-scroll").auto_shrink([false, false]).show(ui, |ui| {
+            let out = egui::ScrollArea::vertical().id_salt("nav-scroll").auto_shrink([false, false]).show(ui, |ui| {
                 // Keep clear of the scroll bar, which floats over the right edge.
                 ui.set_max_width(ui.available_width() - 8.0);
                 fn count(all: &[DownloadView], f: ListFilter) -> usize {
@@ -1290,10 +1321,15 @@ impl StewardGetApp {
                     }
                 }
             });
-            // Fade out whatever scrolls past the bottom edge instead of cutting it off.
-            let list = ui.max_rect();
-            let fade = egui::Rect::from_min_max(egui::pos2(list.left(), list.bottom() - 28.0), list.right_bottom());
-            widgets::paint_vertical_gradient(ui.painter(), fade, Color32::TRANSPARENT, p.sidebar);
+            // Fade out what continues below the bottom edge, instead of cutting it off.
+            // Only then: with everything in view, the last entry must look like the others.
+            let below = out.content_size.y - out.state.clamped_offset().y - out.inner_rect.height();
+            if below > 1.0 {
+                let list = out.inner_rect;
+                let h = below.min(28.0);
+                let fade = egui::Rect::from_min_max(egui::pos2(list.left(), list.bottom() - h), list.right_bottom());
+                widgets::paint_vertical_gradient(ui.painter(), fade, Color32::TRANSPARENT, p.sidebar);
+            }
         });
         ui.with_layout(Layout::bottom_up(Align::Min), |ui| {
             if nav_item(ui, Icon::Gear, None, "Settings", 0, self.page == Page::Settings, collapsed, &p).clicked() {
@@ -1423,7 +1459,7 @@ impl StewardGetApp {
             if dragging && response.contains_pointer() {
                 ui.painter().rect_stroke(
                     response.rect,
-                    CornerRadius::same(8),
+                    CornerRadius::same(theme::radius::MD),
                     Stroke::new(1.5, p.accent),
                     egui::StrokeKind::Inside,
                 );
@@ -1458,18 +1494,19 @@ impl StewardGetApp {
         );
         let api = s.api.clone();
         let config = self.engine.config();
-        let wide = ui.available_width() > 900.0;
+        let width = ui.available_width();
+        let wide = width > 900.0;
+        // Below this the right-hand items need the room: only what is running is counted.
+        let roomy = width > 760.0;
         ui.horizontal_centered(|ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
             widgets::icon(ui, Icon::Download, 14.0, p.accent2);
             ui.label(RichText::new(format_speed(speed)).size(12.0).family(theme::semi()).color(p.text));
             sep(ui, &p);
             let paused = if paused > 0 { format!(" · {paused} paused") } else { String::new() };
-            ui.label(
-                RichText::new(format!("{active} active · {queued} queued{paused} · {done} done"))
-                    .size(12.0)
-                    .color(p.text_dim),
-            );
+            let counts =
+                if roomy { format!("{active} active · {queued} queued{paused} · {done} done") } else { format!("{active} active") };
+            ui.label(RichText::new(counts).size(12.0).color(p.text_dim));
             if failed > 0 {
                 ui.label(RichText::new(format!("· {failed} failed")).size(12.0).color(p.red));
             }
@@ -1494,7 +1531,7 @@ impl StewardGetApp {
                     }
                     None => Some("Limit"),
                 };
-                if let Some(text) = limit_label {
+                if let Some(text) = limit_label.filter(|_| roomy) {
                     ui.label(RichText::new(text).size(12.0).color(p.text_dim));
                 }
                 sep(ui, &p);
@@ -1548,13 +1585,14 @@ impl StewardGetApp {
 
     fn limit_picker(&mut self, ui: &mut Ui) {
         const PRESETS: [u64; 9] = [0, 128 << 10, 256 << 10, 512 << 10, 1 << 20, 2 << 20, 5 << 20, 10 << 20, 50 << 20];
+        let p = self.palette;
         let current = self.snap.speed_limit;
         let label = |v: u64| if v == 0 { "Unlimited".to_owned() } else { format_speed(v as f64) };
         let mut chosen = current;
         ui.scope(|ui| {
             ui.spacing_mut().interact_size.y = 20.0;
             ui.spacing_mut().button_padding = vec2(8.0, 1.0);
-            egui::ComboBox::from_id_salt("speed-limit")
+            widgets::dropdown(&p, "speed-limit")
                 .width(104.0)
                 .selected_text(RichText::new(label(current)).size(12.0))
                 .show_ui(ui, |ui| {
@@ -1584,7 +1622,7 @@ impl StewardGetApp {
                 Frame::new()
                     .fill(p.card)
                     .stroke(Stroke::new(1.0, p.border))
-                    .corner_radius(CornerRadius::same(10))
+                    .corner_radius(CornerRadius::same(theme::radius::LG))
                     .inner_margin(Margin::symmetric(14, 8))
                     .shadow(p.shadow(4, 18))
                     .show(ui, |ui| {
@@ -1622,7 +1660,7 @@ impl StewardGetApp {
                     Frame::new()
                         .fill(p.card.gamma_multiply(fade))
                         .stroke(Stroke::new(1.0, p.border.gamma_multiply(fade)))
-                        .corner_radius(CornerRadius::same(10))
+                        .corner_radius(CornerRadius::same(theme::radius::LG))
                         .inner_margin(Margin::symmetric(14, 10))
                         .shadow(p.shadow(4, 18))
                         .show(ui, |ui| {
@@ -1732,7 +1770,7 @@ fn menu_row(ui: &mut Ui, p: &Palette, icon: Option<Icon>, text: &str, enabled: b
     let (rect, response) = ui.allocate_exact_size(vec2(width, 32.0), sense);
     let painter = ui.painter();
     if enabled && response.hovered() {
-        painter.rect_filled(rect, CornerRadius::same(theme::radius::SM + 1), p.card_hover);
+        painter.rect_filled(rect, CornerRadius::same(theme::radius::SM), p.card_hover);
     }
     let fg = if enabled { p.text } else { p.text_dim.gamma_multiply(0.6) };
     let icon = if checked { Some(Icon::Check) } else { icon };
@@ -1814,13 +1852,9 @@ fn nav_item(
         let family = if selected { theme::semi() } else { egui::FontFamily::Proportional };
         let text_rect =
             egui::Rect::from_min_max(rect.left_top() + vec2(38.0, 0.0), rect.right_bottom() - vec2(40.0, 0.0));
-        painter.with_clip_rect(text_rect).text(
-            text_rect.left_center(),
-            Align2::LEFT_CENTER,
-            label,
-            FontId::new(theme::size::MD - 0.5, family),
-            fg,
-        );
+        let font = FontId::new(theme::size::MD - 0.5, family);
+        let text = widgets::fit_text(painter, label, &font, text_rect.width());
+        painter.text(text_rect.left_center(), Align2::LEFT_CENTER, text, font, fg);
         if count > 0 {
             let (bg, color) = if selected { (p.accent.gamma_multiply(0.22), p.text) } else { (p.track, p.text_dim) };
             widgets::paint_badge(painter, rect.right_center() - vec2(8.0, 0.0), &count.to_string(), color, bg);
@@ -1863,6 +1897,28 @@ mod windows_hwnd {
     pub fn uncloak(hwnd: Hwnd) {
         match hwnd {}
     }
+
+    /// Asks Windows 11 to round the corners of the frameless window, as it
+    /// does for windows with a system frame. Older Windows ignores it.
+    #[cfg(windows)]
+    pub fn round_corners(cc: &eframe::CreationContext<'_>) {
+        use raw_window_handle::{HasWindowHandle as _, RawWindowHandle};
+        use windows_sys::Win32::Graphics::Dwm::{DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND, DwmSetWindowAttribute};
+        let Some(RawWindowHandle::Win32(handle)) = cc.window_handle().ok().map(|h| h.as_raw()) else { return };
+        let value = DWMWCP_ROUND;
+        // SAFETY: the handle is the window's own and `value` is a DWM_WINDOW_CORNER_PREFERENCE, as the attribute expects.
+        unsafe {
+            DwmSetWindowAttribute(
+                handle.hwnd.get() as _,
+                DWMWA_WINDOW_CORNER_PREFERENCE as u32,
+                (&raw const value).cast(),
+                size_of_val(&value) as u32,
+            );
+        }
+    }
+
+    #[cfg(not(windows))]
+    pub fn round_corners(_cc: &eframe::CreationContext<'_>) {}
 
     #[cfg(windows)]
     fn set(hwnd: Hwnd, cloaked: bool) -> bool {
@@ -1970,14 +2026,26 @@ impl StewardGetApp {
                 if n == 1 { "Move 1 download to a queue".to_owned() } else { format!("Move {n} downloads to a queue") };
             let galley = painter.layout_no_wrap(text, FontId::proportional(12.5), p.text);
             let rect = egui::Rect::from_min_size(pos + vec2(14.0, 10.0), galley.size() + vec2(20.0, 10.0));
-            painter.rect(rect, CornerRadius::same(8), p.card, Stroke::new(1.0, p.accent), egui::StrokeKind::Inside);
+            painter.rect(
+                rect,
+                CornerRadius::same(theme::radius::MD),
+                p.card,
+                Stroke::new(1.0, p.accent),
+                egui::StrokeKind::Inside,
+            );
             painter.galley(rect.min + vec2(10.0, 5.0), galley, p.text);
         }
         if ctx.input(|i| !i.raw.hovered_files.is_empty()) {
             let screen = ctx.content_rect();
             painter.rect_filled(screen, CornerRadius::ZERO, p.backdrop());
             let card = egui::Rect::from_center_size(screen.center(), vec2(360.0, 90.0));
-            painter.rect(card, CornerRadius::same(14), p.card, Stroke::new(1.5, p.accent), egui::StrokeKind::Inside);
+            painter.rect(
+                card,
+                CornerRadius::same(theme::radius::XL),
+                p.card,
+                Stroke::new(1.5, p.accent),
+                egui::StrokeKind::Inside,
+            );
             painter.text(
                 card.center() - vec2(0.0, 10.0),
                 Align2::CENTER_CENTER,
@@ -2154,8 +2222,9 @@ impl eframe::App for StewardGetApp {
                         } else if details {
                             egui::Panel::bottom("stewardget-details")
                                 .resizable(true)
-                                .default_size(272.0)
-                                .size_range(170.0..=540.0)
+                                // At most about 40% of a short window, so the list keeps some rows.
+                                .default_size((canvas.height() * 0.4).clamp(170.0, 272.0))
+                                .size_range(150.0..=540.0)
                                 .frame(
                                     Frame::new()
                                         .fill(p.card)
@@ -2201,6 +2270,10 @@ impl eframe::App for StewardGetApp {
         self.progress_windows(&ctx);
         self.drag_overlay(&ctx);
         self.draw_toasts(&ctx);
+        if self.custom_frame {
+            crate::frame::resize_edges(&ctx);
+            crate::frame::outline(&ctx, &p);
+        }
     }
 
     /// Runs every pass, also while the window is minimised (when `ui` is skipped),
