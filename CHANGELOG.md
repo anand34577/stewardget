@@ -6,6 +6,8 @@ All notable changes to StewardGet are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-10-30
+
 ### Added
 - **Phone and email notifications.** Send messages to **Gotify**, **ntfy** (ntfy.sh or your own server) and **email over SMTP**, also while the window is closed or with `stewardget serve`. Add as many destinations as you like, one per person, device or team, under *Settings > General*. Each picks its own events (a download finished, a download failed, a queue finished, everything finished) and, if you want, only some queues; the queue window shows and changes which destinations hear about that queue. Email can go to several addresses at once. Every destination has a *Send test* button that shows the server's answer. Tokens and the mail password stay on this computer and are left out of backups.
 
