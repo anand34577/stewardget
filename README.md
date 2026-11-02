@@ -259,7 +259,7 @@ stewardget extension --open                                        # set up the 
 
 StewardGet has **no telemetry, analytics, crash reporting or update checks**. The only network traffic is
 the downloads you start. The browser API listens on `127.0.0.1` only, rejects requests from web pages
-and can require a token. Settings, the download list and statistics are plain JSON files in your
+and can require a token. Settings are a plain JSON file, and the download list, history and statistics a SQLite database (`state.db`), in your
 data directory (`stewardget config` shows where). For a portable install, put an empty file named `portable`
 next to the executables (the Windows portable zip has one) or set `STEWARDGET_DATA_DIR`.
 

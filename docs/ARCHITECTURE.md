@@ -28,7 +28,9 @@ everything a dashboard needs, and can subscribe to `Event`s.
 - **Sampler**: every 500 ms it reads each running task's byte counter, computes an
   EWMA-smoothed speed, appends to the speed history and updates statistics.
   Every 2 s it persists dirty state.
-- **Store**: `settings.json`, `downloads.json` and `stats.json`, written atomically
+- **Store**: `settings.json` (written atomically) and `state.db`, a SQLite database holding the download
+  list, history and statistics as one JSON row per item, so a save writes only what changed. Lists from
+  earlier versions (`downloads.json`, `history.json`, `stats.json`) are moved into it once. Settings:
   (write temp file, then rename). A lock file ensures one engine per data directory.
   Each file keeps a rolling `.bak` copy (refreshed at most once a minute); a file
   that fails to parse is renamed to `*.corrupt-<time>` and the backup is loaded.

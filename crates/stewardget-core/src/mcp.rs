@@ -102,7 +102,7 @@ fn tools() -> Vec<Value> {
         tool(
             "remove_download",
             "Remove a download from the list.",
-            json!({ "id": { "type": "integer" }, "delete_file": { "type": "boolean", "description": "Also delete the file from disk" } }),
+            json!({ "id": { "type": "integer" }, "delete_file": { "type": "boolean", "description": "Also delete the file from disk (only if the user allowed it in the settings)" } }),
             &["id"],
             false,
         ),
@@ -223,6 +223,9 @@ fn run(engine: &Engine, name: &str, args: &Value) -> Result<Value, String> {
         "restart_download" => done(engine.restart(id_of(args)?), "restarted"),
         "remove_download" => {
             let delete = args.get("delete_file").and_then(Value::as_bool).unwrap_or(false);
+            if delete && !engine.config().mcp_allow_delete {
+                return Err("deleting files is not allowed: switch on \"Let assistants delete files\" in StewardGet's settings".into());
+            }
             done(engine.remove(id_of(args)?, delete), "removed")
         }
         "pause_all" => {

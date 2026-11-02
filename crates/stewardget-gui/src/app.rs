@@ -1264,7 +1264,7 @@ impl StewardGetApp {
         let live_h = if collapsed { 0.0 } else { 72.0 + 8.0 + ui.spacing().item_spacing.y * 2.0 };
         let list_h = (ui.available_height() - 3.0 * entry_h - 8.0 - live_h).max(60.0);
         ui.allocate_ui(vec2(ui.available_width(), list_h), |ui| {
-            let out = egui::ScrollArea::vertical().id_salt("nav-scroll").auto_shrink([false, false]).show(ui, |ui| {
+            egui::ScrollArea::vertical().id_salt("nav-scroll").auto_shrink([false, false]).show(ui, |ui| {
                 // Keep clear of the scroll bar, which floats over the right edge.
                 ui.set_max_width(ui.available_width() - 8.0);
                 fn count(all: &[DownloadView], f: ListFilter) -> usize {
@@ -1326,15 +1326,6 @@ impl StewardGetApp {
                     }
                 }
             });
-            // Fade out what continues below the bottom edge, instead of cutting it off.
-            // Only then: with everything in view, the last entry must look like the others.
-            let below = out.content_size.y - out.state.clamped_offset().y - out.inner_rect.height();
-            if below > 1.0 {
-                let list = out.inner_rect;
-                let h = below.min(28.0);
-                let fade = egui::Rect::from_min_max(egui::pos2(list.left(), list.bottom() - h), list.right_bottom());
-                widgets::paint_vertical_gradient(ui.painter(), fade, Color32::TRANSPARENT, p.sidebar);
-            }
         });
         ui.with_layout(Layout::bottom_up(Align::Min), |ui| {
             if nav_item(ui, Icon::Gear, None, "Settings", 0, self.page == Page::Settings, collapsed, &p).clicked() {

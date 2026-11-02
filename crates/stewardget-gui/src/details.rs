@@ -215,9 +215,6 @@ impl StewardGetApp {
             let center = hero.left_center() + vec2(64.0, 0.0);
             let (from, to) = widgets::status_gradient(d.status, &p);
             let live = d.status == Status::Downloading;
-            if live {
-                widgets::paint_glow(painter, center, 80.0, to.gamma_multiply(if p.dark { 0.22 } else { 0.14 }));
-            }
             let frac = d.fraction().unwrap_or(0.0);
             widgets::paint_ring(painter, center, 42.0, 8.0, frac, from, to, p.track);
             let pct = match d.fraction() {

@@ -40,6 +40,7 @@ mod checksum;
 mod config;
 mod control;
 mod crawl;
+mod db;
 mod engine;
 mod error;
 pub mod extension;

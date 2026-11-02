@@ -293,6 +293,9 @@ pub struct Config {
     /// Serve the Model Context Protocol on the local API (`/mcp`), so AI
     /// assistants can manage downloads. Needs `mcp_token`.
     pub mcp_enabled: bool,
+    /// Let MCP clients delete downloaded files from disk (`remove_download` with
+    /// `delete_file`). Off unless the user allows it.
+    pub mcp_allow_delete: bool,
     /// Bearer token MCP clients must send; created when MCP is switched on.
     pub mcp_token: Option<String>,
     /// Secret the command line and the installer use for the parts of the local
@@ -407,6 +410,7 @@ impl Default for Config {
             on_complete_command: None,
             notifications: true,
             mcp_enabled: false,
+            mcp_allow_delete: false,
             mcp_token: None,
             control_token: None,
             completion_sound: true,

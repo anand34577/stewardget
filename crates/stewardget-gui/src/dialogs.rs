@@ -711,7 +711,7 @@ impl StewardGetApp {
         let p = self.palette;
         let mut done = false;
         let modal = modal("stewardget-remove", &p).show(ctx, |ui| {
-            ui.set_width(440.0);
+            ui.set_width(fit_width(ctx, 440.0));
             let n = c.items.len();
             title(
                 ui,
@@ -793,7 +793,7 @@ impl StewardGetApp {
         let p = self.palette;
         let mut done = false;
         let modal = modal("stewardget-restart", &p).show(ctx, |ui| {
-            ui.set_width(440.0);
+            ui.set_width(fit_width(ctx, 440.0));
             let n = c.items.len();
             title(ui, &p, Icon::Retry, &if n == 1 { "Start over?".to_owned() } else { format!("Start {n} downloads over?") });
             for (_, name) in c.items.iter().take(5) {
@@ -1197,7 +1197,7 @@ impl StewardGetApp {
             AfterAll::Nothing => "",
         };
         modal("stewardget-power", &p).show(ctx, |ui| {
-            ui.set_width(420.0);
+            ui.set_width(fit_width(ctx, 420.0));
             title(ui, &p, Icon::Power, "All downloads are finished");
             ui.label(RichText::new(format!("{verb} in {left} seconds.")).size(14.0).color(p.text));
             ui.add_space(5.0);
@@ -1252,7 +1252,7 @@ impl StewardGetApp {
         let p = self.palette;
         let mut finish = None;
         modal("stewardget-welcome", &p).show(ctx, |ui| {
-            ui.set_width(520.0);
+            ui.set_width(fit_width(ctx, 520.0));
             ui.horizontal(|ui| {
                 widgets::logo(ui, 40.0);
                 ui.add_space(6.0);
@@ -1348,4 +1348,9 @@ fn step(ui: &mut Ui, p: &Palette, icon: Icon, label: &str, add: impl FnOnce(&mut
         });
     });
     ui.add_space(6.0);
+}
+
+/// A dialog's preferred width, narrowed to fit a small window.
+fn fit_width(ctx: &egui::Context, wanted: f32) -> f32 {
+    wanted.min(ctx.content_rect().width() - 56.0).max(260.0)
 }

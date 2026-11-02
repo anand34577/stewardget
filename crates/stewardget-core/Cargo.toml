@@ -35,6 +35,7 @@ bytes = "1.12.1"
 roxmltree = "0.21.2"
 # Email notifications, on the same rustls stack reqwest uses.
 lettre = { version = "0.11.23", default-features = false, features = ["builder", "smtp-transport", "tokio1-rustls", "aws-lc-rs", "rustls-platform-verifier"] }
+rusqlite = { version = "0.41.1", features = ["bundled"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys.workspace = true

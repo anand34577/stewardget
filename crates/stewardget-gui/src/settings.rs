@@ -1104,6 +1104,15 @@ impl StewardGetApp {
                         ui.ctx().copy_text(url.clone());
                     }
                 });
+                row(
+                    ui,
+                    &p,
+                    "Let assistants delete files",
+                    "Off: an assistant can remove a download from the list but never delete its file.",
+                    |ui| {
+                        toggle(ui, &mut draft.mcp_allow_delete, &p);
+                    },
+                );
                 let token = draft.mcp_token.clone().unwrap_or_default();
                 row(ui, &p, "Token", "Clients send it as \u{201c}Authorization: Bearer\u{201d}.", |ui| {
                     let mut shown = token.clone();

@@ -205,16 +205,9 @@ impl Palette {
         color.gamma_multiply(if self.dark { 0.16 } else { 0.11 })
     }
 
-    /// The signature gradient: the accent leaning towards its partner colour,
-    /// kept close enough to the accent that `on_accent` text stays readable.
+    /// Kept for callers that ask for two ends: both are the accent, the interface is flat.
     pub fn gradient(&self) -> (Color32, Color32) {
-        let mix = |a: Color32, b: Color32, t: f32| {
-            let l = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
-            Color32::from_rgb(l(a.r(), b.r()), l(a.g(), b.g()), l(a.b(), b.b()))
-        };
-        // Shaded away from the label colour, so the label keeps its contrast across the button.
-        let away = if self.on_accent == Color32::WHITE { Color32::BLACK } else { Color32::WHITE };
-        (mix(self.accent, away, 0.06), mix(mix(self.accent, self.accent2, 0.35), away, 0.14))
+        (self.accent, self.accent)
     }
 
     /// Text drawn on a solid fill of `color`.
@@ -237,9 +230,10 @@ impl Palette {
         Shadow { offset: [0, offset], blur, spread: 0, color: Color32::from_black_alpha(alpha) }
     }
 
-    /// Coloured halo under primary buttons and live progress.
+    /// No halo: the interface is flat. Kept so callers don't need to change.
     pub fn glow(&self, color: Color32, blur: u8) -> Shadow {
-        Shadow { offset: [0, 3], blur, spread: 0, color: color.gamma_multiply(if self.dark { 0.35 } else { 0.28 }) }
+        let _ = (color, blur);
+        Shadow::NONE
     }
 
     pub fn apply(&self, ctx: &egui::Context) {

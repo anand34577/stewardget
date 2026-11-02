@@ -1,6 +1,7 @@
-//! On-disk persistence: settings, the download list and statistics, each a
-//! small JSON file written atomically. An exclusive lock file prevents two
-//! front-ends from fighting over the same state.
+//! On-disk persistence: settings in a small JSON file written atomically, and
+//! the download list, history and statistics in a SQLite database ([`crate::db`]).
+//! Lists saved as JSON by earlier versions are moved into the database once.
+//! An exclusive lock file prevents two front-ends from fighting over the same state.
 
 use std::fs::File;
 use std::path::{Path, PathBuf};
@@ -9,6 +10,7 @@ use crate::util::LockExt;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
+use crate::db::{self, Db};
 use crate::{Category, Config, DownloadOptions, Error, History, QueueId, Stats, Status, fsio};
 
 const SETTINGS: &str = "settings.json";
@@ -72,6 +74,7 @@ pub(crate) struct Store {
     _legacy_lock: Option<File>,
     /// What went wrong reading a state file, for the user to be told.
     notice: std::sync::Mutex<Option<String>>,
+    db: Option<std::sync::Mutex<Db>>,
 }
 
 impl Store {
@@ -93,12 +96,19 @@ impl Store {
                 Err(std::fs::TryLockError::Error(e)) => return Err(e.into()),
             }
         }
-        Ok(Self { dir: Some(dir), _lock: Some(lock), _legacy_lock: legacy, notice: Default::default() })
+        let opened = Db::open(&dir)?;
+        Ok(Self {
+            dir: Some(dir),
+            _lock: Some(lock),
+            _legacy_lock: legacy,
+            notice: std::sync::Mutex::new(opened.notice),
+            db: Some(std::sync::Mutex::new(opened.db)),
+        })
     }
 
     /// A store that never touches the disk (used by one-shot CLI downloads).
     pub fn memory() -> Self {
-        Self { dir: None, _lock: None, _legacy_lock: None, notice: Default::default() }
+        Self { dir: None, _lock: None, _legacy_lock: None, notice: Default::default(), db: None }
     }
 
     pub fn dir(&self) -> Option<&Path> {
@@ -114,27 +124,74 @@ impl Store {
     }
 
     pub fn load_downloads(&self) -> Option<DownloadList> {
-        self.read(DOWNLOADS)
+        let db = self.db.as_ref()?;
+        {
+            let db = db.lock_ok();
+            if db.has_data("downloads") {
+                return Some(DownloadList { next_id: db.meta("next_id").unwrap_or(0), downloads: db.download_rows() });
+            }
+        }
+        let legacy: DownloadList = self.read(DOWNLOADS)?;
+        if self.save_downloads(&legacy).is_ok() {
+            self.retire(DOWNLOADS);
+        }
+        Some(legacy)
     }
 
     pub fn save_downloads(&self, list: &DownloadList) -> Result<(), Error> {
-        self.write(DOWNLOADS, list)
+        let Some(db) = &self.db else { return Ok(()) };
+        let rows: Vec<(u64, &Record)> = list.downloads.iter().map(|r| (r.id, r)).collect();
+        let mut db = db.lock_ok();
+        db.save_downloads(&rows)?;
+        db.set_meta("next_id", &list.next_id)
     }
 
     pub fn load_stats(&self) -> Option<Stats> {
-        self.read(STATS)
+        let db = self.db.as_ref()?;
+        if let Some(stats) = db.lock_ok().meta("stats") {
+            return Some(stats);
+        }
+        let legacy: Stats = self.read(STATS)?;
+        if self.save_stats(&legacy).is_ok() {
+            self.retire(STATS);
+        }
+        Some(legacy)
     }
 
     pub fn save_stats(&self, stats: &Stats) -> Result<(), Error> {
-        self.write(STATS, stats)
+        let Some(db) = &self.db else { return Ok(()) };
+        db.lock_ok().set_meta("stats", stats)
     }
 
     pub fn load_history(&self) -> Option<History> {
-        self.read(HISTORY)
+        let db = self.db.as_ref()?;
+        {
+            let db = db.lock_ok();
+            if db.has_data("history") {
+                return Some(History { entries: db.history_rows() });
+            }
+        }
+        let legacy: History = self.read(HISTORY)?;
+        if self.save_history(&legacy).is_ok() {
+            self.retire(HISTORY);
+        }
+        Some(legacy)
     }
 
     pub fn save_history(&self, history: &History) -> Result<(), Error> {
-        self.write(HISTORY, history)
+        let Some(db) = &self.db else { return Ok(()) };
+        let rows: Vec<(u64, &crate::HistoryEntry)> = history.entries.iter().map(|e| (e.id, e)).collect();
+        db.lock_ok().save_history(&rows)
+    }
+
+    /// Sets a JSON file aside once its contents live in the database.
+    fn retire(&self, name: &str) {
+        if let Some(dir) = &self.dir {
+            let path = dir.join(name);
+            let mut moved = path.as_os_str().to_owned();
+            moved.push(".migrated");
+            let _ = std::fs::rename(&path, moved);
+        }
     }
 
     /// Reads a state file. A damaged file is set aside (never overwritten)
@@ -205,14 +262,20 @@ pub(crate) fn peek<T: DeserializeOwned>(dir: &Path, name: &str) -> Option<T> {
 }
 
 pub(crate) fn peek_downloads(dir: &Path) -> Option<DownloadList> {
+    if let Some(db) = db::peek(dir).filter(|db| db.has_data("downloads")) {
+        return Some(DownloadList { next_id: db.meta("next_id").unwrap_or(0), downloads: db.download_rows() });
+    }
     peek(dir, DOWNLOADS)
 }
 
 pub(crate) fn peek_stats(dir: &Path) -> Option<Stats> {
-    peek(dir, STATS)
+    db::peek(dir).and_then(|db| db.meta("stats")).or_else(|| peek(dir, STATS))
 }
 
 pub(crate) fn peek_history(dir: &Path) -> Option<History> {
+    if let Some(db) = db::peek(dir).filter(|db| db.has_data("history")) {
+        return Some(History { entries: db.history_rows() });
+    }
     peek(dir, HISTORY)
 }
 
@@ -284,19 +347,72 @@ mod tests {
     }
 
     #[test]
-    fn damaged_list_recovers_from_backup() {
+    fn damaged_database_recovers_from_backup() {
         let dir = std::env::temp_dir().join(format!("stewardget-store-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let store = Store::open(dir.clone()).unwrap();
         let list = DownloadList { next_id: 7, downloads: Vec::new() };
         store.save_downloads(&list).unwrap();
-        store.save_downloads(&list).unwrap(); // second save creates the backup
-        std::fs::write(dir.join(DOWNLOADS), b"{ truncated").unwrap();
+        store.db.as_ref().unwrap().lock_ok().backup_now().unwrap();
+        drop(store);
+        std::fs::write(dir.join(db::FILE), b"this is not a database").unwrap();
+        let _ = std::fs::remove_file(dir.join(format!("{}-wal", db::FILE)));
+        let store = Store::open(dir.clone()).unwrap();
         assert_eq!(store.load_downloads().unwrap().next_id, 7);
         let aside =
             std::fs::read_dir(&dir).unwrap().flatten().any(|e| e.file_name().to_string_lossy().contains(".corrupt-"));
         assert!(aside, "the damaged file is kept for inspection");
         assert!(store.notice().is_some_and(|n| n.contains("restored")), "the user is told");
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn json_lists_move_into_the_database_once() {
+        let dir = std::env::temp_dir().join(format!("stewardget-migrate-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(DOWNLOADS), br#"{"next_id":42,"downloads":[]}"#).unwrap();
+        let store = Store::open(dir.clone()).unwrap();
+        assert_eq!(store.load_downloads().unwrap().next_id, 42);
+        assert!(!dir.join(DOWNLOADS).exists() && dir.join("downloads.json.migrated").exists());
+        drop(store);
+        let store = Store::open(dir.clone()).unwrap();
+        assert_eq!(store.load_downloads().unwrap().next_id, 42, "read from the database now");
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn history_keeps_its_order_and_only_changes_are_written() {
+        let dir = std::env::temp_dir().join(format!("stewardget-history-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = Store::open(dir.clone()).unwrap();
+        let entry = |id: u64| crate::HistoryEntry {
+            id,
+            url: format!("http://x/{id}"),
+            host: "x".into(),
+            file_name: format!("{id}.bin"),
+            path: PathBuf::from(format!("/{id}.bin")),
+            category: Category::Other,
+            size: Some(id),
+            status: Status::Completed,
+            error: None,
+            added_at: 0,
+            finished_at: 0,
+            active_secs: 0,
+            connections: 1,
+            checksum_verified: false,
+            tags: Vec::new(),
+            notes: Vec::new(),
+        };
+        let mut history = History { entries: vec![entry(3), entry(1), entry(2)] };
+        store.save_history(&history).unwrap();
+        history.entries.remove(1);
+        history.entries.push(entry(9));
+        store.save_history(&history).unwrap();
+        let ids: Vec<u64> = store.load_history().unwrap().entries.iter().map(|e| e.id).collect();
+        assert_eq!(ids, [3, 2, 9]);
         drop(store);
         let _ = std::fs::remove_dir_all(&dir);
     }
