@@ -76,7 +76,7 @@ impl Category {
     /// Sub-folder of a built-in category when auto-categorisation is on. `Other`
     /// stays in the root.
     pub fn folder(self) -> Option<&'static str> {
-        (!matches!(self, Category::Other | Category::Custom(_))).then(|| self.label())
+        (!matches!(self, Category::Custom(_))).then(|| self.label())
     }
 
     fn key(self) -> std::borrow::Cow<'static, str> {

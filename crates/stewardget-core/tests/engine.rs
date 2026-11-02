@@ -180,6 +180,7 @@ fn config(dir: &std::path::Path) -> Config {
         min_split_size: 256 * 1024,
         max_retries: 20,
         read_timeout_secs: 5,
+        auto_categorize: false,
         ..Config::default()
     }
 }
@@ -1247,4 +1248,21 @@ async fn the_monthly_cap_stops_downloads_until_it_is_raised() {
     engine.update_config(Config { monthly_cap: 0, ..engine.config() }).unwrap();
     assert_eq!(wait_for(&engine, second, Status::Completed, 60).await, Status::Completed);
     assert!(!engine.month_usage().2);
+}
+
+#[tokio::test]
+async fn new_installs_sort_downloads_into_category_folders() {
+    let dir = std::env::temp_dir().join(format!("stewardget-test-sort-{}", std::process::id()));
+    let engine = Engine::start(
+        EngineOptions::in_memory().with_config(Config { download_dir: dir.clone(), ..Config::default() }),
+    )
+    .unwrap();
+    assert_eq!(engine.folder_for("clip.mkv"), dir.join("Video"));
+    assert_eq!(engine.folder_for("setup.exe"), dir.join("Programs"));
+    assert_eq!(engine.folder_for("mystery.xyz"), dir.join("Other"));
+    // Settings saved before the default changed are switched over once.
+    let old = serde_json::from_str::<Config>(r#"{"auto_categorize":false}"#).unwrap().sanitized();
+    assert!(old.auto_categorize);
+    let chosen = Config { auto_categorize: false, ..old }.sanitized();
+    assert!(!chosen.auto_categorize, "a later choice is kept");
 }

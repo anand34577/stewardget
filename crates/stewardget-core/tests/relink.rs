@@ -103,6 +103,7 @@ async fn an_expired_signed_link_is_replaced_and_the_download_finishes() {
         max_retries: 3,
         auto_retry: 0,
         read_timeout_secs: 5,
+        auto_categorize: false,
         ..Config::default()
     };
     let engine = Engine::start(EngineOptions::in_memory().with_config(config)).unwrap();
@@ -130,7 +131,13 @@ async fn a_used_up_link_falls_back_to_where_the_browser_landed() {
     let dir = std::env::temp_dir().join(format!("stewardget-fallback-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    let config = Config { download_dir: dir.clone(), connections: 1, auto_retry: 0, ..Config::default() };
+    let config = Config {
+        download_dir: dir.clone(),
+        connections: 1,
+        auto_retry: 0,
+        auto_categorize: false,
+        ..Config::default()
+    };
     let engine = Engine::start(EngineOptions::in_memory().with_config(config)).unwrap();
     // The clicked link answers 403 now (it was a one-time link); the address
     // the browser was sent to still works.
