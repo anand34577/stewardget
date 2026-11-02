@@ -17,9 +17,9 @@ fn piece(i: usize) -> Vec<u8> {
 
 fn encrypt(data: &[u8], seq: u64) -> Vec<u8> {
     use cbc::cipher::block_padding::Pkcs7;
-    use cbc::cipher::{BlockEncryptMut, KeyIvInit};
+    use cbc::cipher::{BlockModeEncrypt, KeyIvInit};
     let iv = (seq as u128).to_be_bytes();
-    cbc::Encryptor::<aes::Aes128>::new(&KEY.into(), &iv.into()).encrypt_padded_vec_mut::<Pkcs7>(data)
+    cbc::Encryptor::<aes::Aes128>::new(&KEY.into(), &iv.into()).encrypt_padded_vec::<Pkcs7>(data)
 }
 
 /// Serves fixed paths; each answer is delayed by `delay` (to have time to pause).
