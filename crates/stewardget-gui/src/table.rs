@@ -115,17 +115,29 @@ fn layout_columns(width: f32, hidden: &[String]) -> (f32, Vec<Column>) {
     let progress = Column {
         key: SortKey::Progress,
         title: "Progress",
-        width: if width < 760.0 { 120.0 } else { 170.0 },
+        width: if width < 560.0 {
+            80.0
+        } else if width < 760.0 {
+            120.0
+        } else {
+            170.0
+        },
         right: false,
     };
-    let status = Column { key: SortKey::Status, title: "Status", width: 150.0, right: false };
+    let status = Column {
+        key: SortKey::Status,
+        title: "Status",
+        width: if width < 560.0 { 136.0 } else { 150.0 },
+        right: false,
+    };
     let optional = [
         Column { key: SortKey::Size, title: "Size", width: 86.0, right: true },
         Column { key: SortKey::Speed, title: "Speed", width: 96.0, right: true },
         Column { key: SortKey::Eta, title: "Time left", width: 78.0, right: true },
         Column { key: SortKey::Added, title: "Added", width: 124.0, right: false },
     ];
-    let min_name = 220.0;
+    // Names matter most: on a narrow window the other columns give way first.
+    let min_name = if width < 560.0 { 150.0 } else { 220.0 };
     let mut used = progress.width + status.width + PAD_X * 2.0;
     let mut picked: Vec<Column> = Vec::new();
     for c in optional {

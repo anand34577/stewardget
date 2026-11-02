@@ -1028,8 +1028,18 @@ impl StewardGetApp {
                 ui.add_space(6.0);
                 // Whatever is left between the menus and the buttons, up to a comfortable width.
                 let room = ui.available_rect_before_wrap().right() - menus_end - 16.0;
-                let width = room.clamp(120.0, if compact { 240.0 } else { 320.0 });
-                self.search_box(ui, width);
+                if room < 120.0 {
+                    // No room for the box: a button opens the command palette, which also finds downloads.
+                    if widgets::button(ui, ButtonKind::Tool, Some(Icon::Search), "", true, &p)
+                        .on_hover_text("Search (Ctrl+K)")
+                        .clicked()
+                    {
+                        self.open_palette();
+                    }
+                } else {
+                    let width = room.clamp(120.0, if compact { 240.0 } else { 320.0 });
+                    self.search_box(ui, width);
+                }
             });
         });
     }
@@ -1132,12 +1142,14 @@ impl StewardGetApp {
 
     fn search_box(&mut self, ui: &mut Ui, width: f32) {
         let p = self.palette;
+        // Too narrow for the "Ctrl K" key cap: leave it out rather than draw over the text.
+        let roomy = width >= 200.0;
         let r = ui
             .add_sized(
                 vec2(width, theme::CONTROL_H),
                 widgets::input(&mut self.search).hint_text("Search downloads").margin(Margin {
                     left: 34,
-                    right: 54,
+                    right: if roomy { 54 } else { 10 },
                     top: 8,
                     bottom: 8,
                 }),
@@ -1149,7 +1161,7 @@ impl StewardGetApp {
             Icon::Search,
             p.text_dim,
         );
-        if !r.has_focus() && self.search.is_empty() {
+        if roomy && !r.has_focus() && self.search.is_empty() {
             // Keyboard hint, like a key cap.
             let galley = ui.painter().layout_no_wrap("Ctrl K".to_owned(), FontId::proportional(11.0), p.text_dim);
             let key = egui::Rect::from_min_size(
@@ -2199,20 +2211,6 @@ impl eframe::App for StewardGetApp {
                         // Rounded corners: keep page content from painting over them.
                         let canvas = ui.max_rect();
                         ui.set_clip_rect(canvas.shrink(1.0).intersect(ui.clip_rect()));
-                        // Aurora: soft accent light falling in from the top of the canvas.
-                        let glow = if p.dark { 0.18 } else { 0.08 };
-                        widgets::paint_glow(
-                            ui.painter(),
-                            egui::pos2(canvas.right() - canvas.width() * 0.22, canvas.top() - 60.0),
-                            canvas.width().clamp(380.0, 620.0),
-                            p.accent.gamma_multiply(glow),
-                        );
-                        widgets::paint_glow(
-                            ui.painter(),
-                            egui::pos2(canvas.left() + canvas.width() * 0.25, canvas.top() - 120.0),
-                            canvas.width().clamp(300.0, 480.0),
-                            p.accent2.gamma_multiply(glow * 0.6),
-                        );
                         let details = self.page == Page::Downloads && self.show_details && !self.selection.is_empty();
                         if details && canvas.width() >= 980.0 {
                             egui::Panel::right("stewardget-inspector")

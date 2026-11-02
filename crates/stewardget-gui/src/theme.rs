@@ -225,7 +225,13 @@ impl Palette {
         if self.dark { Color32::from_black_alpha(165) } else { Color32::from_rgba_unmultiplied(15, 17, 26, 90) }
     }
 
+    /// Elevation for things that float above the page (dialogs, menus). Small
+    /// shadows on cards and buttons are dropped: the interface is flat and
+    /// separates surfaces by fill and outline.
     pub fn shadow(&self, offset: i8, blur: u8) -> Shadow {
+        if blur < 18 {
+            return Shadow::NONE;
+        }
         let alpha = if self.dark { 120 } else { 22 };
         Shadow { offset: [0, offset], blur, spread: 0, color: Color32::from_black_alpha(alpha) }
     }

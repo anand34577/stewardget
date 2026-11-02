@@ -2,8 +2,7 @@
 
 use egui::epaint::{Mesh, PathStroke};
 use egui::{
-    Align2, Color32, CornerRadius, FontId, Pos2, Rect, Response, Sense, Shadow, Shape, Stroke, StrokeKind, Ui, Vec2,
-    pos2, vec2,
+    Align2, Color32, CornerRadius, FontId, Pos2, Rect, Response, Sense, Shape, Stroke, StrokeKind, Ui, Vec2, pos2, vec2,
 };
 use stewardget_core::util::{format_bytes, format_speed};
 use stewardget_core::{DayTotal, DownloadView, Status};
@@ -21,25 +20,6 @@ pub fn lerp_color(a: Color32, b: Color32, t: f32) -> Color32 {
 /// gradient API is ignored: the interface is flat.
 pub fn paint_gradient_rect(painter: &egui::Painter, rect: Rect, r: f32, a: Color32, _b: Color32, _vertical: bool) {
     painter.rect_filled(rect, CornerRadius::same(r.round().clamp(0.0, 255.0) as u8), a);
-}
-
-/// A soft round light, for the ambient glows behind hero areas.
-pub fn paint_glow(painter: &egui::Painter, center: Pos2, radius: f32, color: Color32) {
-    let mut mesh = Mesh::default();
-    mesh.colored_vertex(center, color);
-    let steps = 48;
-    for i in 0..=steps {
-        let a = std::f32::consts::TAU * i as f32 / steps as f32;
-        mesh.colored_vertex(center + vec2(a.cos(), a.sin()) * radius * 0.45, color.gamma_multiply(0.55));
-        mesh.colored_vertex(center + vec2(a.cos(), a.sin()) * radius, Color32::TRANSPARENT);
-    }
-    for i in 0..steps as u32 {
-        let (m, o, m2, o2) = (1 + i * 2, 2 + i * 2, 3 + i * 2, 4 + i * 2);
-        mesh.add_triangle(0, m, m2);
-        mesh.add_triangle(m, o, o2);
-        mesh.add_triangle(m, o2, m2);
-    }
-    painter.add(Shape::mesh(mesh));
 }
 
 /// Circular progress: a track ring and an arc from twelve o'clock, shaded
@@ -912,17 +892,11 @@ pub fn logo(ui: &mut Ui, size: f32) -> Response {
 
 /// A rounded panel frame.
 pub fn card(p: &Palette) -> egui::Frame {
-    let frame = egui::Frame::new()
+    egui::Frame::new()
         .fill(p.card)
         .stroke(Stroke::new(1.0, p.border))
         .corner_radius(CornerRadius::same(radius::LG))
-        .inner_margin(egui::Margin::same(16));
-    // Light themes lift cards off the canvas with a soft shadow; dark ones rely on the fill.
-    if p.dark {
-        frame
-    } else {
-        frame.shadow(Shadow { offset: [0, 1], blur: 6, spread: 0, color: Color32::from_black_alpha(10) })
-    }
+        .inner_margin(egui::Margin::same(16))
 }
 
 /// Upper-case text in the caption style, for painting.
