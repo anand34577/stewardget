@@ -992,13 +992,15 @@ impl StewardGetApp {
                     ui.add_space(10.0);
                 }
                 ui.spacing_mut().item_spacing.x = 6.0;
-                if widgets::icon_button(
-                    ui,
-                    Icon::PanelBottom,
-                    if self.show_details { "Hide details" } else { "Show details" },
-                    &p,
-                )
-                .clicked()
+                // The details panel only exists on the downloads page.
+                if self.page == Page::Downloads
+                    && widgets::icon_button(
+                        ui,
+                        Icon::PanelBottom,
+                        if self.show_details { "Hide details" } else { "Show details" },
+                        &p,
+                    )
+                    .clicked()
                 {
                     self.show_details = !self.show_details;
                 }
@@ -1011,19 +1013,6 @@ impl StewardGetApp {
                     .clicked()
                 {
                     self.open_add(None);
-                }
-                if widgets::button(
-                    ui,
-                    ButtonKind::Ghost,
-                    Some(Icon::Globe),
-                    if compact { "" } else { "Grab" },
-                    true,
-                    &p,
-                )
-                .on_hover_text("Find the files linked from a web page")
-                .clicked()
-                {
-                    self.grab_dialog = Some(crate::grab::GrabDialog::new(None));
                 }
                 ui.add_space(6.0);
                 // Whatever is left between the menus and the buttons, up to a comfortable width.

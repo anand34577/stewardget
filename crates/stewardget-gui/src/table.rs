@@ -188,7 +188,7 @@ impl StewardGetApp {
             }
             s
         };
-        let compact = full.width() < 860.0;
+        let compact = full.width() < 700.0;
         let title_w = {
             let painter = ui.painter();
             let left = strip.left() + CARD_X + 4.0;

@@ -1,6 +1,6 @@
 """Renders the StewardGet logo and every icon derived from it.
 
-The mark is a violet-to-cyan squircle carrying a white download arrow above a
+The mark is a flat teal squircle carrying a white download arrow above a
 wave: fetching, and the stream of parallel connections that makes it fast.
 
 Requires Pillow (`pip install pillow`); maintainers only, the outputs are
@@ -16,12 +16,11 @@ Writes
 """
 from pathlib import Path
 
-from PIL import Image, ImageChops, ImageDraw, ImageFilter
+from PIL import Image, ImageDraw
 
 ROOT = Path(__file__).resolve().parent.parent
 S = 1024  # master canvas
-TOP_LEFT = (139, 92, 246)  # violet
-BOTTOM_RIGHT = (6, 182, 212)  # cyan
+FILL = (13, 148, 136)  # teal, flat: the app has no gradients
 # The glyph, in master-canvas units (keep in step with assets/logo.svg).
 ARROW_W, ARROW_TOP, ARROW_TIP, ARROW_ARMS = 110, 222, (512, 630), ((352, 470), (672, 470))
 WAVE_W, WAVE_X, WAVE_Y, WAVE_LIFT, WAVE_HALF = 74, 336, 786, 30, 352 / 3
@@ -45,16 +44,6 @@ def squircle_mask(size: int, margin: int, power: float = 5.0) -> Image.Image:
         for x in range(max(x0, 0), min(x1, big)):
             px[x, y] = 255
     return mask.resize((size, size), Image.LANCZOS)
-
-
-def gradient(size: int) -> Image.Image:
-    img = Image.new("RGB", (size, size))
-    px = img.load()
-    for y in range(size):
-        for x in range(size):
-            t = (x + y) / (2 * (size - 1))
-            px[x, y] = tuple(round(a + (b - a) * t) for a, b in zip(TOP_LEFT, BOTTOM_RIGHT))
-    return img
 
 
 def mark(size: int) -> Image.Image:
@@ -87,17 +76,9 @@ def mark(size: int) -> Image.Image:
 
 def render(size: int, margin_ratio: float = 0.04) -> Image.Image:
     margin = round(size * margin_ratio)
-    base = gradient(size).convert("RGBA")
-    # Soft light from the top left.
-    glow = Image.new("L", (size, size), 0)
-    ImageDraw.Draw(glow).ellipse([-size * 0.35, -size * 0.45, size * 0.75, size * 0.55], fill=40)
-    glow = glow.filter(ImageFilter.GaussianBlur(size * 0.12))
-    base = Image.composite(Image.new("RGBA", (size, size), (255, 255, 255, 255)), base, glow)
+    base = Image.new("RGBA", (size, size), (*FILL, 255))
 
     glyph = mark(size)
-    shadow = glyph.filter(ImageFilter.GaussianBlur(max(size * 0.02, 0.6)))
-    shadow = ImageChops.offset(shadow, 0, max(round(size * 0.012), 1)).point(lambda v: v * 0.35)
-    base = Image.composite(Image.new("RGBA", (size, size), (40, 20, 90, 255)), base, shadow)
     base = Image.composite(Image.new("RGBA", (size, size), (255, 255, 255, 255)), base, glyph)
 
     base.putalpha(squircle_mask(size, margin))
