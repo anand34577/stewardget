@@ -7,6 +7,7 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use stewardget_core::util::LockExt;
 
 use egui::{Align, CornerRadius, Frame, Layout, Margin, RichText, Ui, ViewportId, vec2};
 use stewardget_core::util::format_bytes;
@@ -116,7 +117,7 @@ impl CaptureWindow {
                 (app.engine.clone(), item.new.url.clone(), item.new.options.clone(), Arc::clone(&check));
             app.runtime.spawn(async move {
                 let result = engine.check_link(&url, &options).await.map_err(|e| capitalize(&e.to_string()));
-                *slot.lock().unwrap() = Some(result);
+                *slot.lock_ok() = Some(result);
             });
             window.check = Some(check);
         }
@@ -134,7 +135,7 @@ impl CaptureWindow {
     }
 
     fn checked(&self) -> Option<Result<LinkInfo, String>> {
-        self.check.as_ref().and_then(|c| c.lock().unwrap().clone())
+        self.check.as_ref().and_then(|c| c.lock_ok().clone())
     }
 
     /// The name a single download will get, as shown: the known one, else a
@@ -198,7 +199,7 @@ impl StewardGetApp {
         if self.capture.is_some() {
             return;
         }
-        let Some(batch) = self.inbox.lock().unwrap().pop_front() else { return };
+        let Some(batch) = self.inbox.lock_ok().pop_front() else { return };
         if !batch.is_empty() {
             self.capture = Some(CaptureWindow::new(self, batch));
         }
@@ -211,7 +212,7 @@ impl StewardGetApp {
         let single = w.single();
         let own_bar = self.custom_frame;
         let width = if single { 500.0 } else { 580.0 };
-        let waiting: usize = self.inbox.lock().unwrap().iter().map(Vec::len).sum();
+        let waiting: usize = self.inbox.lock_ok().iter().map(Vec::len).sum();
         let title = if single { "New download" } else { "New downloads" };
         let height = if single { w.height.max(240.0) } else { LIST_HEIGHT };
         let pos = *w.pos.get_or_insert_with(|| crate::app::screen_spot(ctx, vec2(width, height), 0));

@@ -4,6 +4,7 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use stewardget_core::util::LockExt;
 
 use egui::{Align, Color32, CornerRadius, Frame, Layout, Margin, RichText, Stroke, Ui};
 use stewardget_core::util::{expand_pattern, format_bytes, parse_size};
@@ -228,7 +229,7 @@ impl AddDialog {
     }
 
     fn checked(&self) -> Option<Result<LinkInfo, String>> {
-        self.check.as_ref().and_then(|c| c.result.lock().unwrap().clone())
+        self.check.as_ref().and_then(|c| c.result.lock_ok().clone())
     }
 }
 
@@ -255,7 +256,7 @@ impl StewardGetApp {
             };
             self.runtime.spawn(async move {
                 let result = engine.check_link(&url, &options).await.map_err(|e| capitalize(&e.to_string()));
-                *slot.lock().unwrap() = Some(result);
+                *slot.lock_ok() = Some(result);
             });
         }
     }

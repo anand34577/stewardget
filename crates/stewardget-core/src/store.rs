@@ -5,6 +5,7 @@
 use std::fs::File;
 use std::path::{Path, PathBuf};
 
+use crate::util::LockExt;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
@@ -69,6 +70,8 @@ pub(crate) struct Store {
     dir: Option<PathBuf>,
     _lock: Option<File>,
     _legacy_lock: Option<File>,
+    /// What went wrong reading a state file, for the user to be told.
+    notice: std::sync::Mutex<Option<String>>,
 }
 
 impl Store {
@@ -90,12 +93,12 @@ impl Store {
                 Err(std::fs::TryLockError::Error(e)) => return Err(e.into()),
             }
         }
-        Ok(Self { dir: Some(dir), _lock: Some(lock), _legacy_lock: legacy })
+        Ok(Self { dir: Some(dir), _lock: Some(lock), _legacy_lock: legacy, notice: Default::default() })
     }
 
     /// A store that never touches the disk (used by one-shot CLI downloads).
     pub fn memory() -> Self {
-        Self { dir: None, _lock: None, _legacy_lock: None }
+        Self { dir: None, _lock: None, _legacy_lock: None, notice: Default::default() }
     }
 
     pub fn dir(&self) -> Option<&Path> {
@@ -144,7 +147,20 @@ impl Store {
                 Ok(value) => return Some(value),
                 Err(_) => {
                     let aside = dir.join(format!("{name}.corrupt-{}", crate::util::now_unix()));
-                    let _ = std::fs::rename(&path, aside);
+                    let _ = std::fs::rename(&path, &aside);
+                    let restored = std::fs::read(backup_path(&path)).ok().and_then(|b| serde_json::from_slice(&b).ok());
+                    *self.notice.lock_ok() = Some(if restored.is_some() {
+                        format!(
+                            "{name} was damaged and was restored from the latest backup; the damaged file is kept as {}",
+                            aside.display()
+                        )
+                    } else {
+                        format!(
+                            "{name} was damaged and no usable backup exists; the damaged file is kept as {}",
+                            aside.display()
+                        )
+                    });
+                    return restored;
                 }
             },
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -153,9 +169,16 @@ impl Store {
         serde_json::from_slice(&std::fs::read(backup_path(&path)).ok()?).ok()
     }
 
+    /// A problem found while loading the state files, if any.
+    pub fn notice(&self) -> Option<String> {
+        self.notice.lock_ok().clone()
+    }
+
     fn write<T: Serialize>(&self, name: &str, value: &T) -> Result<(), Error> {
         let Some(dir) = &self.dir else { return Ok(()) };
-        let json = serde_json::to_vec_pretty(value).map_err(|e| Error::Io(e.to_string()))?;
+        // Settings stay readable for hand edits; the lists grow with the library, so they are compact.
+        let json = if name == SETTINGS { serde_json::to_vec_pretty(value) } else { serde_json::to_vec(value) }
+            .map_err(|e| Error::Io(e.to_string()))?;
         let path = dir.join(name);
         // Keep a rolling backup, refreshed at most once a minute.
         let backup = backup_path(&path);
@@ -273,6 +296,7 @@ mod tests {
         let aside =
             std::fs::read_dir(&dir).unwrap().flatten().any(|e| e.file_name().to_string_lossy().contains(".corrupt-"));
         assert!(aside, "the damaged file is kept for inspection");
+        assert!(store.notice().is_some_and(|n| n.contains("restored")), "the user is told");
         drop(store);
         let _ = std::fs::remove_dir_all(&dir);
     }

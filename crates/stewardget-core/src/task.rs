@@ -1,5 +1,6 @@
 //! Runs a single download from probe to final rename.
 
+use crate::util::{LockExt, RwLockExt};
 use std::fs::OpenOptions;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -196,14 +197,14 @@ async fn run_inner(job: &Job) -> Result<Outcome, Error> {
 
     let remaining = probe.total.map_or(u64::MAX, |t| t.saturating_sub(table.written()));
     let shared = &job.shared;
-    *shared.table.lock().unwrap() = table;
+    *shared.table.lock_ok() = table;
     shared.total.store(probe.total.unwrap_or(u64::MAX), Ordering::Relaxed);
     shared.resumable.store(ranged, Ordering::Relaxed);
     job.hooks.on_status(Status::Downloading);
 
     let mut ctl = ControlFile::new(job.url.to_string(), probe.total, probe.etag.clone(), probe.last_modified.clone());
     if ranged {
-        ctl.segments = shared.table.lock().unwrap().to_persisted();
+        ctl.segments = shared.table.lock_ok().to_persisted();
         let _ = ctl.save(&meta);
     }
 
@@ -218,7 +219,7 @@ async fn run_inner(job: &Job) -> Result<Outcome, Error> {
     let tuned = ranged && job.config.auto_tune && job.options.connections.is_none() && max_workers > start;
     let mut spawned = if tuned { start } else { max_workers };
     job.shared.target_connections.store(if tuned { spawned } else { 0 }, Ordering::Relaxed);
-    *job.shared.lanes.lock().unwrap() = lanes.iter().map(|l| Arc::clone(&l.stat)).collect();
+    *job.shared.lanes.lock_ok() = lanes.iter().map(|l| Arc::clone(&l.stat)).collect();
     let file = Arc::new(file);
     let ctx = Arc::new(WorkerCtx {
         client: job.client.clone(),
@@ -271,7 +272,7 @@ async fn run_inner(job: &Job) -> Result<Outcome, Error> {
             _ = tick.tick(), if ranged => checkpoint(&mut ctl, shared, &meta, &file).await,
             _ = tune_tick.tick(), if tuned && spawned < max_workers => {
                 let moved = shared.transferred.load(Ordering::Relaxed);
-                if !ctx.stop.is_cancelled() && !shared.table.lock().unwrap().is_complete() {
+                if !ctx.stop.is_cancelled() && !shared.table.lock_ok().is_complete() {
                     match tuner.step(moved, spawned, max_workers) {
                         Tune::Grow(add) => {
                             for n in spawned..spawned + add {
@@ -290,7 +291,7 @@ async fn run_inner(job: &Job) -> Result<Outcome, Error> {
     }
     drop(ctx);
 
-    if !shared.table.lock().unwrap().is_complete() {
+    if !shared.table.lock_ok().is_complete() {
         if ranged {
             // Keep every byte that made it to disk, whatever went wrong.
             checkpoint(&mut ctl, shared, &meta, &file).await;
@@ -312,7 +313,7 @@ pub(crate) async fn finalize(
     part: &Path,
     meta: &Path,
 ) -> Result<Outcome, Error> {
-    let written = job.shared.table.lock().unwrap().written();
+    let written = job.shared.table.lock_ok().written();
     if let Some(expected) = probe.total
         && expected != written
     {
@@ -369,7 +370,7 @@ pub(crate) async fn finalize(
 /// afterwards, so the control file never claims bytes a crash or power cut
 /// could still lose. The flush runs on the blocking pool.
 async fn checkpoint(ctl: &mut ControlFile, shared: &Shared, meta: &Path, file: &Arc<std::fs::File>) {
-    let segments = shared.table.lock().unwrap().to_persisted();
+    let segments = shared.table.lock_ok().to_persisted();
     let flushed = Arc::clone(file);
     if !matches!(tokio::task::spawn_blocking(move || flushed.sync_data()).await, Ok(Ok(()))) {
         return; // keep the older, safe checkpoint
@@ -476,11 +477,11 @@ const MAX_RELINKS: u32 = 50;
 
 impl WorkerCtx {
     fn table(&self) -> std::sync::MutexGuard<'_, SegmentTable> {
-        self.shared.table.lock().unwrap()
+        self.shared.table.lock_ok()
     }
 
     fn current_url(&self) -> Url {
-        self.url.read().unwrap().clone()
+        self.url.read_ok().clone()
     }
 
     /// Where `lane` fetches from.
@@ -539,7 +540,7 @@ impl WorkerCtx {
         {
             return Err(Error::RemoteChanged);
         }
-        *self.url.write().unwrap() = probe.final_url;
+        *self.url.write_ok() = probe.final_url;
         Ok(())
     }
 }
@@ -602,7 +603,7 @@ async fn work(ctx: &Arc<WorkerCtx>, lane: &mut usize) -> Result<(), Error> {
                     // that serves something else, a network link that went down.
                     if ctx.alive_lanes() > 1 && (!e.is_retryable() || (!progressed && attempt >= 2)) {
                         this.stat.failed.store(true, Ordering::Relaxed);
-                        *this.stat.reason.lock().unwrap() = Some(e.to_string());
+                        *this.stat.reason.lock_ok() = Some(e.to_string());
                         attempt = 0;
                         continue; // the top of the loop moves to a live lane
                     }

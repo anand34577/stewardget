@@ -2,6 +2,7 @@
 //! graph and a hash tool.
 
 use std::sync::{Arc, Mutex};
+use stewardget_core::util::LockExt;
 
 use egui::{Align, Layout, RichText, Ui, vec2};
 use stewardget_core::util::{format_bytes, format_duration, format_speed, format_timestamp, parse_size};
@@ -516,7 +517,7 @@ impl StewardGetApp {
     /// Computes MD5/SHA-1/SHA-256/SHA-512 of a finished file in the background.
     fn hash_row(&mut self, ui: &mut Ui, d: &DownloadView) {
         let p = self.palette;
-        let job = self.hashes.get(&d.id).map(|j| (j.algo, j.result.lock().unwrap().clone()));
+        let job = self.hashes.get(&d.id).map(|j| (j.algo, j.result.lock_ok().clone()));
         ui.horizontal(|ui| match job {
             Some((_, None)) => {
                 ui.add(egui::Spinner::new().size(13.0).color(p.accent2));
@@ -550,7 +551,7 @@ impl StewardGetApp {
                         let (path, out) = (d.path.clone(), Arc::clone(&slot));
                         self.runtime.spawn_blocking(move || {
                             let r = stewardget_core::hash_file(algo, &path).map_err(|e| e.to_string());
-                            *out.lock().unwrap() = Some(r);
+                            *out.lock_ok() = Some(r);
                         });
                         self.hashes.insert(d.id, HashJob { algo, result: slot });
                     }

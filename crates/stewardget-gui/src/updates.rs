@@ -1,6 +1,7 @@
 //! The optional update check: off by default, one request to the release page.
 
 use std::sync::{Arc, Mutex};
+use stewardget_core::util::LockExt;
 
 use egui::{RichText, Ui};
 use stewardget_core::update::{self, Release};
@@ -43,7 +44,7 @@ impl StewardGetApp {
         let (slot, ctx) = (self.updates.slot.clone(), ctx.clone());
         self.runtime.spawn(async move {
             let result = update::latest().await;
-            *slot.lock().unwrap() = Some(result);
+            *slot.lock_ok() = Some(result);
             ctx.request_repaint();
         });
     }
@@ -54,7 +55,7 @@ impl StewardGetApp {
             self.updates.auto_done = true;
             self.check_for_updates(ctx, true);
         }
-        let Some(result) = self.updates.slot.lock().unwrap().take() else { return };
+        let Some(result) = self.updates.slot.lock_ok().take() else { return };
         let announce = std::mem::take(&mut self.updates.announce);
         self.updates.state = match result {
             Ok(r) if update::is_newer(&r.version, env!("CARGO_PKG_VERSION")) => {

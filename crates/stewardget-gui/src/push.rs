@@ -3,6 +3,7 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use stewardget_core::util::LockExt;
 
 use egui::{RichText, Ui};
 use stewardget_core::Config;
@@ -71,7 +72,7 @@ impl StewardGetApp {
                     }
                 },
             );
-            if let Some(Some(Err(e))) = self.notify_tests.get(&target.id).map(|s| s.lock().unwrap().clone()) {
+            if let Some(Some(Err(e))) = self.notify_tests.get(&target.id).map(|s| s.lock_ok().clone()) {
                 ui.add_space(2.0);
                 ui.add(egui::Label::new(RichText::new(crate::app::capitalize(&e)).size(12.0).color(p.red)).wrap());
             }
@@ -88,7 +89,7 @@ impl StewardGetApp {
     fn test_button(&mut self, ui: &mut Ui, target: &Target) {
         let p = self.palette;
         let slot = self.notify_tests.get(&target.id).cloned();
-        let state = slot.as_ref().map(|s| s.lock().unwrap().clone());
+        let state = slot.as_ref().map(|s| s.lock_ok().clone());
         let sending = matches!(state, Some(None));
         if widgets::button(ui, ButtonKind::Ghost, Some(Icon::Bolt), "Send test", !sending, &p).clicked() {
             let slot = Arc::new(Mutex::new(None));
@@ -101,7 +102,7 @@ impl StewardGetApp {
             };
             self.runtime.spawn(async move {
                 let result = notifiers::send(&target, &message).await;
-                *out.lock().unwrap() = Some(result);
+                *out.lock_ok() = Some(result);
                 ctx.request_repaint();
             });
             self.notify_tests.insert(id, slot);

@@ -2,6 +2,7 @@
 //! then offers the files it found in the new-download list to pick from.
 
 use std::sync::{Arc, Mutex};
+use stewardget_core::util::LockExt;
 
 use egui::RichText;
 use stewardget_core::{GrabOptions, GrabResult, NewDownload};
@@ -61,7 +62,7 @@ impl StewardGetApp {
 
         // A finished run: hand the files to the new-download list, or say why not.
         let finished = {
-            let mut phase = d.phase.lock().unwrap();
+            let mut phase = d.phase.lock_ok();
             match &*phase {
                 Phase::Done(_) => Some(std::mem::replace(&mut *phase, Phase::Idle)),
                 _ => None,
@@ -80,7 +81,7 @@ impl StewardGetApp {
                             new
                         })
                         .collect();
-                    self.inbox.lock().unwrap().push_back(batch);
+                    self.inbox.lock_ok().push_back(batch);
                     ctx.request_repaint();
                     if found.truncated {
                         let yellow = p.yellow;
@@ -106,7 +107,7 @@ impl StewardGetApp {
             }
         }
 
-        let running = matches!(*d.phase.lock().unwrap(), Phase::Running);
+        let running = matches!(*d.phase.lock_ok(), Phase::Running);
         let modal = crate::dialogs::modal("stewardget-grab", &p).show(ctx, |ui| {
             ui.set_width(520.0);
             crate::dialogs::title(ui, &p, Icon::Globe, "Find files on a web page");
@@ -187,11 +188,11 @@ impl StewardGetApp {
                 extensions: stewardget_core::CustomCategory::parse_extensions(&d.extensions),
             };
             d.message = None;
-            *d.phase.lock().unwrap() = Phase::Running;
+            *d.phase.lock_ok() = Phase::Running;
             let (engine, phase, ctx2) = (self.engine.clone(), Arc::clone(&d.phase), ctx.clone());
             d.task = Some(self.runtime.spawn(async move {
                 let result = engine.grab_links(&url, &options).await.map_err(|e| e.to_string());
-                *phase.lock().unwrap() = Phase::Done(result);
+                *phase.lock_ok() = Phase::Done(result);
                 ctx2.request_repaint();
             }));
         }

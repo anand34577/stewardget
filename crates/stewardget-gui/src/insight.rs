@@ -99,16 +99,16 @@ impl StewardGetApp {
             .inner_margin(egui::Margin::symmetric(12, 8))
             .show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
-                ui.horizontal_wrapped(|ui| {
+                ui.horizontal(|ui| {
                     widgets::icon(ui, icon, 16.0, color);
                     ui.label(RichText::new(&insight.headline).family(crate::theme::semi()).color(p.text));
-                    ui.label(RichText::new(&insight.detail).size(12.5).color(p.text_dim));
-                    if let Some(fix) = insight.fix
-                        && widgets::button(ui, ButtonKind::Ghost, None, fix.label(), true, &p).clicked()
-                    {
-                        apply = Some(fix);
-                    }
                 });
+                ui.add(egui::Label::new(RichText::new(&insight.detail).size(12.5).color(p.text_dim)).wrap());
+                if let Some(fix) = insight.fix
+                    && widgets::button(ui, ButtonKind::Ghost, None, fix.label(), true, &p).clicked()
+                {
+                    apply = Some(fix);
+                }
             });
         apply
     }

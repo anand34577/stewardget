@@ -784,6 +784,12 @@ pub fn button(ui: &mut Ui, kind: ButtonKind, icon: Option<Icon>, text: &str, ena
     let size = vec2((galley.size().x + icon_w + pad * 2.0).max(CONTROL_H), CONTROL_H);
     let sense = if enabled { Sense::click() } else { Sense::hover() };
     let (rect, response) = ui.allocate_exact_size(size, sense);
+    // Icon-only buttons would otherwise have no name for a screen reader.
+    let accessible_name = match icon {
+        Some(icon) if text.is_empty() => format!("{icon:?}"),
+        _ => text.to_owned(),
+    };
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, accessible_name.clone()));
     let painter = ui.painter();
     let pressed = enabled && response.is_pointer_button_down_on();
     let fill = if pressed {
@@ -1095,7 +1101,7 @@ pub fn section(ui: &mut Ui, text: &str, p: &Palette) -> bool {
     let open = ui.ctx().data_mut(|d| *d.get_persisted_mut_or(id, true));
     let width = ui.available_width().min(150.0);
     let (rect, r) = ui.allocate_exact_size(vec2(width, 20.0), Sense::click());
-    let color = if r.hovered() { p.text } else { lerp_color(p.text_dim, p.sidebar, 0.15) };
+    let color = if r.hovered() { p.text } else { p.text_dim };
     let galley = caps_galley(ui, &text.to_uppercase(), 10.5, color);
     let text_w = galley.size().x;
     let x = rect.left() + 10.0;

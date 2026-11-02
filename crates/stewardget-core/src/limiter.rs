@@ -4,6 +4,7 @@
 //! path to a single short critical section and naturally queues concurrent
 //! connections fairly: whoever drives the bucket further into debt waits longer.
 
+use crate::util::LockExt;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -42,7 +43,7 @@ impl RateLimiter {
         if self.rate.swap(rate, Ordering::Relaxed) == rate {
             return;
         }
-        let mut b = self.bucket.lock().unwrap();
+        let mut b = self.bucket.lock_ok();
         b.tokens = 0.0;
         b.last = Instant::now();
         drop(b);
@@ -60,7 +61,7 @@ impl RateLimiter {
         tokio::pin!(changed);
         changed.as_mut().enable();
         let wait = {
-            let mut b = self.bucket.lock().unwrap();
+            let mut b = self.bucket.lock_ok();
             let now = Instant::now();
             let rate = rate as f64;
             // Allow a burst of ~100 ms worth of data (at least 16 KiB) to keep

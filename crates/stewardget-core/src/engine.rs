@@ -1,6 +1,7 @@
 //! The engine: owns the queue, schedules downloads, samples speeds and
 //! persists state. Cheap to clone; every method is non-blocking.
 
+use crate::util::{LockExt, RwLockExt};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -135,6 +136,9 @@ pub(crate) struct Inner {
     state: Mutex<State>,
     /// One save at a time: they share temporary file names.
     persist_lock: Mutex<()>,
+    /// Why the last save of the download list, statistics or history failed;
+    /// `None` once a save worked again.
+    save_error: Mutex<Option<String>>,
     /// Settings changes are read-modify-write: one at a time.
     config_lock: Mutex<()>,
     events: broadcast::Sender<Event>,
@@ -262,7 +266,7 @@ impl Item {
                 (self.frozen.unwrap_or(rec.downloaded), rec.total, self.segments.clone())
             }
             Some(run) => {
-                let t = run.shared.table.lock().unwrap();
+                let t = run.shared.table.lock_ok();
                 let total = run.shared.total().or(rec.total);
                 if t.segments.is_empty() {
                     (rec.downloaded, total, Vec::new())
@@ -319,7 +323,7 @@ impl Item {
 
     fn lane_views(&self) -> Vec<LaneView> {
         let Some(run) = &self.run else { return Vec::new() };
-        let lanes = run.shared.lanes.lock().unwrap();
+        let lanes = run.shared.lanes.lock_ok();
         lanes
             .iter()
             .enumerate()
@@ -331,7 +335,7 @@ impl Item {
                 speed: self.lane_speed.get(i).copied().unwrap_or(0.0),
                 workers: l.workers.load(Ordering::Relaxed),
                 failed: !l.is_alive(),
-                reason: l.reason.lock().unwrap().clone(),
+                reason: l.reason.lock_ok().clone(),
             })
             .collect()
     }
@@ -402,6 +406,7 @@ impl Engine {
             config: RwLock::new(config),
             store,
             persist_lock: Mutex::new(()),
+            save_error: Mutex::new(None),
             config_lock: Mutex::new(()),
             state: Mutex::new(State {
                 items,
@@ -458,7 +463,7 @@ impl Engine {
             parse_url(&c.url)?;
         }
         let ask = self.config().capture_dialog;
-        let handler = self.inner.capture_handler.lock().unwrap().clone().filter(|_| ask);
+        let handler = self.inner.capture_handler.lock_ok().clone().filter(|_| ask);
         let mut results = Vec::with_capacity(captures.len());
         let mut pending = Vec::new();
         for capture in captures {
@@ -588,7 +593,7 @@ impl Engine {
                 && let Some(run) = &mut item.run
             {
                 run.on_stop = AfterStop::Pause;
-                item.frozen = Some(run.shared.table.lock().unwrap().received());
+                item.frozen = Some(run.shared.table.lock_ok().received());
                 run.cancel.cancel();
                 inner.set_status(item, Status::Paused);
             }
@@ -599,7 +604,7 @@ impl Engine {
     /// size and whether it can be resumed. Used by "Add download" dialogs.
     pub async fn check_link(&self, url: &str, options: &DownloadOptions) -> Result<LinkInfo, Error> {
         let url = parse_url(url)?;
-        let client = self.inner.client.read().unwrap().clone();
+        let client = self.inner.client.read_ok().clone();
         let headers = task::request_headers(options);
         let look = |url: Url| {
             let (client, headers) = (client.clone(), headers.clone());
@@ -653,7 +658,7 @@ impl Engine {
     /// Reads a web page (and, with `options.depth`, the pages it links to) and
     /// returns the files it links to. See [`crate::GrabOptions`].
     pub async fn grab_links(&self, url: &str, options: &crate::GrabOptions) -> Result<crate::GrabResult, Error> {
-        let client = self.inner.client.read().unwrap().clone();
+        let client = self.inner.client.read_ok().clone();
         crate::crawl::grab(&client, &self.config(), url, options).await
     }
 
@@ -784,7 +789,7 @@ impl Engine {
             }
             if let Some(run) = &mut item.run {
                 run.on_stop = AfterStop::Pause;
-                item.frozen = Some(run.shared.table.lock().unwrap().received());
+                item.frozen = Some(run.shared.table.lock_ok().received());
                 run.cancel.cancel();
             }
             item.retry_at = None;
@@ -948,7 +953,7 @@ impl Engine {
 
     /// Global speed cap, bytes/second (`0` = unlimited). Applies instantly.
     pub fn set_speed_limit(&self, bytes_per_sec: u64) {
-        let _one_at_a_time = self.inner.config_lock.lock().unwrap();
+        let _one_at_a_time = self.inner.config_lock.lock_ok();
         let mut config = self.config();
         config.speed_limit = bytes_per_sec;
         let _ = self.apply_config(config);
@@ -965,13 +970,13 @@ impl Engine {
     }
 
     pub fn config(&self) -> Config {
-        self.inner.config.read().unwrap().clone()
+        self.inner.config.read_ok().clone()
     }
 
     /// Applies and persists new settings. Network settings affect downloads
     /// started afterwards; limits and concurrency apply immediately.
     pub fn update_config(&self, config: Config) -> Result<(), Error> {
-        let _one_at_a_time = self.inner.config_lock.lock().unwrap();
+        let _one_at_a_time = self.inner.config_lock.lock_ok();
         self.apply_config(config)
     }
 
@@ -979,7 +984,7 @@ impl Engine {
         let config = config.sanitized();
         // Rebuilding drops the connection pool: only do it when the network settings changed.
         let rebuild = {
-            let old = self.inner.config.read().unwrap();
+            let old = self.inner.config.read_ok();
             old.user_agent != config.user_agent
                 || old.connect_timeout_secs != config.connect_timeout_secs
                 || old.http1_only != config.http1_only
@@ -987,7 +992,7 @@ impl Engine {
                 || old.proxy != config.proxy
         };
         let relink = {
-            let old = self.inner.config.read().unwrap();
+            let old = self.inner.config.read_ok();
             rebuild
                 || old.multi_link != config.multi_link
                 || old
@@ -998,23 +1003,23 @@ impl Engine {
         };
         let client = if rebuild { Some(build_client(&config)?) } else { None };
         let pool = if relink {
-            let base = client.clone().unwrap_or_else(|| self.inner.client.read().unwrap().clone());
+            let base = client.clone().unwrap_or_else(|| self.inner.client.read_ok().clone());
             Some(build_pool(&config, &base))
         } else {
             None
         };
         self.inner.store.save_config(&config)?;
         if let Some(client) = client {
-            *self.inner.client.write().unwrap() = client;
+            *self.inner.client.write_ok() = client;
         }
         match pool {
             Some(pool) => {
-                *self.inner.links.write().unwrap() = Arc::new(pool);
-                self.inner.link_stats.lock().unwrap().clear();
+                *self.inner.links.write_ok() = Arc::new(pool);
+                self.inner.link_stats.lock_ok().clear();
             }
             None => {
                 // Only the caps changed: apply them without dropping connections.
-                for link in &self.inner.links.read().unwrap().links {
+                for link in &self.inner.links.read_ok().links {
                     if let Some(l) = config
                         .interfaces
                         .iter()
@@ -1039,7 +1044,7 @@ impl Engine {
             }
             st.dirty |= changed;
         }
-        *self.inner.config.write().unwrap() = config;
+        *self.inner.config.write_ok() = config;
         self.inner.apply_speed_limits();
         if self.inner.store.dir().is_some() {
             self.inner.apply_api_config();
@@ -1051,8 +1056,8 @@ impl Engine {
     /// The network links in use with their live speed. One entry (the default
     /// connection) unless several adapters are bonded.
     pub fn links(&self) -> Vec<LinkView> {
-        let pool = Arc::clone(&self.inner.links.read().unwrap());
-        let stats = self.inner.link_stats.lock().unwrap();
+        let pool = Arc::clone(&self.inner.links.read_ok());
+        let stats = self.inner.link_stats.lock_ok();
         pool.links
             .iter()
             .enumerate()
@@ -1176,7 +1181,7 @@ impl Engine {
     /// Asks yt-dlp (or reads a DASH manifest) for what a page offers.
     pub async fn inspect_media(&self, url: &str) -> Result<crate::MediaInfo, Error> {
         let config = self.config();
-        let client = self.inner.client.read().unwrap().clone();
+        let client = self.inner.client.read_ok().clone();
         let ytdlp = crate::find_tool(config.ytdlp_path.as_deref(), "yt-dlp");
         crate::media::inspect(&client, ytdlp.as_deref(), url.trim()).await
     }
@@ -1252,8 +1257,10 @@ impl Engine {
             scheduled_limit: self.inner.scheduled_limit.load(Ordering::Relaxed).then_some(config.speed_schedule.limit),
             max_concurrent: config.max_concurrent,
             stats: st.stats.clone(),
-            api: self.inner.api.lock().unwrap().state.clone(),
-            extension: self.inner.extension.lock().unwrap().as_ref().map(|(at, browser, version)| ExtensionInfo {
+            api: self.inner.api.lock_ok().state.clone(),
+            save_error: self.inner.save_error.lock_ok().clone(),
+            load_notice: self.inner.store.notice(),
+            extension: self.inner.extension.lock_ok().as_ref().map(|(at, browser, version)| ExtensionInfo {
                 browser: browser.clone(),
                 version: version.clone(),
                 seen_secs: at.elapsed().as_secs(),
@@ -1314,37 +1321,37 @@ impl Engine {
     /// Called when another launch of StewardGet asks this one to show its window
     /// (`POST /api/v1/show`). The handler runs on an engine thread.
     pub fn set_show_handler(&self, handler: impl Fn() + Send + Sync + 'static) {
-        *self.inner.show_handler.lock().unwrap() = Some(Arc::new(handler));
+        *self.inner.show_handler.lock_ok() = Some(Arc::new(handler));
     }
 
     /// Lets the desktop app ask the user about downloads from the browser
     /// before they are added, while [`Config::capture_dialog`] is on. The
     /// handler gets them ready to add and runs on an engine thread.
     pub fn set_capture_handler(&self, handler: impl Fn(Vec<NewDownload>) + Send + Sync + 'static) {
-        *self.inner.capture_handler.lock().unwrap() = Some(Arc::new(handler));
+        *self.inner.capture_handler.lock_ok() = Some(Arc::new(handler));
     }
 
     /// Called when another program asks StewardGet to quit (`POST /api/v1/quit`),
     /// e.g. the installer before it replaces the files.
     pub fn set_quit_handler(&self, handler: impl Fn() + Send + Sync + 'static) {
-        *self.inner.quit_handler.lock().unwrap() = Some(Arc::new(handler));
+        *self.inner.quit_handler.lock_ok() = Some(Arc::new(handler));
     }
 
     /// Runs the quit handler. `false` when no front-end registered one.
     pub(crate) fn request_quit(&self) -> bool {
-        let handler = self.inner.quit_handler.lock().unwrap().clone();
+        let handler = self.inner.quit_handler.lock_ok().clone();
         handler.map(|h| h()).is_some()
     }
 
     /// Runs the show handler. `false` when no front-end with a window registered one.
     pub(crate) fn request_show(&self) -> bool {
-        let handler = self.inner.show_handler.lock().unwrap().clone();
+        let handler = self.inner.show_handler.lock_ok().clone();
         handler.map(|h| h()).is_some()
     }
 
     /// Notes a request from the browser extension.
     pub(crate) fn extension_seen(&self, browser: &str, version: &str) {
-        *self.inner.extension.lock().unwrap() = Some((Instant::now(), browser.to_owned(), version.to_owned()));
+        *self.inner.extension.lock_ok() = Some((Instant::now(), browser.to_owned(), version.to_owned()));
     }
 
     pub fn download(&self, id: DownloadId) -> Option<DownloadView> {
@@ -1362,7 +1369,7 @@ impl Engine {
 
     /// Stops all transfers (they resume on next start), checkpoints and saves.
     pub async fn shutdown(&self) {
-        if let Some(stop) = self.inner.api.lock().unwrap().stop.take() {
+        if let Some(stop) = self.inner.api.lock_ok().stop.take() {
             stop.cancel();
         }
         self.inner.shutting_down.store(true, Ordering::SeqCst);
@@ -1381,7 +1388,7 @@ impl Inner {
         let config = self.config();
         // One listener serves both the browser API and MCP.
         let wanted = (config.api_enabled || config.mcp_enabled, config.api_port, None);
-        let mut api = self.api.lock().unwrap();
+        let mut api = self.api.lock_ok();
         if api.applied.as_ref() == Some(&wanted) {
             return;
         }
@@ -1425,7 +1432,7 @@ impl Inner {
         if self.global_limiter.rate() != global {
             self.global_limiter.set_rate(global);
         }
-        let mut limiters = self.queue_limiters.lock().unwrap();
+        let mut limiters = self.queue_limiters.lock_ok();
         limiters.retain(|id, _| config.queues.iter().any(|q| q.id == *id));
         for q in &config.queues {
             let limiter = limiters.entry(q.id).or_insert_with(|| Arc::new(RateLimiter::new(q.speed_limit)));
@@ -1436,12 +1443,12 @@ impl Inner {
     }
 
     fn queue_limiter(&self, queue: QueueId) -> Arc<RateLimiter> {
-        let mut limiters = self.queue_limiters.lock().unwrap();
+        let mut limiters = self.queue_limiters.lock_ok();
         Arc::clone(limiters.entry(queue).or_insert_with(|| Arc::new(RateLimiter::new(0))))
     }
 
     fn lock(&self) -> MutexGuard<'_, State> {
-        self.state.lock().unwrap()
+        self.state.lock_ok()
     }
 
     fn emit(&self, event: Event) {
@@ -1449,7 +1456,7 @@ impl Inner {
     }
 
     fn config(&self) -> Config {
-        self.config.read().unwrap().clone()
+        self.config.read_ok().clone()
     }
 
     fn with_item(&self, id: DownloadId, f: impl FnOnce(&mut Item, &Inner)) -> Result<(), Error> {
@@ -1476,7 +1483,7 @@ impl Inner {
             return; // the monthly data cap is used up
         }
         let (max, caps): (usize, HashMap<QueueId, usize>) = {
-            let config = self.config.read().unwrap();
+            let config = self.config.read_ok();
             (config.max_concurrent, config.queues.iter().map(|q| (q.id, q.max_concurrent)).collect())
         };
         let mut st = self.lock();
@@ -1522,8 +1529,8 @@ impl Inner {
             url,
             options: item.rec.options.clone(),
             config: self.config(),
-            client: self.client.read().unwrap().clone(),
-            links: Arc::clone(&self.links.read().unwrap()),
+            client: self.client.read_ok().clone(),
+            links: Arc::clone(&self.links.read_ok()),
             global_limiter: Arc::clone(&self.global_limiter),
             queue_limiter: self.queue_limiter(item.rec.queue),
             shared: Arc::clone(&shared),
@@ -1558,7 +1565,7 @@ impl Inner {
             // Final accounting for bytes that arrived since the last sample.
             let late = run.shared.transferred.load(Ordering::Relaxed).saturating_sub(item.last_transferred);
             {
-                let t = run.shared.table.lock().unwrap();
+                let t = run.shared.table.lock_ok();
                 if !t.segments.is_empty() {
                     item.rec.downloaded = t.written();
                     item.segments = t.views();
@@ -1705,7 +1712,7 @@ impl Inner {
             let output = v.rec.options.mux.as_ref().map(|m| m.output.clone()).unwrap_or_default();
             ((v.rec.id, v.rec.path.clone()), (a.rec.id, a.rec.path.clone()), output)
         };
-        if !self.muxing.lock().unwrap().insert(group.clone()) {
+        if !self.muxing.lock_ok().insert(group.clone()) {
             return;
         }
         let ffmpeg = crate::find_tool(self.config().ffmpeg_path.as_deref(), "ffmpeg");
@@ -1717,7 +1724,7 @@ impl Inner {
                 Some(ff) => crate::merge_media(ff, &video.1, &audio.1, &target).map_err(|e| e.to_string()),
                 None => Err("ffmpeg was not found; install it to join video and audio".to_owned()),
             };
-            inner.muxing.lock().unwrap().remove(&group);
+            inner.muxing.lock_ok().remove(&group);
             inner.finish_mux(video.0, audio.0, &video.1, &audio.1, &target, result);
         });
     }
@@ -1811,7 +1818,7 @@ impl Inner {
     /// Pauses everything once the month's data cap is used up, and lets
     /// downloads start again when the cap is raised or a new month begins.
     fn enforce_cap(self: &Arc<Self>) {
-        let cap = self.config.read().unwrap().monthly_cap;
+        let cap = self.config.read_ok().monthly_cap;
         let used = self.lock().stats.month_total(util::now_unix());
         if cap > 0 && used >= cap {
             if !self.cap_hit.swap(true, Ordering::Relaxed) {
@@ -1841,7 +1848,7 @@ impl Inner {
             }
             push_bounded(&mut item.history, item.speed as f32);
             {
-                let t = run.shared.table.lock().unwrap();
+                let t = run.shared.table.lock_ok();
                 item.connections = t.active();
                 item.reconnecting = run.shared.retrying.load(Ordering::Relaxed).min(item.connections);
                 if !t.segments.is_empty() {
@@ -1849,7 +1856,7 @@ impl Inner {
                 }
             }
             {
-                let lanes = run.shared.lanes.lock().unwrap();
+                let lanes = run.shared.lanes.lock_ok();
                 item.lane_prev.resize(lanes.len(), 0);
                 item.lane_speed.resize(lanes.len(), 0.0);
                 for (i, lane) in lanes.iter().enumerate() {
@@ -1874,8 +1881,8 @@ impl Inner {
         st.speed = speed_total;
         push_bounded(&mut st.history, speed_total as f32);
         {
-            let pool = Arc::clone(&self.links.read().unwrap());
-            let mut stats = self.link_stats.lock().unwrap();
+            let pool = Arc::clone(&self.links.read_ok());
+            let mut stats = self.link_stats.lock_ok();
             stats.resize_with(pool.links.len(), LinkStat::default);
             for (link, stat) in pool.links.iter().zip(stats.iter_mut()) {
                 let bytes = link.bytes.load(Ordering::Relaxed);
@@ -1901,7 +1908,7 @@ impl Inner {
     /// Starts or pauses each queue at its configured times.
     fn run_scheduler(self: &Arc<Self>) {
         use chrono::{Datelike, Timelike};
-        let queues = self.config.read().unwrap().queues.clone();
+        let queues = self.config.read_ok().queues.clone();
         let now = chrono::Local::now();
         let key = (i64::from(now.num_days_from_ce()), (now.hour() * 60 + now.minute()) as u16);
         let previous = {
@@ -1956,7 +1963,7 @@ impl Inner {
     /// Saves the download list when it changed (or `force`) and, with `stats`,
     /// the statistics. Does file I/O: call it off the async threads when busy.
     fn persist_parts(&self, force: bool, stats: bool) {
-        let _one_at_a_time = self.persist_lock.lock().unwrap();
+        let _one_at_a_time = self.persist_lock.lock_ok();
         let (list, stats, log) = {
             let mut st = self.lock();
             let list = (st.dirty || force).then(|| {
@@ -1973,15 +1980,38 @@ impl Inner {
             });
             (list, stats, log)
         };
-        // Persisting is best-effort; the next cycle retries.
+        // The next cycle retries, but a failure that keeps happening (disk full,
+        // folder locked) is reported through the snapshot.
+        let mut failure = None;
+        let mut attempted = false;
+        let (mut list_failed, mut stats_failed, mut log_failed) = (false, false, false);
         if let Some(list) = list {
-            let _ = self.store.save_downloads(&list);
+            attempted = true;
+            if let Err(e) = self.store.save_downloads(&list) {
+                (list_failed, failure) = (true, Some(e.to_string()));
+            }
         }
         if let Some(stats) = stats {
-            let _ = self.store.save_stats(&stats);
+            attempted = true;
+            if let Err(e) = self.store.save_stats(&stats) {
+                (stats_failed, failure) = (true, Some(e.to_string()));
+            }
         }
         if let Some(log) = log {
-            let _ = self.store.save_history(&log);
+            attempted = true;
+            if let Err(e) = self.store.save_history(&log) {
+                (log_failed, failure) = (true, Some(e.to_string()));
+            }
+        }
+        if attempted {
+            *self.save_error.lock_ok() = failure;
+            // What could not be written stays pending, so the next cycle tries again.
+            if list_failed || stats_failed || log_failed {
+                let mut st = self.lock();
+                st.dirty |= list_failed;
+                st.stats_dirty |= stats_failed;
+                st.log_dirty |= log_failed;
+            }
         }
     }
 }

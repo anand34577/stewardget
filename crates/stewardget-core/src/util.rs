@@ -294,6 +294,33 @@ pub fn disguised_program(name: &str) -> bool {
     PROGRAMS.contains(&last) && HARMLESS.contains(&before.trim())
 }
 
+/// Locks that ignore poisoning. A panic in one task must not make every later
+/// `lock()` panic as well: the data behind these locks stays usable.
+pub trait LockExt<T> {
+    fn lock_ok(&self) -> std::sync::MutexGuard<'_, T>;
+}
+
+impl<T> LockExt<T> for std::sync::Mutex<T> {
+    fn lock_ok(&self) -> std::sync::MutexGuard<'_, T> {
+        self.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+/// [`LockExt`] for read-write locks.
+pub trait RwLockExt<T> {
+    fn read_ok(&self) -> std::sync::RwLockReadGuard<'_, T>;
+    fn write_ok(&self) -> std::sync::RwLockWriteGuard<'_, T>;
+}
+
+impl<T> RwLockExt<T> for std::sync::RwLock<T> {
+    fn read_ok(&self) -> std::sync::RwLockReadGuard<'_, T> {
+        self.read().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+    fn write_ok(&self) -> std::sync::RwLockWriteGuard<'_, T> {
+        self.write().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
 /// 32 hex characters from the operating system's random number generator,
 /// for access tokens.
 pub fn random_token() -> String {

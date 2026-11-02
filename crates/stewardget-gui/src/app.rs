@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
+use stewardget_core::util::LockExt;
 
 use egui::{Align, Align2, Color32, CornerRadius, FontId, Frame, Layout, Margin, RichText, Sense, Stroke, Ui, vec2};
 use stewardget_core::util::{PowerAction, format_bytes, format_speed};
@@ -250,7 +251,7 @@ impl StewardGetApp {
         {
             let (inbox, ctx) = (inbox.clone(), cc.egui_ctx.clone());
             engine.set_capture_handler(move |batch| {
-                inbox.lock().unwrap().push_back(batch);
+                inbox.lock_ok().push_back(batch);
                 ctx.request_repaint();
             });
         }
@@ -818,7 +819,7 @@ impl StewardGetApp {
                 ctx.input(|i| i.raw.viewports.get(&egui::ViewportId::ROOT).and_then(|v| v.minimized).unwrap_or(false));
             if (self.hidden || minimized) && self.capture.is_none() {
                 // Offer it in the small new-download window and leave the main window where it is.
-                self.inbox.lock().unwrap().push_back(vec![stewardget_core::NewDownload::new(candidate)]);
+                self.inbox.lock_ok().push_back(vec![stewardget_core::NewDownload::new(candidate)]);
                 ctx.request_repaint();
             } else {
                 self.open_add(Some(candidate.to_owned()));
@@ -1513,6 +1514,22 @@ impl StewardGetApp {
             ui.label(RichText::new(counts).size(12.0).color(p.text_dim));
             if failed > 0 {
                 ui.label(RichText::new(format!("· {failed} failed")).size(12.0).color(p.red));
+            }
+            if let Some(why) = &self.snap.save_error {
+                sep(ui, &p);
+                ui.label(RichText::new("Can't save progress").size(12.0).color(p.red)).on_hover_text(format!(
+                    "StewardGet could not write its download list: {why}. Free some disk space or check the data folder; it keeps trying."
+                ));
+            }
+            if config.insecure_tls {
+                sep(ui, &p);
+                ui.label(RichText::new("TLS checks off").size(12.0).color(p.red)).on_hover_text(
+                    "Certificates are not verified for any download (Settings › Connection). Switch it off unless you need it.",
+                );
+            }
+            if let Some(note) = &self.snap.load_notice {
+                sep(ui, &p);
+                ui.label(RichText::new("Data restored").size(12.0).color(p.yellow)).on_hover_text(note.as_str());
             }
             if wide {
                 sep(ui, &p);
@@ -2354,7 +2371,7 @@ impl eframe::App for StewardGetApp {
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         // The browser already let go of downloads waiting in the new-download
         // window: keep single ones, paused, rather than lose them.
-        let mut waiting: Vec<Vec<stewardget_core::NewDownload>> = self.inbox.lock().unwrap().drain(..).collect();
+        let mut waiting: Vec<Vec<stewardget_core::NewDownload>> = self.inbox.lock_ok().drain(..).collect();
         if let Some(w) = self.capture.take() {
             waiting.push(w.into_downloads());
         }
