@@ -1,6 +1,7 @@
 //! Download video or audio from a page (through yt-dlp) or a DASH manifest.
 
 use std::sync::{Arc, Mutex};
+use stewardget_core::util::LockExt;
 
 use egui::RichText;
 use stewardget_core::MediaInfo;
@@ -59,7 +60,7 @@ impl StewardGetApp {
         let (ytdlp, ffmpeg) = self.engine.media_tools();
 
         let done = {
-            let mut phase = d.phase.lock().unwrap();
+            let mut phase = d.phase.lock_ok();
             matches!(&*phase, Phase::Found(_)).then(|| std::mem::replace(&mut *phase, Phase::Idle))
         };
         if let Some(Phase::Found(result)) = done {
@@ -77,7 +78,7 @@ impl StewardGetApp {
             }
         }
 
-        let looking = matches!(*d.phase.lock().unwrap(), Phase::Looking);
+        let looking = matches!(*d.phase.lock_ok(), Phase::Looking);
         let mut close = false;
         let mut start = false;
         let mut download = false;
@@ -191,11 +192,11 @@ impl StewardGetApp {
             }
             d.message = None;
             d.info = None;
-            *d.phase.lock().unwrap() = Phase::Looking;
+            *d.phase.lock_ok() = Phase::Looking;
             let (engine, phase, ctx2) = (self.engine.clone(), Arc::clone(&d.phase), ctx.clone());
             d.task = Some(self.runtime.spawn(async move {
                 let result = engine.inspect_media(&url).await.map_err(|e| e.to_string());
-                *phase.lock().unwrap() = Phase::Found(result);
+                *phase.lock_ok() = Phase::Found(result);
                 ctx2.request_repaint();
             }));
         }

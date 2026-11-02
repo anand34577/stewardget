@@ -4,6 +4,7 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use stewardget_core::util::LockExt;
 
 use egui::{Margin, RichText, Ui};
 use stewardget_core::util::format_bytes;
@@ -49,7 +50,7 @@ impl StewardGetApp {
         }
         // Collect finished jobs.
         if let Some((slot, _)) = &t.dup_job {
-            let done = slot.lock().unwrap().take();
+            let done = slot.lock_ok().take();
             if let Some(found) = done {
                 t.dups = Some(found);
                 t.dup_job = None;
@@ -58,7 +59,7 @@ impl StewardGetApp {
             }
         }
         if let Some(slot) = &t.left_job {
-            let done = slot.lock().unwrap().take();
+            let done = slot.lock_ok().take();
             if let Some(found) = done {
                 t.leftovers = Some(found);
                 t.left_job = None;
@@ -66,7 +67,7 @@ impl StewardGetApp {
                 ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
             }
         }
-        if t.checks.as_ref().is_some_and(|c| c.lock().unwrap().iter().any(|(_, r)| r.is_none())) {
+        if t.checks.as_ref().is_some_and(|c| c.lock_ok().iter().any(|(_, r)| r.is_none())) {
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
         }
 
@@ -133,7 +134,7 @@ impl StewardGetApp {
                         (self.engine.download_folders(), u64::from(t.min_mb) << 20, Arc::clone(&slot), Arc::clone(&cancel));
                     let ctx = ui.ctx().clone();
                     std::thread::spawn(move || {
-                        *out.lock().unwrap() = Some(stewardget_core::find_duplicates(&dirs, min, &flag));
+                        *out.lock_ok() = Some(stewardget_core::find_duplicates(&dirs, min, &flag));
                         ctx.request_repaint();
                     });
                     t.dup_job = Some((slot, cancel));
@@ -214,7 +215,7 @@ impl StewardGetApp {
                     let slot = Slot::default();
                     let (engine, out, ctx) = (self.engine.clone(), Arc::clone(&slot), ui.ctx().clone());
                     std::thread::spawn(move || {
-                        *out.lock().unwrap() = Some(engine.leftovers());
+                        *out.lock_ok() = Some(engine.leftovers());
                         ctx.request_repaint();
                     });
                     t.left_job = Some(slot);
@@ -298,7 +299,7 @@ impl StewardGetApp {
                             .await
                             .map_err(|_| "no answer in time".to_owned())
                             .and_then(|r| r.map_err(|e| e.to_string()));
-                            results.lock().unwrap()[i].1 = Some(r);
+                            results.lock_ok()[i].1 = Some(r);
                             ctx.request_repaint();
                         });
                     }
@@ -307,7 +308,7 @@ impl StewardGetApp {
                 ui.label(RichText::new(format!("{} link{}", links.len(), if links.len() == 1 { "" } else { "s" })).size(12.0).color(p.text_dim));
             });
             let Some(checks) = &t.checks else { return };
-            let rows = checks.lock().unwrap().clone();
+            let rows = checks.lock_ok().clone();
             ui.add_space(4.0);
             let mut good: Vec<NewDownload> = Vec::new();
             for (link, result) in &rows {
@@ -336,7 +337,7 @@ impl StewardGetApp {
                 && rows.iter().all(|(_, r)| r.is_some())
                 && widgets::button(ui, ButtonKind::Primary, Some(Icon::Download), &format!("Download the {} that work", good.len()), true, &p).clicked()
             {
-                self.inbox.lock().unwrap().push_back(good);
+                self.inbox.lock_ok().push_back(good);
                 ui.ctx().request_repaint();
             }
         });

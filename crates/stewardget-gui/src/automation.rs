@@ -2,6 +2,7 @@
 //! links it may use, and what happens to a file once it has arrived.
 
 use std::time::{Duration, Instant};
+use stewardget_core::util::LockExt;
 
 use egui::{RichText, Ui};
 use stewardget_core::{Adapter, Category, Config, NetworkLink, PostAction, PostRule, adapters};
@@ -404,13 +405,13 @@ fn checked(ui: &Ui, name: &str, path: &std::path::Path) -> Option<Result<String,
             let (out, path, name, ctx) =
                 (std::sync::Arc::clone(&slot), path.to_path_buf(), name.to_owned(), ui.ctx().clone());
             std::thread::spawn(move || {
-                *out.lock().unwrap() = Some(stewardget_core::tool_version(&path, &name));
+                *out.lock_ok() = Some(stewardget_core::tool_version(&path, &name));
                 ctx.request_repaint();
             });
             slot
         }
     };
-    let result = slot.lock().unwrap().clone();
+    let result = slot.lock_ok().clone();
     if result.is_none() {
         ui.ctx().request_repaint_after(Duration::from_millis(200));
     }
@@ -422,7 +423,7 @@ fn tool_block(ui: &mut Ui, p: &crate::theme::Palette, tool: &ToolInfo, chosen: &
     let version = found.as_deref().and_then(|f| checked(ui, tool.name, f));
     let install_id = egui::Id::unique(("tool-install", tool.name));
     let install: Option<Install> = ui.data(|d| d.get_temp(install_id));
-    let installing = install.as_ref().is_some_and(|i| i.lock().unwrap().is_none());
+    let installing = install.as_ref().is_some_and(|i| i.lock_ok().is_none());
     let can_winget = cfg!(windows) && stewardget_core::find_tool(None, "winget").is_some();
 
     row(ui, p, tool.name, tool.help, |ui| {
@@ -452,7 +453,7 @@ fn tool_block(ui: &mut Ui, p: &crate::theme::Palette, tool: &ToolInfo, chosen: &
                     ui.data_mut(|d| d.insert_temp(install_id, std::sync::Arc::clone(&state)));
                     let (out, id, ctx) = (state, tool.winget, ui.ctx().clone());
                     std::thread::spawn(move || {
-                        *out.lock().unwrap() = Some(winget_install(id));
+                        *out.lock_ok() = Some(winget_install(id));
                         ctx.request_repaint();
                     });
                 } else {
@@ -470,7 +471,7 @@ fn tool_block(ui: &mut Ui, p: &crate::theme::Palette, tool: &ToolInfo, chosen: &
             format!("Installing {} with the Windows Package Manager… approve any prompt that appears.", tool.name),
             p.accent2,
         ));
-    } else if let Some(Some(result)) = install.as_ref().map(|i| i.lock().unwrap().clone()) {
+    } else if let Some(Some(result)) = install.as_ref().map(|i| i.lock_ok().clone()) {
         note = Some(match result {
             Ok(()) if found.is_some() => (format!("{} was installed and found.", tool.name), p.green),
             Ok(()) => (

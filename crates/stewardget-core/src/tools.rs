@@ -144,8 +144,14 @@ pub fn export_backup(data_dir: &Path, config: &Config, dest: &Path) -> Result<()
     let io = |e: zip::result::ZipError| Error::Io(e.to_string());
     zip.start_file("settings.json", opts).map_err(io)?;
     zip.write_all(shareable_settings(config)?.as_bytes())?;
-    for name in ["history.json", "stats.json", "downloads.json"] {
-        if let Ok(bytes) = fs::read(data_dir.join(name)) {
+    // The lists live in the database; the backup keeps the plain JSON format.
+    let lists = [
+        ("history.json", crate::store::peek_history(data_dir).and_then(|v| serde_json::to_vec(&v).ok())),
+        ("stats.json", crate::store::peek_stats(data_dir).and_then(|v| serde_json::to_vec(&v).ok())),
+        ("downloads.json", crate::store::peek_downloads(data_dir).and_then(|v| serde_json::to_vec(&v).ok())),
+    ];
+    for (name, bytes) in lists {
+        if let Some(bytes) = bytes {
             zip.start_file(name, opts).map_err(io)?;
             zip.write_all(&bytes)?;
         }

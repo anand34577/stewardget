@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
+use stewardget_core::util::LockExt;
 
 use egui::{Align, Align2, Color32, CornerRadius, FontId, Frame, Layout, Margin, RichText, Sense, Stroke, Ui, vec2};
 use stewardget_core::util::{PowerAction, format_bytes, format_speed};
@@ -250,7 +251,7 @@ impl StewardGetApp {
         {
             let (inbox, ctx) = (inbox.clone(), cc.egui_ctx.clone());
             engine.set_capture_handler(move |batch| {
-                inbox.lock().unwrap().push_back(batch);
+                inbox.lock_ok().push_back(batch);
                 ctx.request_repaint();
             });
         }
@@ -818,7 +819,7 @@ impl StewardGetApp {
                 ctx.input(|i| i.raw.viewports.get(&egui::ViewportId::ROOT).and_then(|v| v.minimized).unwrap_or(false));
             if (self.hidden || minimized) && self.capture.is_none() {
                 // Offer it in the small new-download window and leave the main window where it is.
-                self.inbox.lock().unwrap().push_back(vec![stewardget_core::NewDownload::new(candidate)]);
+                self.inbox.lock_ok().push_back(vec![stewardget_core::NewDownload::new(candidate)]);
                 ctx.request_repaint();
             } else {
                 self.open_add(Some(candidate.to_owned()));
@@ -991,13 +992,15 @@ impl StewardGetApp {
                     ui.add_space(10.0);
                 }
                 ui.spacing_mut().item_spacing.x = 6.0;
-                if widgets::icon_button(
-                    ui,
-                    Icon::PanelBottom,
-                    if self.show_details { "Hide details" } else { "Show details" },
-                    &p,
-                )
-                .clicked()
+                // The details panel only exists on the downloads page.
+                if self.page == Page::Downloads
+                    && widgets::icon_button(
+                        ui,
+                        Icon::PanelBottom,
+                        if self.show_details { "Hide details" } else { "Show details" },
+                        &p,
+                    )
+                    .clicked()
                 {
                     self.show_details = !self.show_details;
                 }
@@ -1011,24 +1014,21 @@ impl StewardGetApp {
                 {
                     self.open_add(None);
                 }
-                if widgets::button(
-                    ui,
-                    ButtonKind::Ghost,
-                    Some(Icon::Globe),
-                    if compact { "" } else { "Grab" },
-                    true,
-                    &p,
-                )
-                .on_hover_text("Find the files linked from a web page")
-                .clicked()
-                {
-                    self.grab_dialog = Some(crate::grab::GrabDialog::new(None));
-                }
                 ui.add_space(6.0);
                 // Whatever is left between the menus and the buttons, up to a comfortable width.
                 let room = ui.available_rect_before_wrap().right() - menus_end - 16.0;
-                let width = room.clamp(120.0, if compact { 240.0 } else { 320.0 });
-                self.search_box(ui, width);
+                if room < 120.0 {
+                    // No room for the box: a button opens the command palette, which also finds downloads.
+                    if widgets::button(ui, ButtonKind::Tool, Some(Icon::Search), "", true, &p)
+                        .on_hover_text("Search (Ctrl+K)")
+                        .clicked()
+                    {
+                        self.open_palette();
+                    }
+                } else {
+                    let width = room.clamp(120.0, if compact { 240.0 } else { 320.0 });
+                    self.search_box(ui, width);
+                }
             });
         });
     }
@@ -1131,12 +1131,14 @@ impl StewardGetApp {
 
     fn search_box(&mut self, ui: &mut Ui, width: f32) {
         let p = self.palette;
+        // Too narrow for the "Ctrl K" key cap: leave it out rather than draw over the text.
+        let roomy = width >= 200.0;
         let r = ui
             .add_sized(
                 vec2(width, theme::CONTROL_H),
                 widgets::input(&mut self.search).hint_text("Search downloads").margin(Margin {
                     left: 34,
-                    right: 54,
+                    right: if roomy { 54 } else { 10 },
                     top: 8,
                     bottom: 8,
                 }),
@@ -1148,7 +1150,7 @@ impl StewardGetApp {
             Icon::Search,
             p.text_dim,
         );
-        if !r.has_focus() && self.search.is_empty() {
+        if roomy && !r.has_focus() && self.search.is_empty() {
             // Keyboard hint, like a key cap.
             let galley = ui.painter().layout_no_wrap("Ctrl K".to_owned(), FontId::proportional(11.0), p.text_dim);
             let key = egui::Rect::from_min_size(
@@ -1263,7 +1265,7 @@ impl StewardGetApp {
         let live_h = if collapsed { 0.0 } else { 72.0 + 8.0 + ui.spacing().item_spacing.y * 2.0 };
         let list_h = (ui.available_height() - 3.0 * entry_h - 8.0 - live_h).max(60.0);
         ui.allocate_ui(vec2(ui.available_width(), list_h), |ui| {
-            let out = egui::ScrollArea::vertical().id_salt("nav-scroll").auto_shrink([false, false]).show(ui, |ui| {
+            egui::ScrollArea::vertical().id_salt("nav-scroll").auto_shrink([false, false]).show(ui, |ui| {
                 // Keep clear of the scroll bar, which floats over the right edge.
                 ui.set_max_width(ui.available_width() - 8.0);
                 fn count(all: &[DownloadView], f: ListFilter) -> usize {
@@ -1325,15 +1327,6 @@ impl StewardGetApp {
                     }
                 }
             });
-            // Fade out what continues below the bottom edge, instead of cutting it off.
-            // Only then: with everything in view, the last entry must look like the others.
-            let below = out.content_size.y - out.state.clamped_offset().y - out.inner_rect.height();
-            if below > 1.0 {
-                let list = out.inner_rect;
-                let h = below.min(28.0);
-                let fade = egui::Rect::from_min_max(egui::pos2(list.left(), list.bottom() - h), list.right_bottom());
-                widgets::paint_vertical_gradient(ui.painter(), fade, Color32::TRANSPARENT, p.sidebar);
-            }
         });
         ui.with_layout(Layout::bottom_up(Align::Min), |ui| {
             if nav_item(ui, Icon::Gear, None, "Settings", 0, self.page == Page::Settings, collapsed, &p).clicked() {
@@ -1513,6 +1506,22 @@ impl StewardGetApp {
             ui.label(RichText::new(counts).size(12.0).color(p.text_dim));
             if failed > 0 {
                 ui.label(RichText::new(format!("· {failed} failed")).size(12.0).color(p.red));
+            }
+            if let Some(why) = &self.snap.save_error {
+                sep(ui, &p);
+                ui.label(RichText::new("Can't save progress").size(12.0).color(p.red)).on_hover_text(format!(
+                    "StewardGet could not write its download list: {why}. Free some disk space or check the data folder; it keeps trying."
+                ));
+            }
+            if config.insecure_tls {
+                sep(ui, &p);
+                ui.label(RichText::new("TLS checks off").size(12.0).color(p.red)).on_hover_text(
+                    "Certificates are not verified for any download (Settings › Connection). Switch it off unless you need it.",
+                );
+            }
+            if let Some(note) = &self.snap.load_notice {
+                sep(ui, &p);
+                ui.label(RichText::new("Data restored").size(12.0).color(p.yellow)).on_hover_text(note.as_str());
             }
             if wide {
                 sep(ui, &p);
@@ -2191,20 +2200,6 @@ impl eframe::App for StewardGetApp {
                         // Rounded corners: keep page content from painting over them.
                         let canvas = ui.max_rect();
                         ui.set_clip_rect(canvas.shrink(1.0).intersect(ui.clip_rect()));
-                        // Aurora: soft accent light falling in from the top of the canvas.
-                        let glow = if p.dark { 0.18 } else { 0.08 };
-                        widgets::paint_glow(
-                            ui.painter(),
-                            egui::pos2(canvas.right() - canvas.width() * 0.22, canvas.top() - 60.0),
-                            canvas.width().clamp(380.0, 620.0),
-                            p.accent.gamma_multiply(glow),
-                        );
-                        widgets::paint_glow(
-                            ui.painter(),
-                            egui::pos2(canvas.left() + canvas.width() * 0.25, canvas.top() - 120.0),
-                            canvas.width().clamp(300.0, 480.0),
-                            p.accent2.gamma_multiply(glow * 0.6),
-                        );
                         let details = self.page == Page::Downloads && self.show_details && !self.selection.is_empty();
                         if details && canvas.width() >= 980.0 {
                             egui::Panel::right("stewardget-inspector")
@@ -2354,7 +2349,7 @@ impl eframe::App for StewardGetApp {
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         // The browser already let go of downloads waiting in the new-download
         // window: keep single ones, paused, rather than lose them.
-        let mut waiting: Vec<Vec<stewardget_core::NewDownload>> = self.inbox.lock().unwrap().drain(..).collect();
+        let mut waiting: Vec<Vec<stewardget_core::NewDownload>> = self.inbox.lock_ok().drain(..).collect();
         if let Some(w) = self.capture.take() {
             waiting.push(w.into_downloads());
         }

@@ -248,6 +248,11 @@ pub struct EngineSnapshot {
     pub max_concurrent: usize,
     pub stats: Stats,
     pub api: ApiState,
+    /// Set while the download list, statistics or history cannot be saved
+    /// (disk full, folder locked): progress would be lost in a crash.
+    pub save_error: Option<String>,
+    /// A state file was damaged at start-up (restored from backup or empty).
+    pub load_notice: Option<String>,
     /// The browser extension that last talked to the API, if any did since start-up.
     pub extension: Option<ExtensionInfo>,
 }

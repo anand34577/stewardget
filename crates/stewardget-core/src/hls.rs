@@ -7,6 +7,7 @@
 //! Live streams (no `#EXT-X-ENDLIST`) and SAMPLE-AES (DRM-style) encryption
 //! are refused with a clear message.
 
+use crate::util::LockExt;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
@@ -115,7 +116,7 @@ pub(crate) async fn run(job: &Job, headers: &HeaderMap, probe: Probe) -> Result<
         shared.total.store(total, Ordering::Relaxed);
         let mut seg = Segment::new(0, if total == u64::MAX { crate::segment::UNBOUNDED } else { total }, bytes);
         seg.active = done < media.pieces.len();
-        *shared.table.lock().unwrap() = SegmentTable { segments: vec![seg] };
+        *shared.table.lock_ok() = SegmentTable { segments: vec![seg] };
     };
     set_progress(done, bytes);
     shared.resumable.store(true, Ordering::Relaxed);

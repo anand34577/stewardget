@@ -48,16 +48,21 @@ use crate::{Capture, Status};
 const MAX_HEADER: usize = 16 * 1024;
 /// Room for "download all links" from a big page, cookies included.
 const MAX_BODY: usize = 8 * 1024 * 1024;
+/// Requests handled at once; a flood of connections is turned away instead of queued.
+const MAX_CONNECTIONS: usize = 64;
 
 pub(crate) async fn serve(listener: TcpListener, inner: Weak<Inner>, stop: CancellationToken) {
+    let slots = std::sync::Arc::new(tokio::sync::Semaphore::new(MAX_CONNECTIONS));
     loop {
         let accepted = tokio::select! {
             _ = stop.cancelled() => return,
             a = listener.accept() => a,
         };
         let Ok((stream, _)) = accepted else { continue };
+        let Ok(slot) = std::sync::Arc::clone(&slots).try_acquire_owned() else { continue };
         let inner = inner.clone();
         tokio::spawn(async move {
+            let _slot = slot;
             let _ = tokio::time::timeout(Duration::from_secs(10), handle(stream, inner)).await;
         });
     }
@@ -119,6 +124,7 @@ async fn read_request(stream: &mut TcpStream) -> Option<Request> {
         .collect();
     let len: usize = headers.iter().find(|(k, _)| k == "content-length").and_then(|(_, v)| v.parse().ok()).unwrap_or(0);
     if len > MAX_BODY {
+        respond(stream, 413, &Message { error: "the request is too large" }).await;
         return None;
     }
     let mut body = buf[header_end + 4..].to_vec();
@@ -144,6 +150,7 @@ async fn respond(stream: &mut TcpStream, status: u16, body: &impl Serialize) {
         403 => "Forbidden",
         404 => "Not Found",
         405 => "Method Not Allowed",
+        413 => "Payload Too Large",
         _ => "Error",
     };
     let head = format!(

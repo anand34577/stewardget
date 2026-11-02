@@ -6,6 +6,27 @@ All notable changes to StewardGet are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-11-02
+
+### Changed
+- **Downloads are sorted into category folders by default** (Video, Music, Programs, Documents, Archives, Images, Other), as IDM does. Settings saved by earlier versions are switched over once; turn it off again in *Settings > General*.
+- **The download list, history and statistics are stored in SQLite** (`state.db`) so large libraries save quickly; earlier JSON lists are moved in on first start. Backups keep the JSON format.
+- **Flat look:** gradients, glows, the coloured light at the top of the window, card and button shadows and the moving shine on progress bars are gone.
+- **The logo is flat.** The app icon, the extension icons and the installer panel no longer use a gradient.
+- The header is calmer: *Grab files from a web page* lives in the menu, and the details toggle shows only on the downloads page.
+- Windows: a new data folder is limited to the current user and SYSTEM.
+- MCP assistants can no longer delete files from disk unless *Let assistants delete files* is switched on.
+
+### Added
+- The status bar warns when progress cannot be saved ("Can't save progress"), when a damaged data file was restored, and while TLS checks are off.
+- Icon-only buttons have names for screen readers.
+
+### Fixed
+- Poisoned locks no longer cascade into panics.
+- The local API answers 413 for oversized requests and caps concurrent connections.
+- Dialogs no longer extend past the edges of a small window.
+- On a narrow window the download list keeps more room for file names, and the search box turns into a button instead of overlapping the menu.
+
 ## [0.11.1] - 2026-10-30
 
 ### Changed

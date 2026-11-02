@@ -12,19 +12,12 @@ from pathlib import Path
 from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[2]
-TOP = (139, 92, 246)  # violet, as in the logo
-BOTTOM = (6, 182, 212)  # cyan
+PANEL = (17, 20, 28)  # flat dark slate, the app's own background
 
 
 def panel(width: int, height: int, icon: Image.Image) -> Image.Image:
-    """Vertical violet-to-cyan gradient with the logo in the upper third."""
-    img = Image.new("RGB", (width, height))
-    px = img.load()
-    for y in range(height):
-        t = y / (height - 1)
-        row = tuple(round(a + (b - a) * t) for a, b in zip(TOP, BOTTOM))
-        for x in range(width):
-            px[x, y] = row
+    """Flat dark panel with the logo in the upper third."""
+    img = Image.new("RGB", (width, height), PANEL)
     size = round(width * 0.62)
     logo = icon.resize((size, size), Image.LANCZOS)
     img.paste(logo, ((width - size) // 2, round(height * 0.22)), logo)

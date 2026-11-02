@@ -2,8 +2,7 @@
 
 use egui::epaint::{Mesh, PathStroke};
 use egui::{
-    Align2, Color32, CornerRadius, FontId, Pos2, Rect, Response, Sense, Shadow, Shape, Stroke, StrokeKind, Ui, Vec2,
-    pos2, vec2,
+    Align2, Color32, CornerRadius, FontId, Pos2, Rect, Response, Sense, Shape, Stroke, StrokeKind, Ui, Vec2, pos2, vec2,
 };
 use stewardget_core::util::{format_bytes, format_speed};
 use stewardget_core::{DayTotal, DownloadView, Status};
@@ -17,110 +16,10 @@ pub fn lerp_color(a: Color32, b: Color32, t: f32) -> Color32 {
     Color32::from_rgba_unmultiplied(l(a.r(), b.r()), l(a.g(), b.g()), l(a.b(), b.b()), l(a.a(), b.a()))
 }
 
-/// Fills the `[a, b]` slice of the pill-shaped `rect` with a gradient that
-/// spans the whole pill, so adjacent slices join seamlessly and ends stay round.
-fn pill_slice(rect: Rect, a: f32, b: f32, left: Color32, right: Color32) -> Shape {
-    let (a, b) = (a.max(rect.left()), b.min(rect.right()));
-    let r = rect.height() / 2.0;
-    let cy = rect.center().y;
-    let half_height = |x: f32| {
-        let d = (rect.left() + r - x).max(x - (rect.right() - r)).max(0.0);
-        (r * r - d * d).max(0.0).sqrt()
-    };
-    let mut xs = vec![a, b];
-    for (lo, hi) in [(rect.left(), rect.left() + r), (rect.right() - r, rect.right())] {
-        let mut x = lo.max(a);
-        while x < hi.min(b) {
-            xs.push(x);
-            x += 0.75;
-        }
-    }
-    xs.sort_by(f32::total_cmp);
-    xs.dedup();
-    let mut mesh = Mesh::default();
-    for (i, &x) in xs.iter().enumerate() {
-        let color = lerp_color(left, right, (x - rect.left()) / rect.width().max(1.0));
-        let h = half_height(x);
-        mesh.colored_vertex(pos2(x, cy - h), color);
-        mesh.colored_vertex(pos2(x, cy + h), color);
-        if i > 0 {
-            let v = (i as u32) * 2;
-            mesh.add_triangle(v - 2, v - 1, v);
-            mesh.add_triangle(v - 1, v + 1, v);
-        }
-    }
-    Shape::mesh(mesh)
-}
-
-/// Outline of a rounded rectangle, clockwise from the top-left corner, with the
-/// outward normal of each point (used to feather the edge of gradient meshes).
-fn rounded_outline(rect: Rect, r: f32) -> Vec<(Pos2, Vec2)> {
-    let r = r.min(rect.width() / 2.0).min(rect.height() / 2.0).max(0.0);
-    let corners = [
-        (pos2(rect.left() + r, rect.top() + r), std::f32::consts::PI),
-        (pos2(rect.right() - r, rect.top() + r), std::f32::consts::PI * 1.5),
-        (pos2(rect.right() - r, rect.bottom() - r), 0.0),
-        (pos2(rect.left() + r, rect.bottom() - r), std::f32::consts::PI * 0.5),
-    ];
-    let steps = if r < 1.0 { 1 } else { (r * 0.6).ceil().clamp(3.0, 12.0) as usize };
-    let mut out = Vec::with_capacity(4 * (steps + 1));
-    for (c, start) in corners {
-        for i in 0..=steps {
-            let a = start + std::f32::consts::FRAC_PI_2 * i as f32 / steps as f32;
-            let n = vec2(a.cos(), a.sin());
-            out.push((c + n * r, n));
-        }
-    }
-    out
-}
-
-/// A rounded rectangle filled with a gradient from `a` to `b`, left to right
-/// (or top to bottom when `vertical`), with an anti-aliased edge.
-pub fn paint_gradient_rect(painter: &egui::Painter, rect: Rect, r: f32, a: Color32, b: Color32, vertical: bool) {
-    let outline = rounded_outline(rect, r);
-    let color_at = |pt: Pos2| {
-        let t = if vertical {
-            (pt.y - rect.top()) / rect.height().max(1.0)
-        } else {
-            (pt.x - rect.left()) / rect.width().max(1.0)
-        };
-        lerp_color(a, b, t)
-    };
-    let mut mesh = Mesh::default();
-    mesh.colored_vertex(rect.center(), color_at(rect.center()));
-    let n = outline.len() as u32;
-    for &(pt, normal) in &outline {
-        let inner = pt - normal * 0.5;
-        mesh.colored_vertex(inner, color_at(inner));
-        mesh.colored_vertex(pt + normal * 0.5, Color32::TRANSPARENT);
-    }
-    for i in 0..n {
-        let j = (i + 1) % n;
-        let (ii, io, ji, jo) = (1 + i * 2, 2 + i * 2, 1 + j * 2, 2 + j * 2);
-        mesh.add_triangle(0, ii, ji);
-        mesh.add_triangle(ii, io, jo);
-        mesh.add_triangle(ii, jo, ji);
-    }
-    painter.add(Shape::mesh(mesh));
-}
-
-/// A soft round light, for the ambient glows behind hero areas.
-pub fn paint_glow(painter: &egui::Painter, center: Pos2, radius: f32, color: Color32) {
-    let mut mesh = Mesh::default();
-    mesh.colored_vertex(center, color);
-    let steps = 48;
-    for i in 0..=steps {
-        let a = std::f32::consts::TAU * i as f32 / steps as f32;
-        mesh.colored_vertex(center + vec2(a.cos(), a.sin()) * radius * 0.45, color.gamma_multiply(0.55));
-        mesh.colored_vertex(center + vec2(a.cos(), a.sin()) * radius, Color32::TRANSPARENT);
-    }
-    for i in 0..steps as u32 {
-        let (m, o, m2, o2) = (1 + i * 2, 2 + i * 2, 3 + i * 2, 4 + i * 2);
-        mesh.add_triangle(0, m, m2);
-        mesh.add_triangle(m, o, o2);
-        mesh.add_triangle(m, o2, m2);
-    }
-    painter.add(Shape::mesh(mesh));
+/// A rounded rectangle in one flat colour (`a`). The second colour of the old
+/// gradient API is ignored: the interface is flat.
+pub fn paint_gradient_rect(painter: &egui::Painter, rect: Rect, r: f32, a: Color32, _b: Color32, _vertical: bool) {
+    painter.rect_filled(rect, CornerRadius::same(r.round().clamp(0.0, 255.0) as u8), a);
 }
 
 /// Circular progress: a track ring and an arc from twelve o'clock, shaded
@@ -305,7 +204,7 @@ pub fn kpi_tile(
             painter.rect_filled(bar, CornerRadius::same(3), p.track);
             let fill = Rect::from_min_max(bar.min, pos2(bar.left() + bar.width() * f.clamp(0.0, 1.0), bar.bottom()));
             if fill.width() > 0.5 {
-                paint_gradient_rect(painter, fill, 3.0, color.gamma_multiply(0.75), color, false);
+                paint_gradient_rect(painter, fill, 3.0, color, color, false);
             }
         }
     }
@@ -354,20 +253,19 @@ pub fn round_button(ui: &mut Ui, icon: Icon, tooltip: &str, primary: bool, p: &P
     response.on_hover_text(tooltip).on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
-/// Gradient colours for a download's state.
+/// The colour of a download's state, as a pair kept for callers that blend two ends.
 pub fn status_gradient(status: Status, p: &Palette) -> (Color32, Color32) {
-    match status {
-        Status::Completed => (p.green, p.green),
-        // Opaque shades: a translucent end would show the track through it.
-        Status::Failed => (lerp_color(p.red, p.card, 0.3), p.red),
-        Status::Paused => (lerp_color(p.yellow, p.card, 0.3), p.yellow),
-        Status::Queued => (p.text_dim, p.text_dim),
-        _ => (p.accent, p.accent2),
-    }
+    let c = match status {
+        Status::Completed => p.green,
+        Status::Failed => p.red,
+        Status::Paused => p.yellow,
+        Status::Queued => p.text_dim,
+        _ => p.accent,
+    };
+    (c, c)
 }
 
-/// A slim progress bar painted into `rect` (no layout allocation). Live
-/// downloads get a soft glow and a highlight that sweeps along the filled part.
+/// A slim, flat progress bar painted into `rect` (no layout allocation).
 pub fn paint_progress(ui: &Ui, rect: Rect, d: &DownloadView, p: &Palette) {
     let painter = ui.painter();
     painter.rect_filled(rect, CornerRadius::same((rect.height() / 2.0) as u8), p.track);
@@ -375,43 +273,21 @@ pub fn paint_progress(ui: &Ui, rect: Rect, d: &DownloadView, p: &Palette) {
     match d.fraction() {
         Some(frac) if frac > 0.0 => {
             let end = rect.left() + rect.width() * frac;
-            let live = d.status == Status::Downloading;
-            if live {
-                let filled = Rect::from_min_max(rect.min, pos2(end.max(rect.left() + rect.height()), rect.max.y));
-                painter.add(p.glow(to, 10).as_shape(filled, CornerRadius::same((rect.height() / 2.0) as u8)));
-            }
             let filled = Rect::from_min_max(rect.min, pos2(end.max(rect.left() + rect.height()), rect.max.y));
             paint_gradient_rect(painter, filled, rect.height() / 2.0, from, lerp_color(from, to, frac), false);
-            if live && end - rect.left() > 24.0 {
-                // A short bright band travelling left to right, once every two seconds.
-                let t = (ui.input(|i| i.time) as f32 * 0.5).fract();
-                let w = 36.0f32.min((end - rect.left()) * 0.5);
-                let x = rect.left() - w + t * (end - rect.left() + w);
-                let shine = Color32::from_white_alpha(if p.dark { 60 } else { 80 });
-                let r = rect.height() / 2.0;
-                let clip = Rect::from_min_max(pos2(rect.left() + r, rect.top()), pos2(end - r, rect.bottom()));
-                let mut mesh = Mesh::default();
-                for (i, (bx, c)) in [(x, Color32::TRANSPARENT), (x + w / 2.0, shine), (x + w, Color32::TRANSPARENT)]
-                    .into_iter()
-                    .enumerate()
-                {
-                    mesh.colored_vertex(pos2(bx, rect.top()), c);
-                    mesh.colored_vertex(pos2(bx, rect.bottom()), c);
-                    if i > 0 {
-                        let v = i as u32 * 2;
-                        mesh.add_triangle(v - 2, v - 1, v);
-                        mesh.add_triangle(v - 1, v + 1, v);
-                    }
-                }
-                painter.with_clip_rect(clip.intersect(painter.clip_rect())).add(Shape::mesh(mesh));
-                ui.ctx().request_repaint();
-            }
         }
         None if d.status.is_active() => {
             let t = ui.input(|i| i.time) as f32;
             let w = rect.width() * 0.3;
             let x = rect.left() + (t * 0.7).fract() * (rect.width() + w) - w;
-            painter.add(pill_slice(rect, x, x + w, from, to));
+            let r = rect.height() / 2.0;
+            let slice = Rect::from_min_max(
+                pos2(x.max(rect.left()), rect.top()),
+                pos2((x + w).min(rect.right()), rect.bottom()),
+            );
+            if slice.width() > 0.0 {
+                painter.rect_filled(slice, CornerRadius::same(r as u8), from);
+            }
             ui.ctx().request_repaint();
         }
         _ => {}
@@ -500,7 +376,7 @@ pub fn area_chart(ui: &mut Ui, values: &[f32], size: Vec2, color: Color32, p: &P
     };
     let points: Vec<Pos2> = values.iter().enumerate().map(|(i, &v)| point(i, v)).collect();
     let mut mesh = Mesh::default();
-    let (top, bottom) = (color.gamma_multiply(0.32), color.gamma_multiply(0.0));
+    let (top, bottom) = (color.gamma_multiply(0.10), color.gamma_multiply(0.10));
     for w in points.windows(2) {
         let i = mesh.vertices.len() as u32;
         mesh.colored_vertex(w[0], top);
@@ -731,18 +607,6 @@ fn focus_ring(ui: &Ui, rect: Rect, r: u8, p: &Palette) {
     );
 }
 
-/// Fills `rect` with a top-to-bottom gradient.
-pub fn paint_vertical_gradient(painter: &egui::Painter, rect: Rect, top: Color32, bottom: Color32) {
-    let mut mesh = Mesh::default();
-    mesh.colored_vertex(rect.left_top(), top);
-    mesh.colored_vertex(rect.right_top(), top);
-    mesh.colored_vertex(rect.right_bottom(), bottom);
-    mesh.colored_vertex(rect.left_bottom(), bottom);
-    mesh.add_triangle(0, 1, 2);
-    mesh.add_triangle(0, 2, 3);
-    painter.add(Shape::mesh(mesh));
-}
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ButtonKind {
     Primary,
@@ -784,6 +648,12 @@ pub fn button(ui: &mut Ui, kind: ButtonKind, icon: Option<Icon>, text: &str, ena
     let size = vec2((galley.size().x + icon_w + pad * 2.0).max(CONTROL_H), CONTROL_H);
     let sense = if enabled { Sense::click() } else { Sense::hover() };
     let (rect, response) = ui.allocate_exact_size(size, sense);
+    // Icon-only buttons would otherwise have no name for a screen reader.
+    let accessible_name = match icon {
+        Some(icon) if text.is_empty() => format!("{icon:?}"),
+        _ => text.to_owned(),
+    };
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, accessible_name.clone()));
     let painter = ui.painter();
     let pressed = enabled && response.is_pointer_button_down_on();
     let fill = if pressed {
@@ -1022,17 +892,11 @@ pub fn logo(ui: &mut Ui, size: f32) -> Response {
 
 /// A rounded panel frame.
 pub fn card(p: &Palette) -> egui::Frame {
-    let frame = egui::Frame::new()
+    egui::Frame::new()
         .fill(p.card)
         .stroke(Stroke::new(1.0, p.border))
         .corner_radius(CornerRadius::same(radius::LG))
-        .inner_margin(egui::Margin::same(16));
-    // Light themes lift cards off the canvas with a soft shadow; dark ones rely on the fill.
-    if p.dark {
-        frame
-    } else {
-        frame.shadow(Shadow { offset: [0, 1], blur: 6, spread: 0, color: Color32::from_black_alpha(10) })
-    }
+        .inner_margin(egui::Margin::same(16))
 }
 
 /// Upper-case text in the caption style, for painting.
@@ -1095,7 +959,7 @@ pub fn section(ui: &mut Ui, text: &str, p: &Palette) -> bool {
     let open = ui.ctx().data_mut(|d| *d.get_persisted_mut_or(id, true));
     let width = ui.available_width().min(150.0);
     let (rect, r) = ui.allocate_exact_size(vec2(width, 20.0), Sense::click());
-    let color = if r.hovered() { p.text } else { lerp_color(p.text_dim, p.sidebar, 0.15) };
+    let color = if r.hovered() { p.text } else { p.text_dim };
     let galley = caps_galley(ui, &text.to_uppercase(), 10.5, color);
     let text_w = galley.size().x;
     let x = rect.left() + 10.0;

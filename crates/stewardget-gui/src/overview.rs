@@ -38,11 +38,9 @@ impl StewardGetApp {
                 );
                 ui.label(RichText::new(greeting(&snap, waiting)).size(crate::theme::size::SM).color(p.text_dim));
                 ui.add_space(12.0);
-                // Hero: the live speed over its own graph, lit by a soft glow of the accent.
+                // Hero: the live speed over its own graph.
                 card(&p).show(ui, |ui| {
                     ui.set_min_width(ui.available_width());
-                    let glow = ui.painter().add(egui::Shape::Noop);
-                    let top_left = ui.min_rect().min;
                     ui.horizontal(|ui| {
                         ui.vertical(|ui| {
                             widgets::caption(ui, "Right now", &p);
@@ -87,22 +85,6 @@ impl StewardGetApp {
                             widgets::area_chart(ui, &snap.history, vec2(w, 112.0), p.accent2, &p);
                         });
                     });
-                    let card_rect = ui.min_rect();
-                    let glow_rect = egui::Rect::from_min_size(
-                        top_left + vec2(40.0, 30.0),
-                        vec2(card_rect.width() * 0.35, (card_rect.height() - 60.0).max(10.0)),
-                    );
-                    let strength = if snap.speed > 1.0 { 0.32 } else { 0.16 };
-                    ui.painter().set(
-                        glow,
-                        egui::Shadow {
-                            offset: [0, 0],
-                            blur: 160,
-                            spread: 0,
-                            color: p.accent.gamma_multiply(if p.dark { strength * 0.5 } else { strength * 0.3 }),
-                        }
-                        .as_shape(glow_rect, egui::CornerRadius::same(20)),
-                    );
                 });
                 ui.add_space(12.0);
 

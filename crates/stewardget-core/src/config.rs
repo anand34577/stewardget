@@ -203,6 +203,10 @@ pub struct Config {
     pub download_dir: PathBuf,
     /// Sort downloads into sub-folders such as `Video/` or `Archives/`.
     pub auto_categorize: bool,
+    /// Sorting into category folders became the default in 0.12; settings saved
+    /// before that had it off without the user choosing so. Set once it was turned on.
+    #[serde(default = "no")]
+    pub category_sort_default_applied: bool,
     /// How many downloads may transfer at the same time.
     pub max_concurrent: usize,
     /// Parallel connections per download.
@@ -289,6 +293,9 @@ pub struct Config {
     /// Serve the Model Context Protocol on the local API (`/mcp`), so AI
     /// assistants can manage downloads. Needs `mcp_token`.
     pub mcp_enabled: bool,
+    /// Let MCP clients delete downloaded files from disk (`remove_download` with
+    /// `delete_file`). Off unless the user allows it.
+    pub mcp_allow_delete: bool,
     /// Bearer token MCP clients must send; created when MCP is switched on.
     pub mcp_token: Option<String>,
     /// Secret the command line and the installer use for the parts of the local
@@ -356,11 +363,16 @@ pub fn default_user_agent() -> String {
     )
 }
 
+fn no() -> bool {
+    false
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
             download_dir: default_download_dir(),
-            auto_categorize: false,
+            auto_categorize: true,
+            category_sort_default_applied: true,
             max_concurrent: 3,
             connections: 8,
             min_split_size: 1024 * 1024,
@@ -398,6 +410,7 @@ impl Default for Config {
             on_complete_command: None,
             notifications: true,
             mcp_enabled: false,
+            mcp_allow_delete: false,
             mcp_token: None,
             control_token: None,
             completion_sound: true,
@@ -430,6 +443,10 @@ fn is_stock_user_agent(ua: &str) -> bool {
 impl Config {
     /// Clamps every value into a sane range so a hand-edited file can't break the engine.
     pub fn sanitized(mut self) -> Self {
+        if !self.category_sort_default_applied {
+            self.auto_categorize = true;
+            self.category_sort_default_applied = true;
+        }
         self.max_concurrent = self.max_concurrent.clamp(1, 64);
         self.connections = self.connections.clamp(1, 64);
         self.min_split_size = self.min_split_size.clamp(64 * 1024, 1 << 30);

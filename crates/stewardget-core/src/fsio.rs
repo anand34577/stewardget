@@ -89,13 +89,37 @@ fn create_private(path: &Path) -> io::Result<File> {
 
 /// Creates a data directory that only its owner can enter.
 pub(crate) fn create_private_dir(dir: &Path) -> io::Result<()> {
+    #[cfg(windows)]
+    let fresh = !dir.exists();
     std::fs::create_dir_all(dir)?;
+    #[cfg(windows)]
+    if fresh {
+        restrict_to_owner(dir);
+    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
     }
     Ok(())
+}
+
+/// Windows: removes the inherited permissions of a new data folder and leaves
+/// access to the current user and SYSTEM only (best effort; the folder is in
+/// the user's profile, which is private by default).
+#[cfg(windows)]
+fn restrict_to_owner(dir: &Path) {
+    use std::os::windows::process::CommandExt;
+    let Some(user) = std::env::var_os("USERNAME").filter(|u| !u.is_empty()) else { return };
+    let mut grant = user;
+    grant.push(":(OI)(CI)F");
+    let _ = std::process::Command::new("icacls")
+        .arg(dir)
+        .args(["/inheritance:r", "/grant:r"])
+        .arg(grant)
+        .args(["/grant:r", "SYSTEM:(OI)(CI)F"])
+        .creation_flags(0x0800_0000)
+        .output();
 }
 
 /// Writes `data` to a temp file next to `path`, then renames it into place.

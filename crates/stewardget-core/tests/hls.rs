@@ -109,7 +109,8 @@ fn temp_dir(name: &str) -> std::path::PathBuf {
 }
 
 fn engine(dir: &std::path::Path) -> Engine {
-    let config = Config { download_dir: dir.to_path_buf(), connections: 4, ..Config::default() };
+    let config =
+        Config { download_dir: dir.to_path_buf(), connections: 4, auto_categorize: false, ..Config::default() };
     Engine::start(EngineOptions::in_memory().with_config(config)).unwrap()
 }
 
