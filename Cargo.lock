@@ -5284,7 +5284,7 @@ checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 
 [[package]]
 name = "stewardget-cli"
-version = "0.12.0"
+version = "0.12.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -5299,7 +5299,7 @@ dependencies = [
 
 [[package]]
 name = "stewardget-core"
-version = "0.12.0"
+version = "0.12.1"
 dependencies = [
  "aes",
  "bytes",
@@ -5333,7 +5333,7 @@ dependencies = [
 
 [[package]]
 name = "stewardget-gui"
-version = "0.12.0"
+version = "0.12.1"
 dependencies = [
  "arboard",
  "directories",

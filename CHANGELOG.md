@@ -6,6 +6,25 @@ All notable changes to StewardGet are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-11-04
+
+### Changed
+- **Empty pages are quieter.** With no downloads, the list no longer shows greyed Start all / Pause all buttons or column titles, and History hides its filters and buttons until something is recorded.
+- **Failed downloads say why in the list.** The reason appears in red under the name and uses the free space in the row, so "HTTP 404" is no longer cut off.
+- **Files without a name from the server** are shown as "Unnamed file from <site>" everywhere instead of "download".
+- The sidebar's speed card appears only while something is downloading, and a list that scrolls fades out at the edge.
+- Right-click menus offer only what applies: a finished download no longer lists Resume, Pause, Refresh link or queue moves.
+- The command palette highlights the whole row, and every page and action has its own icon.
+- *Settings > General* shows the whole download folder path, and the Schedule options appear only when the schedule is on.
+- Search with no result names what you searched for. Empty category lists explain how files get there.
+
+### Fixed
+- The Overview's "Recently finished" card no longer lists failed downloads; Overview links to them instead ("1 failed - review").
+- A finished download shows "7.63 MiB", not "7.63 MiB of 7.63 MiB", and no empty connection map or speed graph.
+- Singular and plural: "1 segment", "1 connection", "1 download".
+- A stale "already downloaded" warning in the New download window no longer lingers after the server's file name arrives.
+- Long captions on Overview and Statistics tiles end in an ellipsis instead of being cut mid-word.
+
 ## [0.12.0] - 2026-11-02
 
 ### Changed
