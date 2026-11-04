@@ -355,7 +355,7 @@ impl StewardGetApp {
             );
             ui.add_space(4.0);
             ui.horizontal_wrapped(|ui| {
-                if widgets::button(ui, ButtonKind::Tool, Some(Icon::Export), "Save a backup…", true, &p).clicked()
+                if widgets::button(ui, ButtonKind::Ghost, Some(Icon::Export), "Save a backup…", true, &p).clicked()
                     && let Some(dest) = rfd::FileDialog::new().set_file_name("stewardget-backup.zip").add_filter("Backup", &["zip"]).save_file()
                 {
                     match self.engine.export_backup(&dest) {
@@ -363,7 +363,7 @@ impl StewardGetApp {
                         Err(e) => t.say(format!("Could not save the backup: {e}"), false),
                     }
                 }
-                if widgets::button(ui, ButtonKind::Tool, Some(Icon::Import), "Restore settings…", true, &p).clicked()
+                if widgets::button(ui, ButtonKind::Ghost, Some(Icon::Import), "Restore settings…", true, &p).clicked()
                     && let Some(src) = rfd::FileDialog::new().add_filter("Backup", &["zip"]).pick_file()
                 {
                     match self.engine.import_settings(&src) {
@@ -374,7 +374,7 @@ impl StewardGetApp {
                         Err(e) => t.say(format!("Could not restore: {e}"), false),
                     }
                 }
-                if widgets::button(ui, ButtonKind::Tool, Some(Icon::Info), "Make a diagnostics report", true, &p).clicked() {
+                if widgets::button(ui, ButtonKind::Ghost, Some(Icon::Info), "Make a diagnostics report", true, &p).clicked() {
                     let engine = self.engine.clone();
                     t.diagnostics = Some(engine.diagnostics());
                 }

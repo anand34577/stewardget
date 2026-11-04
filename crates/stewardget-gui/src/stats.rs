@@ -195,9 +195,13 @@ impl StewardGetApp {
                                 },
                                 |ui| {
                                     ui.label(
-                                        RichText::new(format!("{n} · {}", format_bytes(*bytes)))
-                                            .size(12.0)
-                                            .color(p.text_dim),
+                                        RichText::new(format!(
+                                            "{n} {} · {}",
+                                            if *n == 1 { "download" } else { "downloads" },
+                                            format_bytes(*bytes)
+                                        ))
+                                        .size(12.0)
+                                        .color(p.text_dim),
                                     );
                                 },
                             );

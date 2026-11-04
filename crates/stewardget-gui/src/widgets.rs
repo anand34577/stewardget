@@ -178,15 +178,10 @@ pub fn kpi_tile(
         FontId::new(crate::theme::size::XL + 2.0, crate::theme::semi()),
         p.text,
     );
-    painter
-        .with_clip_rect(Rect::from_min_max(pos2(inner.left(), rect.top()), pos2(inner.right(), rect.bottom())))
-        .text(
-            pos2(inner.left(), vg.bottom() + 3.0),
-            Align2::LEFT_TOP,
-            sub,
-            FontId::proportional(crate::theme::size::SM),
-            p.text_dim,
-        );
+    // A long caption ends in an ellipsis instead of being cut mid-word.
+    let sub_font = FontId::proportional(crate::theme::size::SM);
+    let sub = fit_text(painter, sub, &sub_font, inner.width());
+    painter.text(pos2(inner.left(), vg.bottom() + 3.0), Align2::LEFT_TOP, sub, sub_font, p.text_dim);
     match extra {
         KpiExtra::None => {}
         KpiExtra::Spark(values) => {
@@ -509,7 +504,7 @@ pub fn heatmap(ui: &mut Ui, days: &[DayTotal], p: &Palette) {
     const GAP: f32 = 3.0;
     // Weeks fill the card; cells stay square between 9 and 22 points.
     let weeks = days.len().div_ceil(7) + 1;
-    let cell_size = ((ui.available_width() - 4.0) / weeks as f32 - GAP).clamp(9.0, 22.0);
+    let cell_size = ((ui.available_width() - 4.0) / weeks as f32 - GAP).clamp(9.0, 26.0);
     let size = vec2(weeks as f32 * (cell_size + GAP), 7.0 * (cell_size + GAP));
     let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width().max(size.x), size.y), Sense::hover());
     let painter = ui.painter_at(rect);
@@ -1127,6 +1122,8 @@ pub fn slider<T: egui::emath::Numeric>(
         if let Some(f) = format {
             drag = drag.custom_formatter(move |v, _| f(v));
         }
+        // One width for every value box, so sliders in stacked rows line up.
+        ui.spacing_mut().interact_size.x = ui.spacing().interact_size.x.max(68.0);
         let dv = ui.add(drag);
         response.union(dv)
     })
@@ -1234,4 +1231,14 @@ pub fn path_label(ui: &mut Ui, path: &str, size: f32, color: Color32) -> Respons
     let (rect, response) = ui.allocate_exact_size(vec2(galley.size().x, galley.size().y), Sense::hover());
     ui.painter().galley(rect.min, galley, color);
     response.on_hover_text(path)
+}
+
+/// A name fit for a list: the server gave none ("download"), so say where it came from.
+pub fn display_name(file_name: &str, url: &str) -> String {
+    if file_name.is_empty() || file_name == "download" {
+        let host = crate::capture::host_of(url);
+        if host.is_empty() { "Unnamed file".to_owned() } else { format!("Unnamed file from {host}") }
+    } else {
+        file_name.to_owned()
+    }
 }

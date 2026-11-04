@@ -262,6 +262,8 @@ impl Palette {
         visuals.selection.bg_fill = self.accent.gamma_multiply(if self.dark { 0.45 } else { 0.25 });
         visuals.selection.stroke = Stroke::new(1.5, self.accent);
         visuals.override_text_color = None;
+        // Placeholder text must read as a hint, not as typed content.
+        visuals.weak_text_color = Some(self.text_dim.gamma_multiply(0.8));
         visuals.slider_trailing_fill = true;
         visuals.handle_shape = egui::style::HandleShape::Circle;
         visuals.striped = false;

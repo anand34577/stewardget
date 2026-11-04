@@ -185,7 +185,7 @@ impl StewardGetApp {
             ui.close();
         }
         ui.separator();
-        ui.menu_button("     When all downloads finish", |ui| {
+        ui.menu_button("        When all downloads finish", |ui| {
             for action in AfterAll::ALL {
                 if ui.selectable_label(self.after_all == action, action.label()).clicked() {
                     self.after_all = action;
@@ -202,7 +202,7 @@ impl StewardGetApp {
 
     fn help_menu(&mut self, ui: &mut Ui) {
         let p = self.palette;
-        if menu_item(ui, &p, Icon::Info, "Keyboard shortcuts  F1", true) {
+        if menu_item(ui, &p, Icon::Keyboard, "Keyboard shortcuts  F1", true) {
             self.shortcuts_open = true;
             ui.close();
         }
@@ -231,7 +231,7 @@ impl StewardGetApp {
         let mut close = false;
         let m = modal("stewardget-shortcuts", &p).show(ctx, |ui| {
             ui.set_width(520.0);
-            title(ui, &p, Icon::Info, "Keyboard shortcuts");
+            title(ui, &p, Icon::Keyboard, "Keyboard shortcuts");
             // Scrolls when the window is short, so Close stays reachable.
             let max_h = (ui.ctx().content_rect().height() - 190.0).max(160.0);
             egui::ScrollArea::vertical().max_height(max_h).show(ui, |ui| {

@@ -216,9 +216,12 @@ impl StewardGetApp {
             egui::UiBuilder::new().max_rect(actions).layout(egui::Layout::right_to_left(egui::Align::Center)),
             |ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
-                self.view_toggle(ui);
-                ui.add_space(6.0);
-                self.selection_actions(ui, compact);
+                // With nothing downloaded there is nothing to start, pause or lay out.
+                if !self.snap.downloads.is_empty() {
+                    self.view_toggle(ui);
+                    ui.add_space(6.0);
+                    self.selection_actions(ui, compact);
+                }
             },
         );
 
@@ -250,7 +253,9 @@ impl StewardGetApp {
             }
         }
 
-        if cards {
+        if self.snap.downloads.is_empty() {
+            // First run: no column titles over an empty page.
+        } else if cards {
             self.sort_bar(ui, rows.len());
         } else {
             let (header, header_r) = ui.allocate_exact_size(vec2(full.width(), HEADER_H), Sense::click());
@@ -433,9 +438,10 @@ impl StewardGetApp {
         );
         // Names that don't fit end in an ellipsis; the full name is in the tooltip.
         let room = name_rect.width();
-        let name = widgets::fit_text(&painter, &d.file_name, &name_font, room);
-        if name != d.file_name && response.hovered() {
-            response.clone().on_hover_text(&d.file_name);
+        let shown = widgets::display_name(&d.file_name, &d.url);
+        let name = widgets::fit_text(&painter, &shown, &name_font, room);
+        if name != shown && response.hovered() {
+            response.clone().on_hover_text(&shown);
         }
         if compact {
             painter.text(name_rect.left_center(), Align2::LEFT_CENTER, name, name_font, p.text);
@@ -449,8 +455,23 @@ impl StewardGetApp {
                 sub = format!("{sub}  \u{00b7}  {host}");
             }
             let small = FontId::proportional(12.0);
-            let sub = widgets::fit_text(&painter, &sub, &small, room);
-            painter.text(c + vec2(0.0, 10.0), Align2::LEFT_CENTER, sub, small, p.text_dim);
+            // A failed download says why right under its name, so the user needn't open it.
+            let (sub, sub_color) = match (d.status, d.error.as_ref()) {
+                (Status::Failed, Some(e)) => (crate::app::capitalize(e), p.red),
+                _ => (sub, p.text_dim),
+            };
+            // A failure with nothing transferred has empty columns after its name; the reason may use them.
+            let mut sub_room = room;
+            if d.status == Status::Failed && d.downloaded == 0 && d.total.is_none() {
+                sub_room += cols
+                    .iter()
+                    .take_while(|c| !matches!(c.key, SortKey::Status | SortKey::Added | SortKey::Queue))
+                    .map(|c| c.width)
+                    .sum::<f32>()
+                    - 12.0;
+            }
+            let sub = widgets::fit_text(&painter, &sub, &small, sub_room);
+            painter.text(c + vec2(0.0, 10.0), Align2::LEFT_CENTER, sub, small, sub_color);
         }
         x += name_w;
 
@@ -619,7 +640,8 @@ impl StewardGetApp {
         let week: Vec<f32> = s.stats.recent_days(14, now).iter().map(|d| d.bytes as f32).collect();
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = gap;
-            ui.add_space(CARD_X - gap);
+            // Tiles line up with the cards below (the cards sit inside the panel margin).
+            ui.add_space(CARD_X - gap + 11.0);
             let speed_sub = if speed > 1.0 {
                 format!("peak {} \u{00b7} {connections} connections", format_speed(peak as f64))
             } else if active > 0 {
@@ -976,11 +998,12 @@ impl StewardGetApp {
         let sel = self.selected_views();
         let any_resume = sel.iter().any(|s| s.status.can_resume());
         let any_pause = sel.iter().any(|s| s.status.can_pause());
-        if menu_item(ui, &p, Icon::Play, "Resume  Space", any_resume) {
+        // Only offer what applies: a finished download has nothing to resume or pause.
+        if any_resume && menu_item(ui, &p, Icon::Play, "Resume  Space", true) {
             self.resume_selected();
             ui.close();
         }
-        if menu_item(ui, &p, Icon::Pause, "Pause  Space", any_pause) {
+        if any_pause && menu_item(ui, &p, Icon::Pause, "Pause  Space", true) {
             self.pause_selected();
             ui.close();
         }
@@ -998,7 +1021,7 @@ impl StewardGetApp {
             ui.close();
         }
         if !many {
-            if menu_item(ui, &p, Icon::Link, "Refresh link…", d.status != Status::Completed) {
+            if d.status != Status::Completed && menu_item(ui, &p, Icon::Link, "Refresh link…", true) {
                 self.open_refresh(d);
                 ui.close();
             }
@@ -1010,27 +1033,29 @@ impl StewardGetApp {
                 ui.ctx().copy_text(d.url.clone());
                 ui.close();
             }
-            if menu_item(ui, &p, Icon::Copy, "Copy file path", true) {
+            if menu_item(ui, &p, Icon::File, "Copy file path", true) {
                 ui.ctx().copy_text(d.path.display().to_string());
                 ui.close();
             }
             ui.separator();
-            if menu_item(ui, &p, Icon::ArrowUp, "Move up in queue", true) {
+            // Queue order only matters until the download is done.
+            let pending = d.status != Status::Completed;
+            if pending && menu_item(ui, &p, Icon::ArrowUp, "Move up in queue", true) {
                 let r = self.engine.reorder(d.id, -1);
                 self.report(r);
                 ui.close();
             }
-            if menu_item(ui, &p, Icon::ArrowDown, "Move down in queue", true) {
+            if pending && menu_item(ui, &p, Icon::ArrowDown, "Move down in queue", true) {
                 let r = self.engine.reorder(d.id, 1);
                 self.report(r);
                 ui.close();
             }
-            if menu_item(ui, &p, Icon::CaretUp, "Move to top of queue", true) {
+            if pending && menu_item(ui, &p, Icon::CaretUp, "Move to top of queue", true) {
                 let r = self.engine.move_to_end(d.id, true);
                 self.report(r);
                 ui.close();
             }
-            if menu_item(ui, &p, Icon::CaretDown, "Move to bottom of queue", true) {
+            if pending && menu_item(ui, &p, Icon::CaretDown, "Move to bottom of queue", true) {
                 let r = self.engine.move_to_end(d.id, false);
                 self.report(r);
                 ui.close();
@@ -1042,7 +1067,7 @@ impl StewardGetApp {
             ui.close();
         }
         ui.separator();
-        if menu_item(ui, &p, Icon::Trash, "Remove from list  Del", true) {
+        if menu_item(ui, &p, Icon::Close, "Remove from list  Del", true) {
             self.remove_selected(false);
             ui.close();
         }
@@ -1058,7 +1083,7 @@ impl StewardGetApp {
         let ids: Vec<_> =
             if self.selection.contains(&d.id) { self.selection.iter().copied().collect() } else { vec![d.id] };
         let config = self.engine.config();
-        ui.menu_button("     Move to queue", |ui| {
+        ui.menu_button("        Move to queue", |ui| {
             ui.set_min_width(200.0);
             for q in &config.queues {
                 let here = ids.iter().all(|id| self.snap.downloads.iter().any(|v| v.id == *id && v.queue == q.id));
@@ -1080,32 +1105,40 @@ impl StewardGetApp {
         let p = self.palette;
         ui.add_space(48.0);
         ui.vertical_centered(|ui| {
-            widgets::icon_tile(ui, Icon::Download, 64.0, p.accent, &p);
+            let empty_icon = if !self.snap.downloads.is_empty() && !self.search.is_empty() { Icon::Search } else { Icon::Download };
+            widgets::icon_tile(ui, empty_icon, 64.0, p.accent, &p);
             ui.add_space(12.0);
-            let (title, sub) = if self.snap.downloads.is_empty() {
-                (
-                    "No downloads yet",
+            let (title, sub): (String, &str) = if self.snap.downloads.is_empty() {
+                ("No downloads yet".to_owned(),
                     "Click Add URL, paste a link (Ctrl+V), copy a file link anywhere, or download from your browser with the StewardGet extension.",
                 )
             } else if !self.search.is_empty() {
-                ("No matches", "Try a different search.")
+                (format!("No downloads match “{}”", self.search.trim()), "Check the spelling, or search by site or file type.")
             } else if matches!(self.filter, ListFilter::Queue(_)) {
-                (
-                    "This queue is empty",
+                ("This queue is empty".to_owned(),
                     "Drag downloads onto it in the sidebar, choose Move to queue in their menu, or pick it when you add a download.",
                 )
+            } else if let ListFilter::Category(c) = self.filter {
+                (
+                    format!("No {} downloads yet", self.cfg.category_label(c).to_lowercase()),
+                    "Files of this type are sorted here automatically when they finish.",
+                )
             } else if self.filter == ListFilter::Failed {
-                ("Nothing has failed", "Downloads that stop with an error show up here, with a way to fix them.")
+                ("Nothing has failed".to_owned(), "Downloads that stop with an error show up here, with a way to fix them.")
             } else if self.filter == ListFilter::Completed {
-                ("Nothing finished yet", "Finished downloads stay here until you clear them. History keeps a permanent log.")
+                ("Nothing finished yet".to_owned(), "Finished downloads stay here until you clear them. History keeps a permanent log.")
             } else if self.filter == ListFilter::Active {
-                ("Nothing is downloading", "Queued and paused downloads are under Queued & paused.")
+                ("Nothing is downloading".to_owned(), "Queued and paused downloads are under Queued & paused.")
             } else {
-                ("Nothing here", "Downloads in this view will appear here.")
+                ("Nothing here".to_owned(), "Downloads in this view will appear here.")
             };
             ui.label(RichText::new(title).size(crate::theme::size::XL).family(crate::theme::semi()).color(p.text));
             ui.add_space(2.0);
-            ui.add(egui::Label::new(RichText::new(sub).color(p.text_dim)).wrap());
+            // A short measure reads better than a line the width of the window.
+            ui.scope(|ui| {
+                ui.set_max_width(480.0);
+                ui.add(egui::Label::new(RichText::new(sub).color(p.text_dim)).wrap());
+            });
             ui.add_space(6.0);
             if self.snap.downloads.is_empty() {
                 ui.horizontal_wrapped(|ui| {
