@@ -327,6 +327,19 @@ impl StewardGetApp {
     fn single_body(&mut self, ui: &mut Ui, w: &mut CaptureWindow, waiting: usize) {
         let p = self.palette;
         let check = w.checked();
+        // The server's name, once known, unless the browser gave one or the user typed one.
+        // Done first: the conflict check below must see the final name and folder, not the
+        // placeholder ones (a stale "already downloaded" warning would linger until the next repaint).
+        if !w.named
+            && let Some(Ok(info)) = &check
+        {
+            w.name = info.file_name.clone();
+            w.named = true;
+            if !w.dir_chosen {
+                w.dir = w.default_dir(self, &self.engine.config());
+            }
+            ui.ctx().request_repaint();
+        }
         let name = w.effective_name();
         let category = self.cfg.categorize(&name);
         Frame::new()
@@ -429,16 +442,6 @@ impl StewardGetApp {
             });
         }
         ui.add_space(2.0);
-        // The server's name, once known, unless the browser gave one or the user typed one.
-        if !w.named
-            && let Some(Ok(info)) = &check
-        {
-            w.name = info.file_name.clone();
-            w.named = true;
-            if !w.dir_chosen {
-                w.dir = w.default_dir(self, &self.engine.config());
-            }
-        }
         widgets::form_row(ui, LABEL_W, "Save as", &p, |ui| {
             let r = ui.add(widgets::input(&mut w.name).hint_text(name.clone()).desired_width(f32::INFINITY));
             if r.changed() {

@@ -184,7 +184,10 @@ impl StewardGetApp {
                     ui.spacing_mut().item_spacing.y = 4.0;
                     ui.add(
                         egui::Label::new(
-                            RichText::new(&d.file_name).size(theme::size::LG).family(theme::semi()).color(p.text),
+                            RichText::new(widgets::display_name(&d.file_name, &d.url))
+                                .size(theme::size::LG)
+                                .family(theme::semi())
+                                .color(p.text),
                         )
                         .wrap(),
                     );
@@ -430,6 +433,7 @@ impl StewardGetApp {
             value(
                 ui,
                 match d.total {
+                    Some(t) if d.downloaded >= t => format_bytes(t),
                     Some(t) => format!("{} of {}", format_bytes(d.downloaded), format_bytes(t)),
                     None => format!("{} (size unknown)", format_bytes(d.downloaded)),
                 },
@@ -561,6 +565,10 @@ impl StewardGetApp {
     /// fixed height) instead of exactly `height` (the scrolling inspector).
     fn map_block(&mut self, ui: &mut Ui, d: &DownloadView, height: f32, fit: bool) {
         let p = self.palette;
+        // A finished file's map is one solid block: it says nothing the status doesn't.
+        if d.status == Status::Completed {
+            return;
+        }
         ui.horizontal(|ui| {
             widgets::caption(ui, "CONNECTION MAP", &p);
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -575,13 +583,23 @@ impl StewardGetApp {
         let text = if d.segments.is_empty() {
             if d.resumable || d.status == Status::Completed { String::new() } else { "single connection".into() }
         } else {
-            format!("{} segments · {} active connections", d.segments.len(), d.connections)
+            format!(
+                "{} {} \u{00b7} {} active {}",
+                d.segments.len(),
+                if d.segments.len() == 1 { "segment" } else { "segments" },
+                d.connections,
+                if d.connections == 1 { "connection" } else { "connections" }
+            )
         };
         ui.label(RichText::new(text).size(12.0).color(p.text_dim));
     }
 
     fn speed_block(&mut self, ui: &mut Ui, d: &DownloadView, height: f32, fit: bool) {
         let p = self.palette;
+        // A finished download with no graph already shows Took and Average in the summary above.
+        if d.history.is_empty() && d.status == Status::Completed {
+            return;
+        }
         ui.horizontal(|ui| {
             widgets::caption(ui, "SPEED", &p);
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {

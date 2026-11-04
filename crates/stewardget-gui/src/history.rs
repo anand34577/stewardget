@@ -197,7 +197,11 @@ impl StewardGetApp {
                         .color(p.text),
                 );
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    // Nothing recorded yet: no controls for nothing.
                     let any = !self.history.entries.is_empty();
+                    if !any {
+                        return;
+                    }
                     if widgets::button(ui, ButtonKind::Ghost, Some(Icon::Trash), "Clear…", any, &p).clicked() {
                         self.history.confirm_clear = true;
                     }
@@ -209,6 +213,9 @@ impl StewardGetApp {
                 });
             });
             // What the filters show, in one line instead of a row of tiles.
+            if self.history.entries.is_empty() {
+                return;
+            }
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
                 let dim = |t: String| RichText::new(t).size(crate::theme::size::SM).color(p.text_dim);
@@ -229,8 +236,8 @@ impl StewardGetApp {
 
             ui.horizontal_wrapped(|ui| {
                 let search = ui.add_sized(
-                    [260.0, crate::theme::CONTROL_H],
-                    widgets::input(&mut self.history.query).hint_text("Search name, site, folder or tag"),
+                    [180.0, crate::theme::CONTROL_H],
+                    widgets::input(&mut self.history.query).hint_text("Search history"),
                 );
                 if self.focus_search {
                     search.request_focus();
@@ -439,7 +446,12 @@ fn history_row(
     let meta_x = rect.right() - 12.0 - 150.0 - 16.0 - 190.0;
     let text_left = rect.left() + 44.0;
     let text_right = if wide { meta_x - 14.0 } else { rect.right() - 12.0 - 150.0 - 8.0 }.max(text_left + 80.0);
-    let name = ellipsize(painter, &e.file_name, egui::FontId::new(13.5, crate::theme::semi()), text_right - text_left);
+    let name = ellipsize(
+        painter,
+        &crate::widgets::display_name(&e.file_name, &e.url),
+        egui::FontId::new(13.5, crate::theme::semi()),
+        text_right - text_left,
+    );
     painter.text(
         egui::pos2(text_left, rect.top() + 13.0),
         egui::Align2::LEFT_CENTER,
@@ -448,7 +460,7 @@ fn history_row(
         p.text,
     );
     let sub = if e.status == Status::Failed {
-        e.error.clone().unwrap_or_else(|| "Failed".into())
+        e.error.as_deref().map_or_else(|| "Failed".to_owned(), crate::app::capitalize)
     } else if missing {
         format!("File moved or deleted  ·  {}", e.host)
     } else {

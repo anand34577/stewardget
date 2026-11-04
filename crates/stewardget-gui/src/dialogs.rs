@@ -747,6 +747,10 @@ impl StewardGetApp {
                     ),
                     p.text_dim,
                 );
+            } else if c.delete_files && (partial > 0 || has_done) {
+                // The riskier choice states its consequence, and keeps the dialog's height steady.
+                ui.add_space(4.0);
+                note(ui, "The files are deleted from disk. This can't be undone.", p.red);
             }
             footer(ui, |ui| {
                 let label = if c.delete_files { "Delete" } else { "Remove" };
@@ -1045,11 +1049,14 @@ impl RefreshDialog {
                 format_bytes(d.downloaded),
                 format_bytes(t)
             ),
+            _ if d.downloaded == 0 => {
+                "Nothing has been downloaded yet, so the new link starts from the beginning.".to_owned()
+            }
             _ => format!("{} is already downloaded and will be kept.", format_bytes(d.downloaded)),
         };
         Self {
             id: d.id,
-            name: d.file_name.clone(),
+            name: crate::widgets::display_name(&d.file_name, &d.url),
             progress,
             page: d.options.referrer.clone(),
             url: d.url.clone(),

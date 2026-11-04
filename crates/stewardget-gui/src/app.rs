@@ -1052,13 +1052,16 @@ impl StewardGetApp {
                 self.engine.start_queue(q);
             }
         } else {
-            if widgets::button(ui, ButtonKind::Ghost, Some(Icon::Pause), label("Pause all"), true, &p)
+            // Offer only what would do something: nothing to pause while idle.
+            let can_pause = self.snap.count(|s| s.is_active() || s == Status::Queued) > 0;
+            let can_start = self.snap.count(|s| matches!(s, Status::Paused | Status::Failed)) > 0;
+            if widgets::button(ui, ButtonKind::Ghost, Some(Icon::Pause), label("Pause all"), can_pause, &p)
                 .on_hover_text("Pause everything")
                 .clicked()
             {
                 self.engine.pause_all();
             }
-            if widgets::button(ui, ButtonKind::Ghost, Some(Icon::Play), label("Start all"), true, &p)
+            if widgets::button(ui, ButtonKind::Ghost, Some(Icon::Play), label("Start all"), can_start, &p)
                 .on_hover_text("Resume every paused or failed download")
                 .clicked()
             {
@@ -1262,73 +1265,94 @@ impl StewardGetApp {
         // Statistics and Settings stay pinned.
         // Each nav entry is 34 points plus item spacing; the live card is 72 plus its gap.
         let entry_h = 34.0 + ui.spacing().item_spacing.y;
-        let live_h = if collapsed { 0.0 } else { 72.0 + 8.0 + ui.spacing().item_spacing.y * 2.0 };
+        let show_live = self.snap.count(|s| s.is_active() || s == Status::Queued) > 0;
+        let live_h = if collapsed || !show_live { 0.0 } else { 72.0 + 8.0 + ui.spacing().item_spacing.y * 2.0 };
         let list_h = (ui.available_height() - 3.0 * entry_h - 8.0 - live_h).max(60.0);
         ui.allocate_ui(vec2(ui.available_width(), list_h), |ui| {
-            egui::ScrollArea::vertical().id_salt("nav-scroll").auto_shrink([false, false]).show(ui, |ui| {
-                // Keep clear of the scroll bar, which floats over the right edge.
-                ui.set_max_width(ui.available_width() - 8.0);
-                fn count(all: &[DownloadView], f: ListFilter) -> usize {
-                    all.iter().filter(|d| f.matches(d)).count()
-                }
-                if nav_item(ui, Icon::Gauge, None, "Overview", 0, self.page == Page::Overview, collapsed, &p).clicked()
-                {
-                    self.page = Page::Overview;
-                }
-                if nav_item(ui, Icon::History, None, "History", 0, self.page == Page::History, collapsed, &p).clicked()
-                {
-                    self.page = Page::History;
-                }
-                ui.add_space(6.0);
-                let open = collapsed || widgets::section(ui, "DOWNLOADS", &p);
-                if !collapsed {
-                    ui.add_space(2.0);
-                }
-                let items = [
-                    (Icon::Inbox, "All", ListFilter::All),
-                    (Icon::Download, "Downloading", ListFilter::Active),
-                    (Icon::Clock, "Queued & paused", ListFilter::Waiting),
-                    (Icon::CheckCircle, "Completed", ListFilter::Completed),
-                    (Icon::Alert, "Failed", ListFilter::Failed),
-                ];
-                for (icon, label, filter) in items.into_iter().filter(|_| open) {
-                    let selected = self.page == Page::Downloads && self.filter == filter;
-                    if nav_item(ui, icon, None, label, count(&self.snap.downloads, filter), selected, collapsed, &p)
+            let scroll =
+                egui::ScrollArea::vertical().id_salt("nav-scroll").auto_shrink([false, false]).show(ui, |ui| {
+                    // Keep clear of the scroll bar, which floats over the right edge.
+                    ui.set_max_width(ui.available_width() - 8.0);
+                    fn count(all: &[DownloadView], f: ListFilter) -> usize {
+                        all.iter().filter(|d| f.matches(d)).count()
+                    }
+                    if nav_item(ui, Icon::Gauge, None, "Overview", 0, self.page == Page::Overview, collapsed, &p)
                         .clicked()
                     {
-                        self.page = Page::Downloads;
-                        self.filter = filter;
+                        self.page = Page::Overview;
                     }
-                }
-                ui.add_space(6.0);
-                self.sidebar_queues(ui, collapsed);
-                ui.add_space(6.0);
-                let open = collapsed || widgets::section(ui, "CATEGORIES", &p);
-                if !collapsed {
-                    ui.add_space(2.0);
-                }
-                for c in self.cfg.categories().into_iter().filter(|_| open) {
-                    let filter = ListFilter::Category(c);
-                    let selected = self.page == Page::Downloads && self.filter == filter;
-                    if nav_item(
-                        ui,
-                        Icon::for_category(c),
-                        Some(p.category(c)),
-                        &self.cfg.category_label(c),
-                        count(&self.snap.downloads, filter),
-                        selected,
-                        collapsed,
-                        &p,
-                    )
-                    .clicked()
+                    if nav_item(ui, Icon::History, None, "History", 0, self.page == Page::History, collapsed, &p)
+                        .clicked()
                     {
-                        self.page = Page::Downloads;
-                        self.filter = filter;
+                        self.page = Page::History;
                     }
-                }
-            });
+                    ui.add_space(6.0);
+                    let open = collapsed || widgets::section(ui, "DOWNLOADS", &p);
+                    if !collapsed {
+                        ui.add_space(2.0);
+                    }
+                    let items = [
+                        (Icon::Inbox, "All", ListFilter::All),
+                        (Icon::Download, "Downloading", ListFilter::Active),
+                        (Icon::Clock, "Queued & paused", ListFilter::Waiting),
+                        (Icon::CheckCircle, "Completed", ListFilter::Completed),
+                        (Icon::Alert, "Failed", ListFilter::Failed),
+                    ];
+                    for (icon, label, filter) in items.into_iter().filter(|_| open) {
+                        let selected = self.page == Page::Downloads && self.filter == filter;
+                        if nav_item(ui, icon, None, label, count(&self.snap.downloads, filter), selected, collapsed, &p)
+                            .clicked()
+                        {
+                            self.page = Page::Downloads;
+                            self.filter = filter;
+                        }
+                    }
+                    ui.add_space(6.0);
+                    self.sidebar_queues(ui, collapsed);
+                    ui.add_space(6.0);
+                    let open = collapsed || widgets::section(ui, "CATEGORIES", &p);
+                    if !collapsed {
+                        ui.add_space(2.0);
+                    }
+                    for c in self.cfg.categories().into_iter().filter(|_| open) {
+                        let filter = ListFilter::Category(c);
+                        let selected = self.page == Page::Downloads && self.filter == filter;
+                        if nav_item(
+                            ui,
+                            Icon::for_category(c),
+                            Some(p.category(c)),
+                            &self.cfg.category_label(c),
+                            count(&self.snap.downloads, filter),
+                            selected,
+                            collapsed,
+                            &p,
+                        )
+                        .clicked()
+                        {
+                            self.page = Page::Downloads;
+                            self.filter = filter;
+                        }
+                    }
+                });
+            // Entries cut off by the edge fade out, so a half-visible row reads as "more below".
+            let (area, offset) = (scroll.inner_rect, scroll.state.clamped_offset().y);
+            if offset + area.height() < scroll.content_size.y - 1.0 {
+                let h = 28.0;
+                let (top, bottom) = (p.sidebar.gamma_multiply(0.0), p.sidebar);
+                let mut mesh = egui::Mesh::default();
+                let r = egui::Rect::from_min_max(egui::pos2(area.left(), area.bottom() - h), area.right_bottom());
+                mesh.colored_vertex(r.left_top(), top);
+                mesh.colored_vertex(r.right_top(), top);
+                mesh.colored_vertex(r.right_bottom(), bottom);
+                mesh.colored_vertex(r.left_bottom(), bottom);
+                mesh.add_triangle(0, 1, 2);
+                mesh.add_triangle(0, 2, 3);
+                ui.painter().add(egui::Shape::mesh(mesh));
+            }
         });
         ui.with_layout(Layout::bottom_up(Align::Min), |ui| {
+            // Same width as the scrolling list above, so every highlight lines up.
+            ui.set_max_width(ui.available_width() - 8.0);
             if nav_item(ui, Icon::Gear, None, "Settings", 0, self.page == Page::Settings, collapsed, &p).clicked() {
                 self.open_settings(self.settings_tab);
             }
@@ -1338,7 +1362,8 @@ impl StewardGetApp {
             if nav_item(ui, Icon::Sliders, None, "Tools", 0, self.page == Page::Tools, collapsed, &p).clicked() {
                 self.page = Page::Tools;
             }
-            if !collapsed {
+            // Idle speed is already in the status bar; the card appears only while something runs.
+            if !collapsed && show_live {
                 ui.add_space(8.0);
                 self.live_card(ui);
             }

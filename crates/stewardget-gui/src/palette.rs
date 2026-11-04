@@ -1,13 +1,12 @@
 //! The command palette (Ctrl+K): one box to reach any page, setting, action or download.
 
-use egui::{Key, RichText};
+use egui::{Key, RichText, vec2};
 use stewardget_core::DownloadId;
 
 use crate::app::{ListFilter, Page, StewardGetApp};
 use crate::dialogs::modal;
 use crate::icons::Icon;
 use crate::settings::Tab;
-use crate::widgets;
 
 #[derive(Default)]
 pub struct Palette {
@@ -42,14 +41,14 @@ impl StewardGetApp {
             (Icon::Play, "Start all downloads".into(), Command::ResumeAll),
             (Icon::Pause, "Pause all downloads".into(), Command::PauseAll),
             (Icon::Checks, "Clear completed downloads".into(), Command::ClearCompleted),
-            (Icon::Info, "Keyboard shortcuts".into(), Command::Shortcuts),
+            (Icon::Keyboard, "Keyboard shortcuts".into(), Command::Shortcuts),
             (Icon::Inbox, "Show all downloads".into(), Command::Filter(ListFilter::All)),
             (Icon::Alert, "Show failed downloads".into(), Command::Filter(ListFilter::Failed)),
             (Icon::Download, "Show running downloads".into(), Command::Filter(ListFilter::Active)),
             (Icon::History, "Go to History".into(), Command::Page(Page::History)),
-            (Icon::Info, "Go to Overview".into(), Command::Page(Page::Overview)),
-            (Icon::Info, "Go to Statistics".into(), Command::Page(Page::Stats)),
-            (Icon::Info, "Go to Tools".into(), Command::Page(Page::Tools)),
+            (Icon::Gauge, "Go to Overview".into(), Command::Page(Page::Overview)),
+            (Icon::Chart, "Go to Statistics".into(), Command::Page(Page::Stats)),
+            (Icon::Sliders, "Go to Tools".into(), Command::Page(Page::Tools)),
         ];
         for (tab, icon, name) in Tab::ALL {
             all.push((icon, format!("Settings › {name}"), Command::Settings(tab)));
@@ -110,13 +109,30 @@ impl StewardGetApp {
             }
             for (n, (icon, label, cmd)) in items.iter().enumerate() {
                 let selected = n == pal.cursor;
-                ui.horizontal(|ui| {
-                    widgets::icon(ui, *icon, 14.0, if selected { p.accent } else { p.text_dim });
-                    let text = RichText::new(label).color(if selected { p.text } else { p.text_dim });
-                    if ui.selectable_label(selected, text).clicked() {
-                        run = Some(cmd.clone());
-                    }
-                });
+                // The whole row is the target and the highlight, not just its text.
+                let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 32.0), egui::Sense::click());
+                if selected || resp.hovered() {
+                    ui.painter().rect_filled(
+                        rect,
+                        egui::CornerRadius::same(crate::theme::radius::SM),
+                        if selected { p.accent.gamma_multiply(0.18) } else { p.card_hover },
+                    );
+                }
+                let icon_rect = egui::Rect::from_center_size(rect.left_center() + vec2(16.0, 0.0), vec2(14.0, 14.0));
+                crate::icons::paint(ui.painter(), icon_rect, *icon, if selected { p.accent } else { p.text_dim });
+                ui.painter().text(
+                    rect.left_center() + vec2(36.0, 0.0),
+                    egui::Align2::LEFT_CENTER,
+                    label,
+                    egui::FontId::proportional(crate::theme::size::MD),
+                    if selected { p.text } else { p.text_dim },
+                );
+                if selected {
+                    ui.scroll_to_rect(rect, None);
+                }
+                if resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                    run = Some(cmd.clone());
+                }
             }
         });
         if let Some(cmd) = run {

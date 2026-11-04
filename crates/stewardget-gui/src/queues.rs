@@ -208,7 +208,7 @@ impl StewardGetApp {
                             let (is_new, on) = (n.new, &mut n.on);
                             let name = n.target.name.trim();
                             let kind = n.target.service.kind().name();
-                            let title = if name.is_empty() { kind.to_owned() } else { format!("{name} \u{b7} {kind}") };
+                            let title = if name.is_empty() || name.eq_ignore_ascii_case(kind) { kind.to_owned() } else { format!("{name} \u{b7} {kind}") };
                             widgets::split_row(
                                 ui,
                                 |ui| {
@@ -488,7 +488,7 @@ impl StewardGetApp {
                 ui.label(RichText::new("Remember my choice (change it in Settings › General)").size(12.5).color(p.text_dim));
             });
             crate::dialogs::footer(ui, |ui| {
-                if widgets::button(ui, ButtonKind::Primary, Some(Icon::Download), "Keep running", true, &p).clicked() {
+                if widgets::button(ui, ButtonKind::Primary, Some(Icon::Eye), "Keep running", true, &p).clicked() {
                     choice = Some(CloseAction::Background);
                 }
                 if widgets::button(ui, ButtonKind::Ghost, Some(Icon::Power), "Quit StewardGet", true, &p).clicked() {
@@ -528,7 +528,8 @@ pub fn schedule_editor(ui: &mut Ui, p: &Palette, id: &str, s: &mut Schedule) {
         widgets::form_row(ui, LABEL_W, "Run on a schedule", p, |ui| {
             widgets::toggle(ui, &mut s.enabled, p);
         });
-        ui.add_enabled_ui(s.enabled, |ui| {
+        // The times and days only matter once the schedule is on, so they appear then.
+        if s.enabled {
             widgets::form_row(ui, LABEL_W, "Start at", p, |ui| {
                 crate::settings::time_picker(ui, "start", &mut s.start_minute);
                 ui.label(RichText::new("paused downloads of the queue start").size(12.0).color(p.text_dim));
@@ -548,7 +549,7 @@ pub fn schedule_editor(ui: &mut Ui, p: &Palette, id: &str, s: &mut Schedule) {
                     }
                 }
             });
-        });
+        }
     });
 }
 

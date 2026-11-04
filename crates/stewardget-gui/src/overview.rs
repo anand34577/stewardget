@@ -36,7 +36,30 @@ impl StewardGetApp {
                         .family(crate::theme::semi())
                         .color(p.text),
                 );
-                ui.label(RichText::new(greeting(&snap, waiting)).size(crate::theme::size::SM).color(p.text_dim));
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    ui.label(RichText::new(greeting(&snap, waiting)).size(crate::theme::size::SM).color(p.text_dim));
+                    let failed = snap.count(|s| s == Status::Failed);
+                    if failed > 0 {
+                        // The problem is a link to the list that explains it.
+                        ui.label(RichText::new("\u{00b7}").size(crate::theme::size::SM).color(p.text_dim));
+                        let link = ui
+                            .add(
+                                egui::Label::new(
+                                    RichText::new(format!("{failed} failed \u{2013} review"))
+                                        .size(crate::theme::size::SM)
+                                        .color(p.red),
+                                )
+                                .sense(Sense::click()),
+                            )
+                            .on_hover_cursor(egui::CursorIcon::PointingHand)
+                            .on_hover_text("Show the downloads that failed");
+                        if link.clicked() {
+                            self.page = Page::Downloads;
+                            self.filter = ListFilter::Failed;
+                        }
+                    }
+                });
                 ui.add_space(12.0);
                 // Hero: the live speed over its own graph.
                 card(&p).show(ui, |ui| {
@@ -263,7 +286,9 @@ impl StewardGetApp {
             if widgets::card_header(ui, "Recently finished", Some("History"), &p) {
                 self.page = Page::History;
             }
-            let recent: Vec<_> = self.history.entries().iter().take(6).cloned().collect();
+            // Failures live in the Failed list; this card is the good news.
+            let recent: Vec<_> =
+                self.history.entries().iter().filter(|e| e.status == Status::Completed).take(6).cloned().collect();
             if recent.is_empty() {
                 empty_line(ui, &p, Icon::CheckCircle, "Finished downloads will show up here.");
             }
@@ -447,7 +472,6 @@ impl StewardGetApp {
 /// One line under the page title saying how things stand.
 fn greeting(snap: &stewardget_core::EngineSnapshot, waiting: usize) -> String {
     let active = snap.count(Status::is_active);
-    let failed = snap.count(|s| s == Status::Failed);
     let mut parts = Vec::new();
     match active {
         0 => parts.push("Nothing is downloading".to_owned()),
@@ -456,9 +480,6 @@ fn greeting(snap: &stewardget_core::EngineSnapshot, waiting: usize) -> String {
     }
     if waiting > 0 {
         parts.push(format!("{waiting} waiting"));
-    }
-    if failed > 0 {
-        parts.push(format!("{failed} need attention"));
     }
     parts.join(" \u{00b7} ")
 }

@@ -226,7 +226,11 @@ impl StewardGetApp {
                 section(ui, &p, "General", |ui| {
                     row(ui, &p, "Download folder", "Where new downloads are saved.", |ui| {
                         let mut dir = draft.download_dir.display().to_string();
-                        let (_, browse) = widgets::input_with_button(ui, &mut dir, "", Icon::FolderOpen, "Browse", &p);
+                        // Wide enough for a typical path; the full path is in the tooltip.
+                        ui.set_max_width(400.0);
+                        let (field, browse) =
+                            widgets::input_with_button(ui, &mut dir, "", Icon::FolderOpen, "Browse", &p);
+                        field.on_hover_text(&dir);
                         if browse
                             && let Some(folder) =
                                 rfd::FileDialog::new().set_directory(&draft.download_dir).pick_folder()
@@ -279,7 +283,7 @@ impl StewardGetApp {
                         ui,
                         &p,
                         "Progress window",
-                        "Open a small window with the speed, each connection's progress and Pause for each download you start on its own, also while StewardGet is in the tray (batches don't open one each). It turns into Download complete when the file is done. Double-click a download to open it any time.",
+                        "A small window with speed, progress and Pause for each download you start on its own. It becomes \"Download complete\" when the file is done. Double-click any download to open it.",
                         |ui| {
                             toggle(ui, &mut draft.progress_window, &p);
                         },
@@ -321,7 +325,7 @@ impl StewardGetApp {
                         ui,
                         &p,
                         "Download complete window",
-                        "Also show Download complete, with Open and Show in folder, for downloads that had no progress window open, such as the files of a batch.",
+                        "Show a Download complete window with Open and Show in folder, also for downloads that had no progress window, such as batch files.",
                         |ui| {
                             toggle(ui, &mut draft.completion_dialog, &p);
                         },
@@ -622,7 +626,7 @@ impl StewardGetApp {
                 ui.add_space(6.0);
                 section(ui, &p, "When all downloads finish", |ui| {
                     ui.add(egui::Label::new(RichText::new(format!(
-                        "For this session: {}. Change it from the toolbar's More menu. StewardGet counts down for 30 seconds first, so you can cancel.",
+                        "Right now: {}. Change it for this session from the … menu in the toolbar. Before anything shuts down, StewardGet counts down for 30 seconds so you can cancel.",
                         self.after_all.label().to_lowercase()
                     )).color(p.text_dim)).wrap());
                 });
@@ -1091,7 +1095,7 @@ impl StewardGetApp {
                 ui,
                 &p,
                 "MCP server",
-                "Lets an AI assistant that speaks the Model Context Protocol add, check, pause, resume and remove your downloads. Off by default.",
+                "Lets an AI assistant add, check, pause, resume and remove your downloads over the Model Context Protocol. Off by default.",
                 |ui| {
                     toggle(ui, &mut draft.mcp_enabled, &p);
                 },
