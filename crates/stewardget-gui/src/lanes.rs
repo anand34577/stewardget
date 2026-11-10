@@ -20,7 +20,7 @@ impl StewardGetApp {
         card(&p).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             ui.horizontal(|ui| {
-                widgets::caption(ui, "SOURCES AND LINKS", &p);
+                widgets::caption(ui, "Sources and links", &p);
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if let Some(n) = tuning {
                         ui.label(
@@ -95,7 +95,7 @@ impl StewardGetApp {
         }
         card(&p).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
-            widgets::caption(ui, "NETWORK LINKS", &p);
+            widgets::caption(ui, "Network links", &p);
             ui.add_space(3.0);
             for (i, link) in links.iter().enumerate() {
                 let color = if i % 2 == 0 { p.accent2 } else { p.accent };

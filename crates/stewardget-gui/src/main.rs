@@ -101,7 +101,8 @@ fn main() -> eframe::Result {
         .with_visible(!start_hidden)
         .with_title("StewardGet")
         .with_app_id("dev.stewardget.StewardGet")
-        .with_inner_size([1180.0, 720.0])
+        // Room for the list with the inspector beside it; shrunk to fit small screens at start-up.
+        .with_inner_size([1280.0, 800.0])
         .with_min_inner_size([680.0, 460.0])
         .with_icon(app_icon());
     if !engine.config().system_title_bar {

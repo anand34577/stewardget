@@ -29,13 +29,13 @@ pub mod size {
 pub mod radius {
     pub const XS: u8 = 4;
     pub const SM: u8 = 6;
-    pub const MD: u8 = 8;
-    pub const LG: u8 = 10;
-    pub const XL: u8 = 12;
+    pub const MD: u8 = 9;
+    pub const LG: u8 = 12;
+    pub const XL: u8 = 14;
 }
 
 /// Letter spacing for short upper-case labels (about 7% of their size).
-pub const CAPS_TRACKING: f32 = 0.8;
+pub const CAPS_TRACKING: f32 = 0.0;
 
 #[derive(Clone, Copy)]
 pub struct Palette {
@@ -73,11 +73,11 @@ impl Palette {
         let rgb = Color32::from_rgb;
         let mut p = match theme {
             Theme::Light | Theme::System => Self {
-                bg: rgb(252, 252, 253),
-                sidebar: rgb(241, 242, 246),
+                bg: rgb(247, 248, 251),
+                sidebar: rgb(236, 238, 244),
                 card: rgb(255, 255, 255),
-                card_hover: rgb(243, 244, 248),
-                border: rgb(228, 230, 237),
+                card_hover: rgb(241, 243, 249),
+                border: rgb(224, 227, 236),
                 control_border: rgb(208, 212, 223),
                 input_bg: rgb(255, 255, 255),
                 track: rgb(232, 234, 241),
@@ -93,16 +93,16 @@ impl Palette {
                 dark: false,
             },
             Theme::Dark => Self {
-                bg: rgb(16, 18, 24),
-                sidebar: rgb(10, 11, 15),
-                card: rgb(22, 25, 33),
-                card_hover: rgb(30, 34, 45),
-                border: rgb(36, 40, 52),
-                control_border: rgb(54, 60, 77),
-                input_bg: rgb(12, 14, 19),
-                track: rgb(37, 42, 55),
-                text: rgb(237, 239, 245),
-                text_dim: rgb(150, 157, 176),
+                bg: rgb(15, 17, 25),
+                sidebar: rgb(9, 10, 16),
+                card: rgb(23, 26, 38),
+                card_hover: rgb(32, 36, 52),
+                border: rgb(39, 44, 62),
+                control_border: rgb(58, 65, 88),
+                input_bg: rgb(11, 13, 20),
+                track: rgb(40, 45, 63),
+                text: rgb(240, 242, 248),
+                text_dim: rgb(158, 166, 190),
                 ..Self::dark_base()
             },
             Theme::Midnight => Self {
@@ -132,9 +132,10 @@ impl Palette {
                 ..Self::dark_base()
             },
         };
-        let (a, a2) = accent_colors(accent, p.dark);
+        let (a, _) = accent_colors(accent, p.dark);
         p.accent = a;
-        p.accent2 = a2;
+        // One signal colour: what used to take a second hue now takes the accent.
+        p.accent2 = a;
         p.on_accent = if luminance(a) > 0.55 { rgb(17, 20, 28) } else { Color32::WHITE };
         p
     }
@@ -164,7 +165,7 @@ impl Palette {
     pub fn status(&self, status: Status) -> Color32 {
         match status {
             Status::Queued => self.text_dim,
-            Status::Connecting | Status::Downloading => self.accent2,
+            Status::Connecting | Status::Downloading => self.accent,
             Status::Verifying => self.accent,
             Status::Paused => self.yellow,
             Status::Completed => self.green,
@@ -172,47 +173,16 @@ impl Palette {
         }
     }
 
+    /// Colour of a category's icon: muted, like every other icon.
     pub fn category(&self, category: Category) -> Color32 {
-        let rgb = Color32::from_rgb;
-        match (category, self.dark) {
-            (Category::Video, true) => rgb(244, 114, 182),
-            (Category::Video, false) => rgb(219, 39, 119),
-            (Category::Audio, true) => rgb(52, 211, 153),
-            (Category::Audio, false) => rgb(5, 150, 105),
-            (Category::Image, true) => rgb(251, 146, 60),
-            (Category::Image, false) => rgb(234, 88, 12),
-            (Category::Document, true) => rgb(96, 165, 250),
-            (Category::Document, false) => rgb(37, 99, 235),
-            (Category::Archive, true) => rgb(250, 204, 21),
-            (Category::Archive, false) => rgb(180, 120, 4),
-            (Category::Program, true) => rgb(167, 139, 250),
-            (Category::Program, false) => rgb(124, 58, 237),
-            (Category::Other, _) => self.text_dim,
-            // Custom categories take turns through a set of hues the built-in ones don't use.
-            (Category::Custom(id), dark) => {
-                const DARK: [(u8, u8, u8); 6] =
-                    [(56, 189, 248), (232, 121, 249), (163, 230, 53), (251, 113, 133), (45, 212, 191), (253, 186, 116)];
-                const LIGHT: [(u8, u8, u8); 6] =
-                    [(2, 132, 199), (192, 38, 211), (77, 124, 15), (225, 29, 72), (15, 118, 110), (194, 65, 12)];
-                let (r, g, b) = if dark { DARK } else { LIGHT }[id as usize % 6];
-                rgb(r, g, b)
-            }
-        }
+        let _ = category;
+        self.text_dim
     }
 
-    /// Soft background for something drawn in `color`: icon tiles, pills, badges.
-    pub fn tint(&self, color: Color32) -> Color32 {
-        color.gamma_multiply(if self.dark { 0.16 } else { 0.11 })
-    }
-
-    /// Kept for callers that ask for two ends: both are the accent, the interface is flat.
+    /// Fill of primary buttons and live progress: the accent, solid. Kept as a
+    /// pair so callers that paint two ends stay simple.
     pub fn gradient(&self) -> (Color32, Color32) {
         (self.accent, self.accent)
-    }
-
-    /// Text drawn on a solid fill of `color`.
-    pub fn on_tile(&self, color: Color32) -> Color32 {
-        if luminance(color) > 0.55 { Color32::from_rgb(17, 20, 28) } else { Color32::WHITE }
     }
 
     /// Fill of the selected row or navigation entry.
@@ -225,18 +195,24 @@ impl Palette {
         if self.dark { Color32::from_black_alpha(165) } else { Color32::from_rgba_unmultiplied(15, 17, 26, 90) }
     }
 
-    /// Elevation for things that float above the page (dialogs, menus). Small
-    /// shadows on cards and buttons are dropped: the interface is flat and
-    /// separates surfaces by fill and outline.
+    /// Elevation for things that float above the page (dialogs, menus). Cards and
+    /// buttons get none on dark, where surface steps and hairlines carry depth.
     pub fn shadow(&self, offset: i8, blur: u8) -> Shadow {
-        if blur < 18 {
-            return Shadow::NONE;
-        }
-        let alpha = if self.dark { 120 } else { 22 };
+        let alpha = match (self.dark, blur >= 18) {
+            (true, true) => 120,
+            (true, false) => return Shadow::NONE,
+            (false, true) => 24,
+            (false, false) => 10,
+        };
         Shadow { offset: [0, offset], blur, spread: 0, color: Color32::from_black_alpha(alpha) }
     }
 
-    /// No halo: the interface is flat. Kept so callers don't need to change.
+    /// Under a card: nothing on dark, a small neutral lift on light.
+    pub fn card_shadow(&self) -> Shadow {
+        self.shadow(1, 4)
+    }
+
+    /// No coloured halos. Kept so callers don't need to change.
     pub fn glow(&self, color: Color32, blur: u8) -> Shadow {
         let _ = (color, blur);
         Shadow::NONE

@@ -31,6 +31,8 @@ use crate::{
 };
 use crate::{filename, fsio, util};
 
+/// Said when something would touch files that [`Engine::relocate`] is moving.
+const MOVING: &str = "the file is being moved; try again when that is done";
 /// EWMA smoothing factor applied to each 500 ms speed sample.
 const SPEED_ALPHA: f64 = 0.3;
 /// The download list is saved at most every this many samples (2 s)...
@@ -211,6 +213,9 @@ struct Item {
     /// Bytes each lane had carried at the last sample, and its smoothed speed.
     lane_prev: Vec<u64>,
     lane_speed: Vec<f64>,
+    /// Its files are being moved or renamed on disk ([`Engine::relocate`]): it
+    /// must not start, restart or be removed until that is done.
+    moving: bool,
 }
 
 struct Running {
@@ -244,6 +249,7 @@ impl Item {
             frozen: None,
             lane_prev: Vec::new(),
             lane_speed: Vec::new(),
+            moving: false,
         }
     }
 
@@ -692,51 +698,90 @@ impl Engine {
 
     /// Renames and/or moves a download that isn't running. Completed files
     /// and partial data are moved on disk (across drives if needed).
+    ///
+    /// Moving to another drive copies the file, which can take minutes: the
+    /// engine's state isn't locked meanwhile, so other downloads, the sampler
+    /// and every front-end keep running. Call it off the UI thread.
     pub fn relocate(&self, id: DownloadId, directory: PathBuf, file_name: &str) -> Result<(), Error> {
         let name = filename::sanitize(file_name.trim());
         if file_name.trim().is_empty() {
             return Err(Error::Io("the file name is empty".into()));
         }
         let category = self.config().categorize(&name);
-        let mut st = self.inner.lock();
-        let reserved: Vec<PathBuf> = st.items.iter().filter(|i| i.rec.id != id).map(|i| i.rec.path.clone()).collect();
-        let item = st.items.iter_mut().find(|i| i.rec.id == id).ok_or(Error::NotFound)?;
-        if item.run.is_some() {
-            return Err(Error::Io("pause the download before moving or renaming it".into()));
-        }
         let to = directory.join(&name);
-        if to == item.rec.path {
-            return Ok(());
+        // What has to move on disk, decided under the lock.
+        let moves: Vec<(PathBuf, PathBuf)> = {
+            let mut st = self.inner.lock();
+            let reserved: Vec<PathBuf> =
+                st.items.iter().filter(|i| i.rec.id != id).map(|i| i.rec.path.clone()).collect();
+            let item = st.items.iter_mut().find(|i| i.rec.id == id).ok_or(Error::NotFound)?;
+            if item.run.is_some() {
+                return Err(Error::Io("pause the download before moving or renaming it".into()));
+            }
+            if item.moving {
+                return Err(Error::Io(MOVING.into()));
+            }
+            if to == item.rec.path {
+                return Ok(());
+            }
+            // On case-insensitive file systems `a.zip` → `A.zip` finds itself "already there".
+            let case_only = cfg!(any(windows, target_os = "macos"))
+                && to.as_os_str().to_string_lossy().to_lowercase()
+                    == item.rec.path.as_os_str().to_string_lossy().to_lowercase();
+            if !case_only
+                && (to.exists() || part_path(&to).exists() || reserved.iter().any(|r| crate::fsio::same_path(r, &to)))
+            {
+                return Err(Error::Io(format!("\u{201c}{name}\u{201d} already exists in that folder")));
+            }
+            let from = item.rec.path.clone();
+            let mut moves = Vec::new();
+            if item.rec.status == Status::Completed {
+                if from.exists() {
+                    moves.push((from, to.clone()));
+                }
+            } else if item.rec.path_locked {
+                if part_path(&from).exists() {
+                    moves.push((part_path(&from), part_path(&to)));
+                }
+                if meta_path(&from).exists() {
+                    moves.push((meta_path(&from), meta_path(&to)));
+                }
+            }
+            item.moving = true;
+            moves
+        };
+        // The slow part, without the lock. If a later piece fails, the earlier
+        // ones go back, so partial data and its progress file stay together.
+        let mut done: Vec<&(PathBuf, PathBuf)> = Vec::new();
+        let mut result = Ok(());
+        for pair in &moves {
+            match fsio::move_file(&pair.0, &pair.1) {
+                Ok(()) => done.push(pair),
+                Err(e) => {
+                    for (from, to) in done.drain(..).rev() {
+                        let _ = fsio::move_file(to, from);
+                    }
+                    result = Err(Error::from(e));
+                    break;
+                }
+            }
         }
-        // On case-insensitive file systems `a.zip` → `A.zip` finds itself "already there".
-        let case_only = cfg!(any(windows, target_os = "macos"))
-            && to.as_os_str().to_string_lossy().to_lowercase()
-                == item.rec.path.as_os_str().to_string_lossy().to_lowercase();
-        if !case_only
-            && (to.exists() || part_path(&to).exists() || reserved.iter().any(|r| crate::fsio::same_path(r, &to)))
         {
-            return Err(Error::Io(format!("\u{201c}{name}\u{201d} already exists in that folder")));
-        }
-        let from = item.rec.path.clone();
-        if item.rec.status == Status::Completed {
-            if from.exists() {
-                fsio::move_file(&from, &to)?;
-            }
-        } else if item.rec.path_locked {
-            if part_path(&from).exists() {
-                fsio::move_file(&part_path(&from), &part_path(&to))?;
-            }
-            if meta_path(&from).exists() {
-                fsio::move_file(&meta_path(&from), &meta_path(&to))?;
+            let mut st = self.inner.lock();
+            let Some(item) = st.items.iter_mut().find(|i| i.rec.id == id) else { return result };
+            item.moving = false;
+            if result.is_ok() {
+                item.rec.path = to;
+                item.rec.file_name = name.clone();
+                item.rec.category = category;
+                item.rec.options.file_name = Some(name);
+                item.rec.options.directory = Some(directory);
+                st.dirty = true;
             }
         }
-        item.rec.path = to;
-        item.rec.file_name = name.clone();
-        item.rec.category = category;
-        item.rec.options.file_name = Some(name);
-        item.rec.options.directory = Some(directory);
-        st.dirty = true;
-        Ok(())
+        // It may have been resumed while its files were on the move.
+        self.inner.schedule();
+        result
     }
 
     /// Queues a new download. The URL may omit `https://`.
@@ -816,6 +861,7 @@ impl Engine {
 
     /// Discards partial data and downloads from scratch.
     pub fn restart(&self, id: DownloadId) -> Result<(), Error> {
+        self.inner.not_moving(id)?;
         self.inner.with_item(id, |item, inner| match &mut item.run {
             Some(run) => {
                 run.on_stop = AfterStop::Restart;
@@ -837,6 +883,9 @@ impl Engine {
         let removed = {
             let mut st = self.inner.lock();
             let pos = st.items.iter().position(|i| i.rec.id == id).ok_or(Error::NotFound)?;
+            if st.items[pos].moving {
+                return Err(Error::Io(MOVING.into()));
+            }
             if let Some(run) = &mut st.items[pos].run {
                 run.on_stop = AfterStop::Remove { delete_file };
                 run.cancel.cancel();
@@ -1467,6 +1516,14 @@ impl Inner {
         Ok(())
     }
 
+    /// Refuses what would touch a download's files while they are being moved.
+    fn not_moving(&self, id: DownloadId) -> Result<(), Error> {
+        match self.lock().items.iter().find(|i| i.rec.id == id) {
+            Some(item) if item.moving => Err(Error::Io(MOVING.into())),
+            _ => Ok(()),
+        }
+    }
+
     fn set_status(&self, item: &mut Item, status: Status) {
         if item.rec.status != status {
             item.rec.status = status;
@@ -1504,7 +1561,7 @@ impl Inner {
             if cap > 0 && per_queue.get(&queue).copied().unwrap_or(0) >= cap {
                 continue;
             }
-            if item.rec.status == Status::Queued && item.run.is_none() && !item.waiting_for_retry(now) {
+            if item.rec.status == Status::Queued && item.run.is_none() && !item.moving && !item.waiting_for_retry(now) {
                 self.start(&mut st.items[i]);
                 st.dirty = true;
                 running += 1;
@@ -1581,6 +1638,13 @@ impl Inner {
             let mut remove = None;
             let mut after_command = None;
             match (outcome, run.on_stop) {
+                // It finished just as it was removed: the file is under its final
+                // name now, and that is the one to delete (or keep).
+                (Outcome::Completed { path, .. }, AfterStop::Remove { delete_file }) => {
+                    item.rec.path = path;
+                    item.rec.status = Status::Completed;
+                    remove = Some(delete_file);
+                }
                 (_, AfterStop::Remove { delete_file }) => remove = Some(delete_file),
                 (Outcome::Completed { path, total, verified }, _) => {
                     item.rec.file_name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
@@ -2329,7 +2393,9 @@ fn history_entry(rec: &Record, default_connections: usize) -> HistoryEntry {
         error: rec.error.clone(),
         added_at: rec.added_at,
         finished_at: rec.finished_at.unwrap_or_else(util::now_unix),
-        active_secs: rec.active_secs as u64,
+        // Rounded up: a small file is done between two samples, and "0 s" would
+        // make its speed (and every average it is part of) read as nothing.
+        active_secs: (rec.active_secs.ceil() as u64).max(u64::from(rec.downloaded > 0)),
         connections: rec.options.connections.unwrap_or(default_connections),
         checksum_verified: rec.checksum_verified,
         tags: Vec::new(),

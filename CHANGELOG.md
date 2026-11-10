@@ -6,6 +6,26 @@ All notable changes to StewardGet are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-11-10
+
+### Changed
+- **A calmer, more exact look.** Surfaces are neutral with hairline borders; there are no glows, gradients or tinted cards. One accent colour marks what is live: the primary button, the selection, live progress and the speed chart. Finished progress bars turn grey so the downloads still moving stand out.
+- **Overview leads with the live speed**: a large reading with a live dot, and the last minute's chart across the full width beneath it. The duplicate speed card in the sidebar is gone; the speed stays in the status bar.
+- Summary tiles show just a label, the number and what it compares to, without sparklines or meters.
+- Labels and column headers are in sentence case instead of spaced capitals. File-type and category icons are muted, and statuses are a coloured dot with plain text; only failed, paused and live states colour their text.
+- Statistics: the 6-month calendar keeps small square cells instead of stretching across the card, and the breakdown by category and source uses one accent.
+- Live progress bars no longer animate a looping highlight.
+- **Overview shows the whole list at a glance**: one bar split into downloading, queued, paused, failed and completed, with a legend that opens each group.
+- **The window opens larger** (1280×800), with the menus visible and the details beside the list instead of below it.
+- The details pane of a finished download uses its full width instead of leaving two empty columns.
+
+### Fixed
+- Moving or renaming a download to another drive no longer freezes the app: the copy runs in the background and other downloads keep going.
+- Downloads removed within the Undo window came back after closing the window with the close button.
+- A download removed "with its files" at the moment it finished left the finished file behind.
+- History showed "average 0 B/s" for files that downloaded in under a second.
+- Summary tiles: captions fit without being cut off.
+
 ## [0.12.1] - 2026-11-04
 
 ### Changed

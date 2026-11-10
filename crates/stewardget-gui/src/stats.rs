@@ -70,7 +70,6 @@ impl StewardGetApp {
                 ui.add_space(12.0);
 
                 // Four tiles, one row when there is room: never squeezed until values wrap.
-                let volume: Vec<f32> = s.recent_days(30, now).iter().map(|d| d.bytes as f32).collect();
                 let success = s.success_rate();
                 let tiles = [
                     (
@@ -79,16 +78,8 @@ impl StewardGetApp {
                         format_bytes(s.total_bytes),
                         format!("{} this month", format_bytes(s.month_total(now))),
                         p.accent,
-                        widgets::KpiExtra::Spark(&volume),
                     ),
-                    (
-                        Icon::Calendar,
-                        "Today",
-                        format_bytes(s.today(now)),
-                        "The graph shows the last 7 days".to_owned(),
-                        p.accent2,
-                        widgets::KpiExtra::Spark(&volume[volume.len().saturating_sub(7)..]),
-                    ),
+                    (Icon::Calendar, "Today", format_bytes(s.today(now)), "Since midnight".to_owned(), p.accent2),
                     (
                         Icon::CheckCircle,
                         "Completed",
@@ -98,7 +89,6 @@ impl StewardGetApp {
                             None => format!("{} failed", s.failed),
                         },
                         p.green,
-                        widgets::KpiExtra::Meter(success.unwrap_or(0.0) as f32),
                     ),
                     (
                         Icon::Bolt,
@@ -110,7 +100,6 @@ impl StewardGetApp {
                             format_duration(s.active_secs as u64)
                         ),
                         p.yellow,
-                        widgets::KpiExtra::None,
                     ),
                 ];
                 let per_row = if ui.available_width() > 860.0 { 4 } else { 2 };
@@ -118,8 +107,8 @@ impl StewardGetApp {
                 let mut tiles = tiles.into_iter().peekable();
                 while tiles.peek().is_some() {
                     ui.horizontal(|ui| {
-                        for (icon, label, value, sub, color, extra) in tiles.by_ref().take(per_row) {
-                            widgets::kpi_tile(ui, tile_w, icon, color, label, &value, &sub, extra, &p);
+                        for (icon, label, value, sub, color) in tiles.by_ref().take(per_row) {
+                            widgets::kpi_tile(ui, tile_w, icon, color, label, &value, &sub, &p);
                         }
                     });
                     ui.add_space(12.0);
@@ -130,7 +119,7 @@ impl StewardGetApp {
                     even_card(ui, &p, "stats-charts", wide, |ui| {
                         ui.horizontal(|ui| {
                             ui.set_min_height(18.0);
-                            widgets::caption(ui, "LAST 30 DAYS", &p);
+                            widgets::caption(ui, "Last 30 days", &p);
                         });
                         widgets::day_bars(ui, &s.recent_days(30, now), &p, 160.0);
                     });
@@ -141,7 +130,7 @@ impl StewardGetApp {
                     even_card(ui, &p, "stats-charts", wide, |ui| {
                         ui.horizontal(|ui| {
                             ui.set_min_height(18.0);
-                            widgets::caption(ui, "LIVE THROUGHPUT · 60 s", &p);
+                            widgets::caption(ui, "Live throughput, last minute", &p);
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                 ui.label(
                                     RichText::new(format_speed(speed)).family(crate::theme::semi()).color(p.accent2),
@@ -165,7 +154,7 @@ impl StewardGetApp {
 
                 card(&p).show(ui, |ui| {
                     ui.set_min_width(ui.available_width());
-                    widgets::caption(ui, "THE LAST 6 MONTHS", &p);
+                    widgets::caption(ui, "The last 6 months", &p);
                     ui.add_space(4.0);
                     egui::ScrollArea::horizontal().id_salt("heatmap").show(ui, |ui| {
                         widgets::heatmap(ui, &s.recent_days(182, now), &p);
@@ -184,12 +173,12 @@ impl StewardGetApp {
                         }
                         let max = rows.iter().map(|r| r.3).max().unwrap_or(1).max(1);
                         for (name, cat, n, bytes) in rows {
-                            let color = cat.map_or(p.accent, |c| p.category(c));
+                            let color = p.accent;
                             widgets::split_row(
                                 ui,
                                 |ui| {
                                     if let Some(c) = cat {
-                                        widgets::icon(ui, Icon::for_category(*c), 14.0, color);
+                                        widgets::icon(ui, Icon::for_category(*c), 14.0, p.text_dim);
                                     }
                                     ui.add(egui::Label::new(RichText::new(name).color(p.text)).truncate());
                                 },
@@ -212,13 +201,13 @@ impl StewardGetApp {
                 };
                 if wide {
                     ui.columns_const(|[a, b]: &mut [Ui; 2]| {
-                        breakdown(a, "BY CATEGORY", &categories);
-                        breakdown(b, "TOP SOURCES", &hosts);
+                        breakdown(a, "By category", &categories);
+                        breakdown(b, "Top sources", &hosts);
                     });
                 } else {
-                    breakdown(ui, "BY CATEGORY", &categories);
+                    breakdown(ui, "By category", &categories);
                     ui.add_space(12.0);
-                    breakdown(ui, "TOP SOURCES", &hosts);
+                    breakdown(ui, "Top sources", &hosts);
                 }
             });
         });

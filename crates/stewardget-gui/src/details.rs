@@ -52,7 +52,7 @@ impl StewardGetApp {
             sub = format!("{sub}  \u{00b7}  {}", format_bytes(total));
         }
         ui.horizontal(|ui| {
-            widgets::icon_tile(ui, Icon::for_category(d.category), 38.0, p.category(d.category), &p);
+            widgets::icon_tile(ui, Icon::for_category(d.category), 38.0, p.text_dim, &p);
             ui.add_space(4.0);
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
@@ -118,25 +118,37 @@ impl StewardGetApp {
         ui.add_space(6.0);
 
         let wide = ui.available_width() > 760.0;
+        // A finished download has no map, and no graph unless it ran in this session:
+        // the information then takes the room instead of sharing it with empty columns.
+        let has_map = d.status != Status::Completed;
+        let has_speed = !(d.history.is_empty() && d.status == Status::Completed);
         if wide {
             let avail = ui.available_width();
             let height = ui.available_height();
+            let info_w = match (has_map, has_speed) {
+                (true, true) => avail * 0.38,
+                (false, false) => avail,
+                _ => avail * 0.55,
+            };
             ui.horizontal_top(|ui| {
                 let column = Layout::top_down(Align::Min);
-                ui.allocate_ui_with_layout(vec2(avail * 0.38, height), column, |ui| {
+                ui.allocate_ui_with_layout(vec2(info_w, height), column, |ui| {
                     egui::ScrollArea::vertical()
                         .id_salt("info")
                         .auto_shrink([false, false])
                         .show(ui, |ui| self.info_grid(ui, &d));
                 });
-                ui.separator();
-                ui.allocate_ui_with_layout(vec2(avail * 0.34, height), column, |ui| {
-                    self.map_block(ui, &d, height, true)
-                });
-                ui.separator();
-                ui.allocate_ui_with_layout(vec2(ui.available_width(), height), column, |ui| {
-                    self.speed_block(ui, &d, height, true)
-                });
+                if has_map {
+                    ui.separator();
+                    let w = if has_speed { avail * 0.34 } else { ui.available_width() };
+                    ui.allocate_ui_with_layout(vec2(w, height), column, |ui| self.map_block(ui, &d, height, true));
+                }
+                if has_speed {
+                    ui.separator();
+                    ui.allocate_ui_with_layout(vec2(ui.available_width(), height), column, |ui| {
+                        self.speed_block(ui, &d, height, true)
+                    });
+                }
             });
         } else {
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
@@ -570,7 +582,7 @@ impl StewardGetApp {
             return;
         }
         ui.horizontal(|ui| {
-            widgets::caption(ui, "CONNECTION MAP", &p);
+            widgets::caption(ui, "Connection map", &p);
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 let pct = d.fraction().map_or("—".into(), |f| format!("{:.1}%", f * 100.0));
                 ui.label(RichText::new(pct).family(theme::semi()).color(p.text));
@@ -601,7 +613,7 @@ impl StewardGetApp {
             return;
         }
         ui.horizontal(|ui| {
-            widgets::caption(ui, "SPEED", &p);
+            widgets::caption(ui, "Speed", &p);
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 // Nothing sampled this session: no peak to show, rather than "peak 0 B/s".
                 let peak = d.history.iter().copied().fold(0.0f32, f32::max);

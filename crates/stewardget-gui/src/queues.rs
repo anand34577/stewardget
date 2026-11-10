@@ -166,7 +166,7 @@ impl StewardGetApp {
                 ui.label(RichText::new("shared by the queue, e.g. 2M").size(12.0).color(p.text_dim));
             });
             ui.add_space(6.0);
-            widgets::caption(ui, "SCHEDULE", &p);
+            widgets::caption(ui, "Schedule", &p);
             ui.add_space(4.0);
             schedule_editor(ui, &p, "queue", &mut d.schedule);
             let queue_id = d.id;
@@ -185,7 +185,7 @@ impl StewardGetApp {
                     .collect()
             });
             ui.add_space(6.0);
-            widgets::caption(ui, "NOTIFICATIONS", &p);
+            widgets::caption(ui, "Notifications", &p);
             ui.add_space(4.0);
             crate::dialogs::note(
                 ui,
