@@ -319,7 +319,7 @@ impl StewardGetApp {
         } else {
             (Align2::LEFT_CENTER, cell.left_center())
         };
-        let galley = widgets::caps_galley(ui, &col.title.to_uppercase(), 10.5, color);
+        let galley = widgets::caps_galley(ui, col.title, 12.0, color);
         let text_rect = anchor.anchor_size(pos, galley.size());
         ui.painter().galley(text_rect.min, galley, color);
         if active {
@@ -429,7 +429,7 @@ impl StewardGetApp {
         let compact = row_h <= ROW_H_COMPACT;
         let tile = if compact { 22.0 } else { 34.0 };
         let icon_rect = Rect::from_min_size(pos2(x, rect.center().y - tile / 2.0), vec2(tile, tile));
-        widgets::paint_icon_tile(&painter, icon_rect, Icon::for_category(d.category), p.category(d.category), &p);
+        widgets::paint_icon_tile(&painter, icon_rect, Icon::for_category(d.category), p.text_dim, &p);
         let text_x = x + tile + 12.0;
         let name_rect = Rect::from_min_max(pos2(text_x, rect.top()), pos2(x + name_w - 12.0, rect.bottom()));
         let name_font = FontId::new(
@@ -619,10 +619,6 @@ impl StewardGetApp {
         let active = s.count(Status::is_active);
         let waiting = s.count(|x| matches!(x, Status::Queued | Status::Paused));
         let left: u64 = unfinished.iter().filter_map(|d| d.total.map(|t| t.saturating_sub(d.downloaded))).sum();
-        let (got, of): (u64, u64) = unfinished
-            .iter()
-            .filter_map(|d| d.total.map(|t| (d.downloaded, t)))
-            .fold((0, 0), |a, b| (a.0 + b.0, a.1 + b.1));
         let connections: usize = s.downloads.iter().map(|d| d.connections).sum();
         let peak = s.history.iter().copied().fold(0.0f32, f32::max);
         let finished_today =
@@ -634,10 +630,8 @@ impl StewardGetApp {
         let inner = width - CARD_X * 2.0;
         let n = if inner > 760.0 { 4 } else { 2 };
         let tile_w = (inner - gap * (n - 1) as f32) / n as f32;
-        let history = s.history.clone();
         let speed = s.speed;
         let today = s.stats.today(now);
-        let week: Vec<f32> = s.stats.recent_days(14, now).iter().map(|d| d.bytes as f32).collect();
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = gap;
             // Tiles line up with the cards below (the cards sit inside the panel margin).
@@ -651,17 +645,7 @@ impl StewardGetApp {
             } else {
                 "Nothing downloading".to_owned()
             };
-            let r = widgets::kpi_tile(
-                ui,
-                tile_w,
-                Icon::Bolt,
-                p.accent2,
-                "Speed",
-                &format_speed(speed),
-                &speed_sub,
-                widgets::KpiExtra::Spark(&history[history.len().saturating_sub(60)..]),
-                &p,
-            );
+            let r = widgets::kpi_tile(ui, tile_w, Icon::Bolt, p.accent2, "Speed", &format_speed(speed), &speed_sub, &p);
             if r.on_hover_text("Speed over the last minute").on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
                 self.filter = ListFilter::Active;
             }
@@ -678,7 +662,6 @@ impl StewardGetApp {
                 "In progress",
                 &format!("{active} active"),
                 &format!("{waiting} waiting \u{00b7} {} left{eta}", format_bytes(left)),
-                widgets::KpiExtra::Meter(if of > 0 { got as f32 / of as f32 } else { 0.0 }),
                 &p,
             );
             if r.on_hover_text("Show what is downloading").on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
@@ -693,7 +676,6 @@ impl StewardGetApp {
                     "Today",
                     &format_bytes(today),
                     &format!("{finished_today} finished in 24 h"),
-                    widgets::KpiExtra::Spark(&week),
                     &p,
                 );
                 if r.on_hover_text("Open the history").on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
@@ -701,31 +683,15 @@ impl StewardGetApp {
                 }
                 let (value, sub, color) = match free {
                     Some(f) if left > f => {
-                        (format_bytes(f), format!("{} short for what's left", format_bytes(left - f)), p.yellow)
+                        (format_bytes(f), format!("{} short for what's left", format_bytes(left - f)), p.red)
                     }
                     Some(f) => (format_bytes(f), format!("free in {}", short_dir(&dir)), p.accent2),
                     None => ("—".to_owned(), short_dir(&dir), p.text_dim),
                 };
-                let r = widgets::kpi_tile(
-                    ui,
-                    tile_w,
-                    Icon::Drive,
-                    color,
-                    "Disk space",
-                    &value,
-                    &sub,
-                    widgets::KpiExtra::Meter(match free {
-                        Some(f) if f > 0 => (left as f32 / f as f32).min(1.0),
-                        _ => 0.0,
-                    }),
-                    &p,
-                );
-                if r.on_hover_text(format!(
-                    "{}\nThe bar is how much of it the unfinished downloads still need.\nClick to open the folder.",
-                    dir.display()
-                ))
-                .on_hover_cursor(egui::CursorIcon::PointingHand)
-                .clicked()
+                let r = widgets::kpi_tile(ui, tile_w, Icon::Drive, color, "Disk space", &value, &sub, &p);
+                if r.on_hover_text(format!("{}\nClick to open the folder.", dir.display()))
+                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                    .clicked()
                 {
                     self.open_path(&dir);
                 }
@@ -741,7 +707,7 @@ impl StewardGetApp {
         let noun = if shown == 1 { "download" } else { "downloads" };
         ui.painter().galley(
             pos2(bar.left() + CARD_X + 4.0, bar.center().y - 6.0),
-            widgets::caps_galley(ui, &format!("{shown} {noun}").to_uppercase(), 10.5, p.text_dim),
+            widgets::caps_galley(ui, &format!("{shown} {noun}"), 12.0, p.text_dim),
             p.text_dim,
         );
         let right = Rect::from_min_max(pos2(bar.center().x, bar.top()), pos2(bar.right() - CARD_X, bar.bottom()));
@@ -828,8 +794,7 @@ impl StewardGetApp {
         // Live downloads carry a thin accent edge on the left.
         if d.status.is_active() {
             let edge = Rect::from_min_size(card.left_top() + vec2(0.0, 16.0), vec2(3.0, card.height() - 32.0));
-            let (a, b) = widgets::status_gradient(d.status, &p);
-            widgets::paint_gradient_rect(&painter, edge, 1.5, a, b, true);
+            painter.rect_filled(edge, CornerRadius::same(2), p.accent);
         }
 
         let tile = Rect::from_center_size(card.left_center() + vec2(16.0 + 24.0, 0.0), vec2(48.0, 48.0));

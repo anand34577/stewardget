@@ -1261,13 +1261,10 @@ impl StewardGetApp {
         });
         ui.add_space(4.0);
 
-        // The lists scroll when the window is short; the live card, Tools,
-        // Statistics and Settings stay pinned.
-        // Each nav entry is 34 points plus item spacing; the live card is 72 plus its gap.
+        // The lists scroll when the window is short; Tools, Statistics and
+        // Settings stay pinned. Each nav entry is 34 points plus item spacing.
         let entry_h = 34.0 + ui.spacing().item_spacing.y;
-        let show_live = self.snap.count(|s| s.is_active() || s == Status::Queued) > 0;
-        let live_h = if collapsed || !show_live { 0.0 } else { 72.0 + 8.0 + ui.spacing().item_spacing.y * 2.0 };
-        let list_h = (ui.available_height() - 3.0 * entry_h - 8.0 - live_h).max(60.0);
+        let list_h = (ui.available_height() - 3.0 * entry_h - 8.0).max(60.0);
         ui.allocate_ui(vec2(ui.available_width(), list_h), |ui| {
             let scroll =
                 egui::ScrollArea::vertical().id_salt("nav-scroll").auto_shrink([false, false]).show(ui, |ui| {
@@ -1287,7 +1284,7 @@ impl StewardGetApp {
                         self.page = Page::History;
                     }
                     ui.add_space(6.0);
-                    let open = collapsed || widgets::section(ui, "DOWNLOADS", &p);
+                    let open = collapsed || widgets::section(ui, "Downloads", &p);
                     if !collapsed {
                         ui.add_space(2.0);
                     }
@@ -1310,7 +1307,7 @@ impl StewardGetApp {
                     ui.add_space(6.0);
                     self.sidebar_queues(ui, collapsed);
                     ui.add_space(6.0);
-                    let open = collapsed || widgets::section(ui, "CATEGORIES", &p);
+                    let open = collapsed || widgets::section(ui, "Categories", &p);
                     if !collapsed {
                         ui.add_space(2.0);
                     }
@@ -1320,7 +1317,7 @@ impl StewardGetApp {
                         if nav_item(
                             ui,
                             Icon::for_category(c),
-                            Some(p.category(c)),
+                            None,
                             &self.cfg.category_label(c),
                             count(&self.snap.downloads, filter),
                             selected,
@@ -1362,88 +1359,7 @@ impl StewardGetApp {
             if nav_item(ui, Icon::Sliders, None, "Tools", 0, self.page == Page::Tools, collapsed, &p).clicked() {
                 self.page = Page::Tools;
             }
-            // Idle speed is already in the status bar; the card appears only while something runs.
-            if !collapsed && show_live {
-                ui.add_space(8.0);
-                self.live_card(ui);
-            }
         });
-    }
-
-    /// The current speed with a small graph: always in view, opens what is downloading.
-    fn live_card(&mut self, ui: &mut Ui) {
-        let p = self.palette;
-        let active = self.snap.count(Status::is_active);
-        let speed = self.snap.speed;
-        let (rect, r) = ui.allocate_exact_size(vec2(ui.available_width(), 72.0), Sense::click());
-        let painter = ui.painter();
-        let fill = if r.hovered() { p.card_hover } else { p.card };
-        painter.rect(
-            rect,
-            CornerRadius::same(theme::radius::LG),
-            fill,
-            Stroke::new(1.0, p.border),
-            egui::StrokeKind::Inside,
-        );
-        let inner = rect.shrink2(vec2(12.0, 10.0));
-        let live = active > 0 && speed > 1.0;
-        let (status, color) = if live {
-            (format!("{active} downloading"), p.accent2)
-        } else if self.snap.count(|s| s == Status::Queued) > 0 {
-            ("Waiting to start".to_owned(), p.yellow)
-        } else {
-            ("Idle".to_owned(), p.text_dim)
-        };
-        painter.circle_filled(inner.left_top() + vec2(3.5, 8.0), 3.5, color);
-        if live {
-            // A slow pulse around the dot while data is flowing.
-            let t = (ui.input(|i| i.time) as f32 * 0.8).fract();
-            painter.circle_stroke(
-                inner.left_top() + vec2(3.5, 8.0),
-                3.5 + 5.0 * t,
-                Stroke::new(1.5, color.gamma_multiply(1.0 - t)),
-            );
-            ui.ctx().request_repaint_after(Duration::from_millis(33));
-        }
-        painter.text(
-            inner.left_top() + vec2(14.0, 8.0),
-            Align2::LEFT_CENTER,
-            status,
-            FontId::proportional(theme::size::SM),
-            p.text_dim,
-        );
-        painter.text(
-            inner.left_bottom() - vec2(0.0, 2.0),
-            Align2::LEFT_BOTTOM,
-            if live { format_speed(speed) } else { "0 B/s".to_owned() },
-            FontId::new(theme::size::XL, theme::semi()),
-            p.text,
-        );
-        // Sparkline of the last minute, right-aligned.
-        let values = &self.snap.history;
-        let chart = egui::Rect::from_min_max(
-            egui::pos2(inner.right() - 70.0, inner.top() + 20.0),
-            egui::pos2(inner.right(), inner.bottom() - 2.0),
-        );
-        if values.len() > 1 {
-            let max = values.iter().copied().fold(1.0f32, f32::max);
-            let tail = &values[values.len().saturating_sub(40)..];
-            let pts: Vec<egui::Pos2> = tail
-                .iter()
-                .enumerate()
-                .map(|(i, v)| {
-                    egui::pos2(
-                        chart.left() + chart.width() * i as f32 / (tail.len() - 1).max(1) as f32,
-                        chart.bottom() - chart.height() * (v / max).clamp(0.0, 1.0),
-                    )
-                })
-                .collect();
-            painter.add(egui::Shape::line(pts, Stroke::new(1.5, if live { p.accent2 } else { p.text_dim })));
-        }
-        if r.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text("Show what is downloading").clicked() {
-            self.page = Page::Downloads;
-            self.filter = ListFilter::Active;
-        }
     }
 
     /// The QUEUES section: one entry per queue, a drop target for dragged downloads.
@@ -1453,7 +1369,7 @@ impl StewardGetApp {
         let mut open = true;
         if !collapsed {
             ui.horizontal(|ui| {
-                open = widgets::section(ui, "QUEUES", &p);
+                open = widgets::section(ui, "Queues", &p);
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     let (rect, r) = ui.allocate_exact_size(vec2(18.0, 14.0), Sense::click());
                     let color = if r.hovered() { p.accent } else { p.text_dim };
@@ -1860,20 +1776,8 @@ fn nav_item(
     let painter = ui.painter();
     let corner = CornerRadius::same(theme::radius::MD);
     if selected {
-        // The accent fades out towards the label's end.
-        let strength = if p.dark { 0.26 } else { 0.15 };
-        widgets::paint_gradient_rect(
-            painter,
-            rect,
-            corner.nw as f32,
-            p.accent.gamma_multiply(strength),
-            p.accent.gamma_multiply(strength * 0.25),
-            false,
-        );
-        if !collapsed {
-            let bar = egui::Rect::from_center_size(rect.left_center() + vec2(1.5, 0.0), vec2(3.0, 16.0));
-            painter.rect_filled(bar, CornerRadius::same(2), p.accent);
-        }
+        // A surface step with a hairline; the icon carries the accent.
+        painter.rect(rect, corner, p.card, Stroke::new(1.0, p.border), egui::StrokeKind::Inside);
     } else if response.hovered() {
         painter.rect_filled(rect, corner, p.card_hover);
     }
@@ -1894,7 +1798,7 @@ fn nav_item(
         let text = widgets::fit_text(painter, label, &font, text_rect.width());
         painter.text(text_rect.left_center(), Align2::LEFT_CENTER, text, font, fg);
         if count > 0 {
-            let (bg, color) = if selected { (p.accent.gamma_multiply(0.22), p.text) } else { (p.track, p.text_dim) };
+            let (bg, color) = (Color32::TRANSPARENT, p.text_dim);
             widgets::paint_badge(painter, rect.right_center() - vec2(8.0, 0.0), &count.to_string(), color, bg);
         }
     } else if count > 0 && selected {
@@ -2225,22 +2129,6 @@ impl eframe::App for StewardGetApp {
                         // Rounded corners: keep page content from painting over them.
                         let canvas = ui.max_rect();
                         ui.set_clip_rect(canvas.shrink(1.0).intersect(ui.clip_rect()));
-                        // A soft light in the accent colours behind the top of the page gives the
-                        // canvas some depth; cards and lists sit on top of it.
-                        let glow = ui.painter().with_clip_rect(canvas.shrink(1.0));
-                        let strength = if p.dark { 0.11 } else { 0.07 };
-                        widgets::paint_glow(
-                            &glow,
-                            canvas.left_top() + vec2(canvas.width() * 0.16, -40.0),
-                            (canvas.width() * 0.55).clamp(320.0, 760.0),
-                            p.accent.gamma_multiply(strength),
-                        );
-                        widgets::paint_glow(
-                            &glow,
-                            canvas.right_top() + vec2(-canvas.width() * 0.12, -90.0),
-                            (canvas.width() * 0.4).clamp(260.0, 560.0),
-                            p.accent2.gamma_multiply(strength * 0.8),
-                        );
                         let details = self.page == Page::Downloads && self.show_details && !self.selection.is_empty();
                         if details && canvas.width() >= 900.0 {
                             egui::Panel::right("stewardget-inspector")

@@ -105,7 +105,7 @@ impl StewardGetApp {
         let p = self.palette;
         card(&p).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
-            widgets::caption(ui, "DUPLICATE FILES", &p);
+            widgets::caption(ui, "Duplicate files", &p);
             ui.label(
                 RichText::new(
                     "Finds identical files in your download folders (compared by content, not by name) so you can free the space.",
@@ -200,7 +200,7 @@ impl StewardGetApp {
         let p = self.palette;
         card(&p).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
-            widgets::caption(ui, "LEFTOVERS OF UNFINISHED DOWNLOADS", &p);
+            widgets::caption(ui, "Leftovers of unfinished downloads", &p);
             ui.label(
                 RichText::new(
                     "Removing an unfinished download keeps its partial data in case you add it again. Partial files that no download in the list owns can be cleared here.",
@@ -264,7 +264,7 @@ impl StewardGetApp {
         let p = self.palette;
         card(&p).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
-            widgets::caption(ui, "CHECK LINKS", &p);
+            widgets::caption(ui, "Check links", &p);
             ui.label(
                 RichText::new("Paste links to see which still work, how big they are and whether they can be resumed, before downloading anything.")
                     .size(12.0)
@@ -347,7 +347,7 @@ impl StewardGetApp {
         let p = self.palette;
         card(&p).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
-            widgets::caption(ui, "BACKUP AND SUPPORT", &p);
+            widgets::caption(ui, "Backup and support", &p);
             ui.label(
                 RichText::new("A backup holds your settings (without access tokens), history, statistics and download list. Restoring brings back the settings only.")
                     .size(12.0)

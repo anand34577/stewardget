@@ -52,7 +52,7 @@ impl StewardGetApp {
             sub = format!("{sub}  \u{00b7}  {}", format_bytes(total));
         }
         ui.horizontal(|ui| {
-            widgets::icon_tile(ui, Icon::for_category(d.category), 38.0, p.category(d.category), &p);
+            widgets::icon_tile(ui, Icon::for_category(d.category), 38.0, p.text_dim, &p);
             ui.add_space(4.0);
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
@@ -582,7 +582,7 @@ impl StewardGetApp {
             return;
         }
         ui.horizontal(|ui| {
-            widgets::caption(ui, "CONNECTION MAP", &p);
+            widgets::caption(ui, "Connection map", &p);
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 let pct = d.fraction().map_or("—".into(), |f| format!("{:.1}%", f * 100.0));
                 ui.label(RichText::new(pct).family(theme::semi()).color(p.text));
@@ -613,7 +613,7 @@ impl StewardGetApp {
             return;
         }
         ui.horizontal(|ui| {
-            widgets::caption(ui, "SPEED", &p);
+            widgets::caption(ui, "Speed", &p);
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 // Nothing sampled this session: no peak to show, rather than "peak 0 B/s".
                 let peak = d.history.iter().copied().fold(0.0f32, f32::max);

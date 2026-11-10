@@ -46,7 +46,7 @@ impl StewardGetApp {
                         let link = ui
                             .add(
                                 egui::Label::new(
-                                    RichText::new(format!("{failed} failed \u{2013} review"))
+                                    RichText::new(format!("{failed} failed, review"))
                                         .size(crate::theme::size::SM)
                                         .color(p.red),
                                 )
@@ -61,22 +61,19 @@ impl StewardGetApp {
                     }
                 });
                 ui.add_space(12.0);
-                // Hero: the live speed over its own graph, lit in the accent while data flows.
-                let hero_tint = if snap.speed > 1.0 { p.accent2 } else { p.accent };
-                widgets::tinted_card(ui, hero_tint, &p, |ui| {
+                // Hero: the live speed reading, and under it the chart of the last minute.
+                card(&p).show(ui, |ui| {
                     ui.set_min_width(ui.available_width());
                     ui.horizontal(|ui| {
                         ui.vertical(|ui| {
-                            widgets::caption(ui, "Right now", &p);
                             let live = snap.speed > 1.0;
+                            ui.horizontal(|ui| {
+                                widgets::live_dot(ui, live, &p);
+                                widgets::caption(ui, "Live speed", &p);
+                            });
                             let value = if live { format_speed(snap.speed) } else { "Idle".to_owned() };
                             let color = if live { p.text } else { p.text_dim };
-                            ui.label(
-                                RichText::new(value)
-                                    .size(crate::theme::size::DISPLAY + 4.0)
-                                    .family(crate::theme::semi())
-                                    .color(color),
-                            );
+                            ui.label(RichText::new(value).size(crate::theme::size::DISPLAY + 4.0).color(color));
                             let line = match (active.len(), eta) {
                                 (0, _) if waiting > 0 => format!("{waiting} waiting to start"),
                                 (0, _) => "Nothing is downloading. Paste a link to begin.".to_owned(),
@@ -104,20 +101,16 @@ impl StewardGetApp {
                                 }
                             });
                         });
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            let w = (ui.available_width() - 20.0).clamp(120.0, 560.0);
-                            widgets::area_chart(ui, &snap.history, vec2(w, 124.0), p.accent2, &p);
-                        });
                     });
+                    ui.add_space(12.0);
+                    widgets::area_chart(ui, &snap.history, vec2(ui.available_width(), 140.0), p.accent, &p);
                 });
                 ui.add_space(12.0);
 
                 let per_row = if ui.available_width() > 760.0 { 4 } else { 2 };
                 let tile_w = (ui.available_width() - 12.0 * (per_row - 1) as f32) / per_row as f32;
-                let days: Vec<f32> = snap.stats.recent_days(14, now).iter().map(|d| d.bytes as f32).collect();
                 let queued = snap.count(|s| s == Status::Queued);
                 let success = snap.stats.success_rate();
-                let shown = snap.downloads.len().max(1) as f32;
                 let tiles = [
                     (
                         Icon::Download,
@@ -125,7 +118,6 @@ impl StewardGetApp {
                         format_bytes(snap.stats.today(now)),
                         "Downloaded since midnight".to_owned(),
                         p.accent,
-                        None,
                     ),
                     (
                         Icon::Calendar,
@@ -133,7 +125,6 @@ impl StewardGetApp {
                         format_bytes(week),
                         format!("{} this month", format_bytes(snap.stats.month_total(now))),
                         p.accent2,
-                        None,
                     ),
                     (
                         Icon::Clock,
@@ -141,27 +132,19 @@ impl StewardGetApp {
                         waiting.to_string(),
                         format!("{queued} queued \u{00b7} {} paused", waiting.saturating_sub(queued)),
                         p.yellow,
-                        Some(waiting as f32 / shown),
                     ),
                     (
                         Icon::CheckCircle,
                         "Finished",
                         snap.stats.completed.to_string(),
-                        success.map_or("All time".to_owned(), |r| format!("{:.0}% of downloads succeed", r * 100.0)),
+                        success.map_or("All time".to_owned(), |r| format!("{:.0}% succeeded, all time", r * 100.0)),
                         p.green,
-                        Some(success.unwrap_or(0.0) as f32),
                     ),
                 ];
-                for (i, chunk) in tiles.chunks(per_row).enumerate() {
+                for chunk in tiles.chunks(per_row) {
                     ui.horizontal(|ui| {
-                        for (j, (icon, label, value, sub, color, meter)) in chunk.iter().enumerate() {
-                            // The two volume tiles show the last two weeks, or the last one.
-                            let extra = match meter {
-                                Some(f) => widgets::KpiExtra::Meter(*f),
-                                None if i * per_row + j == 0 => widgets::KpiExtra::Spark(&days),
-                                None => widgets::KpiExtra::Spark(&days[days.len().saturating_sub(7)..]),
-                            };
-                            widgets::kpi_tile(ui, tile_w, *icon, *color, label, value, sub, extra, &p);
+                        for (icon, label, value, sub, color) in chunk {
+                            widgets::kpi_tile(ui, tile_w, *icon, *color, label, value, sub, &p);
                         }
                     });
                     ui.add_space(12.0);
@@ -350,7 +333,7 @@ impl StewardGetApp {
         }
         card(&p).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
-            widgets::caption(ui, "WHEN YOU DOWNLOAD", &p);
+            widgets::caption(ui, "When you download", &p);
             ui.add_space(4.0);
             widgets::hour_bars(ui, &hours, &p, 72.0);
             let busiest = hours.iter().enumerate().max_by_key(|(_, n)| **n).map_or(0, |(h, _)| h);
@@ -365,7 +348,7 @@ impl StewardGetApp {
             self.overnight_suggestion(ui, &hours);
             if !hosts.is_empty() {
                 ui.add_space(5.0);
-                widgets::caption(ui, "FASTEST SOURCES", &p);
+                widgets::caption(ui, "Fastest sources", &p);
                 let max = hosts.iter().map(|h| h.average_speed()).fold(1.0, f64::max);
                 for h in &hosts {
                     widgets::split_row(
@@ -421,14 +404,7 @@ impl StewardGetApp {
             for (_, n, color, _) in &shown {
                 let w = min_w + spare * *n as f32 / total.max(1) as f32;
                 let piece = egui::Rect::from_min_size(egui::pos2(x, bar.top()), vec2(w, bar.height()));
-                widgets::paint_gradient_rect(
-                    ui.painter(),
-                    piece,
-                    5.0,
-                    widgets::lerp_color(*color, p.card, 0.22),
-                    *color,
-                    false,
-                );
+                widgets::paint_gradient_rect(ui.painter(), piece, 5.0, *color, *color, false);
                 x += w + gap;
             }
             ui.add_space(8.0);
@@ -494,7 +470,7 @@ impl StewardGetApp {
         card(&p).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             ui.horizontal(|ui| {
-                widgets::caption(ui, "DATA THIS MONTH", &p);
+                widgets::caption(ui, "Data this month", &p);
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if hit && widgets::button(ui, ButtonKind::Tool, Some(Icon::Gear), "Change the limit", true, &p).clicked() {
                         self.open_settings(crate::settings::Tab::Connection);

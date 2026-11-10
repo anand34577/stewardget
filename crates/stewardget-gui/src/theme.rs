@@ -35,7 +35,7 @@ pub mod radius {
 }
 
 /// Letter spacing for short upper-case labels (about 7% of their size).
-pub const CAPS_TRACKING: f32 = 0.8;
+pub const CAPS_TRACKING: f32 = 0.0;
 
 #[derive(Clone, Copy)]
 pub struct Palette {
@@ -132,9 +132,10 @@ impl Palette {
                 ..Self::dark_base()
             },
         };
-        let (a, a2) = accent_colors(accent, p.dark);
+        let (a, _) = accent_colors(accent, p.dark);
         p.accent = a;
-        p.accent2 = a2;
+        // One signal colour: what used to take a second hue now takes the accent.
+        p.accent2 = a;
         p.on_accent = if luminance(a) > 0.55 { rgb(17, 20, 28) } else { Color32::WHITE };
         p
     }
@@ -164,7 +165,7 @@ impl Palette {
     pub fn status(&self, status: Status) -> Color32 {
         match status {
             Status::Queued => self.text_dim,
-            Status::Connecting | Status::Downloading => self.accent2,
+            Status::Connecting | Status::Downloading => self.accent,
             Status::Verifying => self.accent,
             Status::Paused => self.yellow,
             Status::Completed => self.green,
@@ -172,59 +173,16 @@ impl Palette {
         }
     }
 
+    /// Colour of a category's icon: muted, like every other icon.
     pub fn category(&self, category: Category) -> Color32 {
-        let rgb = Color32::from_rgb;
-        match (category, self.dark) {
-            (Category::Video, true) => rgb(244, 114, 182),
-            (Category::Video, false) => rgb(219, 39, 119),
-            (Category::Audio, true) => rgb(52, 211, 153),
-            (Category::Audio, false) => rgb(5, 150, 105),
-            (Category::Image, true) => rgb(251, 146, 60),
-            (Category::Image, false) => rgb(234, 88, 12),
-            (Category::Document, true) => rgb(96, 165, 250),
-            (Category::Document, false) => rgb(37, 99, 235),
-            (Category::Archive, true) => rgb(250, 204, 21),
-            (Category::Archive, false) => rgb(180, 120, 4),
-            (Category::Program, true) => rgb(167, 139, 250),
-            (Category::Program, false) => rgb(124, 58, 237),
-            (Category::Other, _) => self.text_dim,
-            // Custom categories take turns through a set of hues the built-in ones don't use.
-            (Category::Custom(id), dark) => {
-                const DARK: [(u8, u8, u8); 6] =
-                    [(56, 189, 248), (232, 121, 249), (163, 230, 53), (251, 113, 133), (45, 212, 191), (253, 186, 116)];
-                const LIGHT: [(u8, u8, u8); 6] =
-                    [(2, 132, 199), (192, 38, 211), (77, 124, 15), (225, 29, 72), (15, 118, 110), (194, 65, 12)];
-                let (r, g, b) = if dark { DARK } else { LIGHT }[id as usize % 6];
-                rgb(r, g, b)
-            }
-        }
+        let _ = category;
+        self.text_dim
     }
 
-    /// Soft background for something drawn in `color`: icon tiles, pills, badges.
-    pub fn tint(&self, color: Color32) -> Color32 {
-        color.gamma_multiply(if self.dark { 0.16 } else { 0.11 })
-    }
-
-    /// The two ends of the accent gradient (primary buttons, live progress): the
-    /// accent running towards its partner colour.
+    /// Fill of primary buttons and live progress: the accent, solid. Kept as a
+    /// pair so callers that paint two ends stay simple.
     pub fn gradient(&self) -> (Color32, Color32) {
-        let mix = |a: Color32, b: Color32, t: f32| {
-            let l = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
-            Color32::from_rgb(l(a.r(), b.r()), l(a.g(), b.g()), l(a.b(), b.b()))
-        };
-        // Shaded away from the label colour, so the label keeps its contrast across the button.
-        let away = if self.on_accent == Color32::WHITE { Color32::BLACK } else { Color32::WHITE };
-        (mix(self.accent, away, 0.06), mix(mix(self.accent, self.accent2, 0.35), away, 0.14))
-    }
-
-    /// A faint wash of `color` over a card: the top of hero cards and tiles.
-    pub fn wash(&self, color: Color32) -> Color32 {
-        color.gamma_multiply(if self.dark { 0.13 } else { 0.07 })
-    }
-
-    /// Text drawn on a solid fill of `color`.
-    pub fn on_tile(&self, color: Color32) -> Color32 {
-        if luminance(color) > 0.55 { Color32::from_rgb(17, 20, 28) } else { Color32::WHITE }
+        (self.accent, self.accent)
     }
 
     /// Fill of the selected row or navigation entry.
@@ -237,26 +195,27 @@ impl Palette {
         if self.dark { Color32::from_black_alpha(165) } else { Color32::from_rgba_unmultiplied(15, 17, 26, 90) }
     }
 
-    /// Elevation: the larger the blur, the higher the thing floats. Cards and
-    /// buttons sit just above the page; dialogs and menus well above it.
+    /// Elevation for things that float above the page (dialogs, menus). Cards and
+    /// buttons get none on dark, where surface steps and hairlines carry depth.
     pub fn shadow(&self, offset: i8, blur: u8) -> Shadow {
         let alpha = match (self.dark, blur >= 18) {
-            (true, true) => 130,
-            (true, false) => 70,
-            (false, true) => 26,
-            (false, false) => 14,
+            (true, true) => 120,
+            (true, false) => return Shadow::NONE,
+            (false, true) => 24,
+            (false, false) => 10,
         };
         Shadow { offset: [0, offset], blur, spread: 0, color: Color32::from_black_alpha(alpha) }
     }
 
-    /// The soft lift under a card.
+    /// Under a card: nothing on dark, a small neutral lift on light.
     pub fn card_shadow(&self) -> Shadow {
-        self.shadow(if self.dark { 3 } else { 2 }, if self.dark { 14 } else { 12 })
+        self.shadow(1, 4)
     }
 
-    /// Coloured halo under primary buttons and live progress.
+    /// No coloured halos. Kept so callers don't need to change.
     pub fn glow(&self, color: Color32, blur: u8) -> Shadow {
-        Shadow { offset: [0, 3], blur, spread: 0, color: color.gamma_multiply(if self.dark { 0.38 } else { 0.30 }) }
+        let _ = (color, blur);
+        Shadow::NONE
     }
 
     pub fn apply(&self, ctx: &egui::Context) {

@@ -944,7 +944,7 @@ impl StewardGetApp {
                 ui.label(RichText::new(size).size(12.5).color(p.text_dim));
             });
             ui.add_space(6.0);
-            widgets::caption(ui, "FILE", &p);
+            widgets::caption(ui, "File", &p);
             ui.add_space(4.0);
             ui.add_enabled_ui(!running && !busy, |ui| {
                 widgets::form_row(ui, LABEL_W, "File name", &p, |ui| {
@@ -961,7 +961,7 @@ impl StewardGetApp {
                 note(ui, "Pause the download to rename or move it. Files on disk are moved with it.", p.text_dim);
             }
             ui.add_space(6.0);
-            widgets::caption(ui, "CONNECTION", &p);
+            widgets::caption(ui, "Connection", &p);
             ui.add_space(4.0);
             ui.add_enabled_ui(view.status != Status::Completed, |ui| {
                 widgets::form_row(ui, LABEL_W, "Link", &p, |ui| {
@@ -1142,7 +1142,7 @@ impl StewardGetApp {
             ui.label(RichText::new(&r.progress).size(12.5).color(p.green));
             ui.add_space(14.0);
 
-            widgets::caption(ui, "OPTION 1 · RECAPTURE FROM THE BROWSER", &p);
+            widgets::caption(ui, "Option 1 · recapture from the browser", &p);
             ui.add_space(2.0);
             note(
                 ui,
@@ -1189,7 +1189,7 @@ impl StewardGetApp {
             }
 
             ui.add_space(8.0);
-            widgets::caption(ui, "OPTION 2 · PASTE A NEW LINK", &p);
+            widgets::caption(ui, "Option 2 · paste a new link", &p);
             ui.add_space(4.0);
             let (field, clicked) =
                 widgets::input_with_button(ui, &mut r.new_url, "https://…", Icon::Check, "Use link", &p);

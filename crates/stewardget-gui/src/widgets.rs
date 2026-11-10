@@ -110,45 +110,15 @@ pub fn paint_gradient_rect(painter: &egui::Painter, rect: Rect, r: f32, a: Color
     painter.add(gradient_rect(rect, r, a, b, vertical));
 }
 
-/// A soft round light, for the ambient glow behind the canvas and hero areas.
-pub fn paint_glow(painter: &egui::Painter, center: Pos2, radius: f32, color: Color32) {
-    let mut mesh = Mesh::default();
-    mesh.colored_vertex(center, color);
-    let steps = 48;
-    for i in 0..=steps {
-        let a = std::f32::consts::TAU * i as f32 / steps as f32;
-        mesh.colored_vertex(center + vec2(a.cos(), a.sin()) * radius * 0.45, color.gamma_multiply(0.55));
-        mesh.colored_vertex(center + vec2(a.cos(), a.sin()) * radius, Color32::TRANSPARENT);
-    }
-    for i in 0..steps as u32 {
-        let (m, o, m2, o2) = (1 + i * 2, 2 + i * 2, 3 + i * 2, 4 + i * 2);
-        mesh.add_triangle(0, m, m2);
-        mesh.add_triangle(m, o, o2);
-        mesh.add_triangle(m, o2, m2);
-    }
-    painter.add(Shape::mesh(mesh));
-}
-
-/// The surface of a card that is painted by hand: lift, fill, a wash of `tint`
-/// fading out from the top, and the outline. Pass a transparent tint for none.
-pub fn card_surface(rect: Rect, fill: Color32, tint: Color32, outline: Stroke, p: &Palette) -> Shape {
+/// The surface of a card that is painted by hand: lift (light theme only), fill
+/// and a hairline outline.
+pub fn card_surface(rect: Rect, fill: Color32, outline: Stroke, p: &Palette) -> Shape {
     let corner = CornerRadius::same(radius::LG);
-    let mut shapes = vec![p.card_shadow().as_shape(rect, corner).into(), Shape::rect_filled(rect, corner, fill)];
-    if tint != Color32::TRANSPARENT {
-        shapes.push(gradient_rect(rect.shrink(0.5), radius::LG as f32, p.wash(tint), Color32::TRANSPARENT, true));
-    }
-    shapes.push(Shape::rect_stroke(rect, corner, outline, StrokeKind::Inside));
-    Shape::Vec(shapes)
-}
-
-/// A card laid out like [`card`] with a wash of `tint` from its top edge: the
-/// hero of a page, or a card that should carry the colour of what it shows.
-pub fn tinted_card<R>(ui: &mut Ui, tint: Color32, p: &Palette, add: impl FnOnce(&mut Ui) -> R) -> R {
-    // The surface goes under the content but needs the size the content takes.
-    let slot = ui.painter().add(Shape::Noop);
-    let out = egui::Frame::new().inner_margin(egui::Margin::same(18)).show(ui, add);
-    ui.painter().set(slot, card_surface(out.response.rect, p.card, tint, Stroke::new(1.0, p.border), p));
-    out.inner
+    Shape::Vec(vec![
+        p.card_shadow().as_shape(rect, corner).into(),
+        Shape::rect_filled(rect, corner, fill),
+        Shape::rect_stroke(rect, corner, outline, StrokeKind::Inside),
+    ])
 }
 
 /// Circular progress: a track ring and an arc from twelve o'clock, shaded
@@ -193,33 +163,19 @@ fn arc(painter: &egui::Painter, center: Pos2, radius: f32, width: f32, fraction:
 /// The file-type mark used for downloads: a tile shaded in the category colour
 /// with its icon, and (when there is room) the file extension in a tag below.
 pub fn paint_file_tile(painter: &egui::Painter, rect: Rect, icon: Icon, ext: &str, color: Color32, p: &Palette) {
+    let _ = color;
     let r = (rect.height() * 0.22).round().clamp(radius::XS as f32, radius::LG as f32);
-    let (top, bottom) = if p.dark {
-        (color.gamma_multiply(0.30), color.gamma_multiply(0.10))
-    } else {
-        (color.gamma_multiply(0.20), color.gamma_multiply(0.07))
-    };
-    paint_gradient_rect(painter, rect, r, top, bottom, true);
-    painter.rect_stroke(
-        rect,
-        CornerRadius::same(r as u8),
-        Stroke::new(1.0, color.gamma_multiply(0.22)),
-        StrokeKind::Inside,
-    );
+    painter.rect(rect, CornerRadius::same(r as u8), p.card_hover, Stroke::new(1.0, p.border), StrokeKind::Inside);
     let big = rect.height() >= 40.0 && !ext.is_empty();
     let glyph = (rect.height() * if big { 0.42 } else { 0.5 }).round();
     let icon_center = if big { rect.center() - vec2(0.0, rect.height() * 0.1) } else { rect.center() };
-    icons::paint(painter, Rect::from_center_size(icon_center, Vec2::splat(glyph)), icon, color);
+    icons::paint(painter, Rect::from_center_size(icon_center, Vec2::splat(glyph)), icon, p.text_dim);
     if big {
-        let text: String = ext.chars().take(4).collect::<String>().to_uppercase();
-        let size = (rect.height() * 0.2).clamp(8.5, 11.0);
-        let galley = painter.layout_no_wrap(text, FontId::new(size, crate::theme::semi()), p.on_tile(color));
-        let tag = Rect::from_center_size(
-            pos2(rect.center().x, rect.bottom() - size * 0.95),
-            vec2(galley.size().x + 8.0, size + 4.0),
-        );
-        painter.rect_filled(tag, CornerRadius::same(radius::XS), color);
-        painter.galley(tag.center() - galley.size() / 2.0, galley, p.on_tile(color));
+        let text: String = ext.chars().take(4).collect::<String>().to_lowercase();
+        let size = (rect.height() * 0.2).clamp(9.0, 11.0);
+        let galley = painter.layout_no_wrap(text, FontId::monospace(size), p.text_dim);
+        let at = pos2(rect.center().x - galley.size().x / 2.0, rect.bottom() - size * 0.95 - galley.size().y / 2.0);
+        painter.galley(at, galley, p.text_dim);
     }
 }
 
@@ -231,49 +187,7 @@ pub fn extension(name: &str) -> &str {
     }
 }
 
-/// Small line chart filling `rect` (no axes), with a soft fill under it.
-pub fn paint_sparkline(painter: &egui::Painter, rect: Rect, values: &[f32], color: Color32) {
-    if values.len() < 2 {
-        painter.line_segment([rect.left_bottom(), rect.right_bottom()], Stroke::new(1.5, color.gamma_multiply(0.5)));
-        return;
-    }
-    let max = values.iter().copied().fold(1.0f32, f32::max) * 1.1;
-    let pts: Vec<Pos2> = values
-        .iter()
-        .enumerate()
-        .map(|(i, v)| {
-            pos2(
-                rect.left() + rect.width() * i as f32 / (values.len() - 1) as f32,
-                rect.bottom() - rect.height() * (v / max).clamp(0.0, 1.0),
-            )
-        })
-        .collect();
-    let mut mesh = Mesh::default();
-    let (top, bottom) = (color.gamma_multiply(0.28), color.gamma_multiply(0.0));
-    for w in pts.windows(2) {
-        let i = mesh.vertices.len() as u32;
-        mesh.colored_vertex(w[0], top);
-        mesh.colored_vertex(w[1], top);
-        mesh.colored_vertex(pos2(w[1].x, rect.bottom()), bottom);
-        mesh.colored_vertex(pos2(w[0].x, rect.bottom()), bottom);
-        mesh.add_triangle(i, i + 1, i + 2);
-        mesh.add_triangle(i, i + 2, i + 3);
-    }
-    painter.add(Shape::mesh(mesh));
-    painter.add(Shape::line(pts, PathStroke::new(1.6, color)));
-}
-
-/// What a KPI tile shows below its value.
-pub enum KpiExtra<'a> {
-    None,
-    /// Recent samples, drawn as a sparkline.
-    Spark(&'a [f32]),
-    /// A share in `0..=1`, drawn as a bar.
-    Meter(f32),
-}
-
-/// A summary tile: tinted icon and label, a large value, a supporting line and
-/// a sparkline or meter along the bottom.
+/// A summary tile: label, a large value and what it compares to.
 #[allow(clippy::too_many_arguments)]
 pub fn kpi_tile(
     ui: &mut Ui,
@@ -283,23 +197,25 @@ pub fn kpi_tile(
     label: &str,
     value: &str,
     sub: &str,
-    extra: KpiExtra<'_>,
     p: &Palette,
 ) -> Response {
     let (rect, response) = ui.allocate_exact_size(vec2(width, 100.0), Sense::click());
     let painter = ui.painter();
+    let _ = icon;
+    // Only a warning colours the tile, and only its caption.
+    let sub_color = if color == p.red { p.red } else { p.text_dim };
     let (fill, outline) = if response.hovered() {
-        (p.card_hover, Stroke::new(1.0, lerp_color(p.border, color, 0.45)))
+        (p.card_hover, Stroke::new(1.0, p.control_border))
     } else {
         (p.card, Stroke::new(1.0, p.border))
     };
-    painter.add(card_surface(rect, fill, color, outline, p));
-    let inner = rect.shrink2(vec2(16.0, 14.0));
-    let tile = Rect::from_min_size(inner.min, Vec2::splat(26.0));
-    paint_icon_tile(painter, tile, icon, color, p);
-    let label_galley = caps_galley(ui, &label.to_uppercase(), 10.5, p.text_dim);
-    painter.galley(pos2(tile.right() + 9.0, tile.center().y - label_galley.size().y / 2.0), label_galley, p.text_dim);
-    let value_pos = pos2(inner.left(), tile.bottom() + 6.0);
+    painter.add(card_surface(rect, fill, outline, p));
+    let inner = rect.shrink2(vec2(20.0, 16.0));
+    let label_font = FontId::proportional(crate::theme::size::SM);
+    let label_galley = painter.layout_no_wrap(label.to_owned(), label_font, p.text_dim);
+    let label_bottom = inner.top() + label_galley.size().y;
+    painter.galley(inner.min, label_galley, p.text_dim);
+    let value_pos = pos2(inner.left(), label_bottom + 8.0);
     let vg = painter.text(
         value_pos,
         Align2::LEFT_TOP,
@@ -307,35 +223,10 @@ pub fn kpi_tile(
         FontId::new(crate::theme::size::XL + 3.0, crate::theme::semi()),
         p.text,
     );
-    // The graph or meter takes the room right of the value, never the value's own.
-    let extra_left = (inner.right() - inner.width() * 0.42).max(vg.right() + 14.0);
     // A long caption ends in an ellipsis instead of being cut mid-word.
     let sub_font = FontId::proportional(crate::theme::size::SM);
     let sub = fit_text(painter, sub, &sub_font, inner.width());
-    painter.text(pos2(inner.left(), vg.bottom() + 3.0), Align2::LEFT_TOP, sub, sub_font, p.text_dim);
-    match extra {
-        KpiExtra::None => {}
-        KpiExtra::Spark(values) => {
-            let spark = Rect::from_min_max(pos2(extra_left, inner.top() + 32.0), pos2(inner.right(), vg.bottom()));
-            if spark.width() >= 36.0 {
-                paint_sparkline(painter, spark, values, color);
-            }
-        }
-        KpiExtra::Meter(f) => {
-            let bar = Rect::from_min_max(
-                pos2(extra_left.max(inner.right() - inner.width() * 0.38), vg.center().y - 3.0),
-                pos2(inner.right(), vg.center().y + 3.0),
-            );
-            if bar.width() >= 30.0 {
-                painter.rect_filled(bar, CornerRadius::same(3), p.track);
-                let fill =
-                    Rect::from_min_max(bar.min, pos2(bar.left() + bar.width() * f.clamp(0.0, 1.0), bar.bottom()));
-                if fill.width() > 0.5 {
-                    paint_gradient_rect(painter, fill, 3.0, lerp_color(color, p.card, 0.25), color, false);
-                }
-            }
-        }
-    }
+    painter.text(pos2(inner.left(), vg.bottom() + 4.0), Align2::LEFT_TOP, sub, sub_font, sub_color);
     response
 }
 
@@ -346,11 +237,8 @@ pub fn round_button(ui: &mut Ui, icon: Icon, tooltip: &str, primary: bool, p: &P
     let hovered = response.hovered();
     let pressed = response.is_pointer_button_down_on();
     if primary {
-        let (a, b) = p.gradient();
-        let (a, b) =
-            if hovered { (lerp_color(a, Color32::WHITE, 0.1), lerp_color(b, Color32::WHITE, 0.1)) } else { (a, b) };
-        painter.add(p.glow(a, if hovered { 14 } else { 8 }).as_shape(rect, CornerRadius::same(255)));
-        paint_gradient_rect(painter, rect, rect.height() / 2.0, a, b, false);
+        let fill = if hovered { lerp_color(p.accent, p.text, 0.12) } else { p.accent };
+        painter.rect_filled(rect, CornerRadius::same(255), fill);
     } else {
         let fill = if pressed {
             p.track
@@ -385,66 +273,33 @@ pub fn round_button(ui: &mut Ui, icon: Icon, tooltip: &str, primary: bool, p: &P
 /// and the connection map run from the first to the second.
 pub fn status_gradient(status: Status, p: &Palette) -> (Color32, Color32) {
     match status {
-        Status::Completed => (lerp_color(p.green, p.accent2, 0.25), p.green),
-        // Opaque shades: a translucent end would show the track through it.
-        Status::Failed => (lerp_color(p.red, p.card, 0.3), p.red),
-        Status::Paused => (lerp_color(p.yellow, p.card, 0.3), p.yellow),
+        Status::Completed => (p.green, p.green),
+        Status::Failed => (p.red, p.red),
+        Status::Paused => (p.yellow, p.yellow),
         Status::Queued => (p.text_dim, p.text_dim),
-        _ => (p.accent, p.accent2),
+        _ => (p.accent, p.accent),
     }
 }
 
-/// A slim progress bar painted into `rect` (no layout allocation). Live
-/// downloads get a soft glow and a highlight that sweeps along the filled part.
+/// A slim progress bar painted into `rect` (no layout allocation): solid accent
+/// while live, neutral once finished.
 pub fn paint_progress(ui: &Ui, rect: Rect, d: &DownloadView, p: &Palette) {
     let painter = ui.painter();
     painter.rect_filled(rect, CornerRadius::same((rect.height() / 2.0) as u8), p.track);
     let (from, to) = match d.status {
-        // Finished bars step back, so the ones still moving are what the eye finds.
-        Status::Completed => (lerp_color(p.track, p.green, 0.45), lerp_color(p.track, p.green, 0.7)),
+        // Finished bars are neutral, so the ones still moving are what the eye finds.
+        Status::Completed => {
+            let c = lerp_color(p.track, p.text_dim, 0.45);
+            (c, c)
+        }
         s => status_gradient(s, p),
     };
     match d.fraction() {
         Some(frac) if frac > 0.0 => {
             let end = rect.left() + rect.width() * frac;
             let filled = Rect::from_min_max(rect.min, pos2(end.max(rect.left() + rect.height()), rect.max.y));
-            let live = d.status == Status::Downloading;
-            if live {
-                painter.add(p.glow(to, 10).as_shape(filled, CornerRadius::same((rect.height() / 2.0) as u8)));
-            }
-            paint_gradient_rect(
-                painter,
-                filled,
-                rect.height() / 2.0,
-                from,
-                lerp_color(from, to, frac.max(0.35)),
-                false,
-            );
-            if live && end - rect.left() > 24.0 {
-                // A short bright band travelling left to right, once every two seconds.
-                let t = (ui.input(|i| i.time) as f32 * 0.5).fract();
-                let w = 36.0f32.min((end - rect.left()) * 0.5);
-                let x = rect.left() - w + t * (end - rect.left() + w);
-                let shine = Color32::from_white_alpha(if p.dark { 70 } else { 90 });
-                let r = rect.height() / 2.0;
-                let clip = Rect::from_min_max(pos2(rect.left() + r, rect.top()), pos2(end - r, rect.bottom()));
-                let mut mesh = Mesh::default();
-                for (i, (bx, c)) in [(x, Color32::TRANSPARENT), (x + w / 2.0, shine), (x + w, Color32::TRANSPARENT)]
-                    .into_iter()
-                    .enumerate()
-                {
-                    mesh.colored_vertex(pos2(bx, rect.top()), c);
-                    mesh.colored_vertex(pos2(bx, rect.bottom()), c);
-                    if i > 0 {
-                        let v = i as u32 * 2;
-                        mesh.add_triangle(v - 2, v - 1, v);
-                        mesh.add_triangle(v - 1, v + 1, v);
-                    }
-                }
-                painter.with_clip_rect(clip.intersect(painter.clip_rect())).add(Shape::mesh(mesh));
-                // Thirty frames a second is plenty for a slow sweep.
-                ui.ctx().request_repaint_after(std::time::Duration::from_millis(33));
-            }
+            let _ = to;
+            painter.rect_filled(filled, CornerRadius::same((rect.height() / 2.0) as u8), from);
         }
         None if d.status.is_active() => {
             let t = ui.input(|i| i.time) as f32;
@@ -672,9 +527,9 @@ pub fn hour_bars(ui: &mut Ui, hours: &[u32; 24], p: &Palette, height: f32) {
 /// bytes. `days` is oldest first and should end today.
 pub fn heatmap(ui: &mut Ui, days: &[DayTotal], p: &Palette) {
     const GAP: f32 = 3.0;
-    // Weeks fill the card; cells stay square between 9 and 22 points.
+    // Small square cells, like a calendar; the card does not stretch them to its width.
     let weeks = days.len().div_ceil(7) + 1;
-    let cell_size = ((ui.available_width() - 4.0) / weeks as f32 - GAP).clamp(9.0, 26.0);
+    let cell_size = ((ui.available_width() - 4.0) / weeks as f32 - GAP).clamp(9.0, 14.0);
     let size = vec2(weeks as f32 * (cell_size + GAP), 7.0 * (cell_size + GAP));
     let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width().max(size.x), size.y), Sense::hover());
     let painter = ui.painter_at(rect);
@@ -691,7 +546,7 @@ pub fn heatmap(ui: &mut Ui, days: &[DayTotal], p: &Palette) {
             Vec2::splat(cell_size),
         );
         let color = if d.bytes == 0 {
-            p.track
+            lerp_color(p.card, p.track, 0.6)
         } else {
             lerp_color(p.accent.gamma_multiply(0.35), p.accent2, (d.bytes as f32 / max).sqrt())
         };
@@ -725,12 +580,7 @@ pub fn icon(ui: &mut Ui, icon: Icon, size: f32, color: Color32) -> Response {
 /// and section marks used in lists, cards and dialog titles.
 pub fn paint_icon_tile(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color32, p: &Palette) {
     let r = (rect.height() * 0.28).round().clamp(radius::XS as f32, radius::LG as f32);
-    let (top, bottom) = if p.dark {
-        (color.gamma_multiply(0.26), color.gamma_multiply(0.11))
-    } else {
-        (color.gamma_multiply(0.17), color.gamma_multiply(0.08))
-    };
-    paint_gradient_rect(painter, rect, r, top, bottom, true);
+    painter.rect(rect, CornerRadius::same(r as u8), p.card_hover, Stroke::new(1.0, p.border), StrokeKind::Inside);
     let glyph = (rect.height() * 0.52).round();
     icons::paint(painter, Rect::from_center_size(rect.center(), Vec2::splat(glyph)), icon, color);
 }
@@ -1077,8 +927,8 @@ pub fn caps_galley(ui: &Ui, text: &str, size: f32, color: Color32) -> std::sync:
         text,
         0.0,
         egui::TextFormat {
-            font_id: FontId::new(size, crate::theme::semi()),
-            extra_letter_spacing: CAPS_TRACKING * size / 11.0,
+            font_id: FontId::proportional(size),
+            extra_letter_spacing: CAPS_TRACKING,
             color,
             ..Default::default()
         },
@@ -1086,15 +936,9 @@ pub fn caps_galley(ui: &Ui, text: &str, size: f32, color: Color32) -> std::sync:
     ui.painter().layout_job(job)
 }
 
-/// Small upper-case section caption, letter-spaced.
+/// A card or section title, in sentence case.
 pub fn caption(ui: &mut Ui, text: &str, p: &Palette) {
-    ui.label(
-        egui::RichText::new(text.to_uppercase())
-            .size(11.0)
-            .family(crate::theme::semi())
-            .extra_letter_spacing(CAPS_TRACKING)
-            .color(p.text_dim),
-    );
+    ui.label(egui::RichText::new(text).size(13.0).color(p.text));
 }
 
 /// A card title row: caption on the left and an optional action link on the
@@ -1131,7 +975,7 @@ pub fn section(ui: &mut Ui, text: &str, p: &Palette) -> bool {
     let width = ui.available_width().min(150.0);
     let (rect, r) = ui.allocate_exact_size(vec2(width, 20.0), Sense::click());
     let color = if r.hovered() { p.text } else { p.text_dim };
-    let galley = caps_galley(ui, &text.to_uppercase(), 10.5, color);
+    let galley = caps_galley(ui, text, 12.0, color);
     let text_w = galley.size().x;
     let x = rect.left() + 10.0;
     ui.painter().galley(pos2(x, rect.center().y - galley.size().y / 2.0), galley, color);
@@ -1151,6 +995,16 @@ pub fn section(ui: &mut Ui, text: &str, p: &Palette) -> bool {
     open
 }
 
+/// The live signal: a small accent dot while data is moving, a hollow ring when idle.
+pub fn live_dot(ui: &mut Ui, live: bool, p: &Palette) {
+    let (rect, _) = ui.allocate_exact_size(vec2(10.0, 16.0), Sense::hover());
+    if live {
+        ui.painter().circle_filled(rect.center(), 3.5, p.accent);
+    } else {
+        ui.painter().circle_stroke(rect.center(), 3.0, Stroke::new(1.0, p.text_dim));
+    }
+}
+
 /// Coloured status dot.
 pub fn dot(painter: &egui::Painter, center: Pos2, color: Color32) {
     painter.circle_filled(center, 3.5, color);
@@ -1166,26 +1020,27 @@ pub fn paint_pill(
     max_w: f32,
     p: &Palette,
 ) -> Rect {
-    let galley = painter.layout_no_wrap(text.to_owned(), FontId::new(12.0, crate::theme::semi()), color);
-    let w = (galley.size().x + 26.0).min(max_w);
+    // The dot carries the state; only states that need attention or are live colour the text.
+    let fg = if color == p.red || color == p.yellow || color == p.accent { color } else { p.text_dim };
+    let galley = painter.layout_no_wrap(text.to_owned(), FontId::proportional(12.5), fg);
+    let w = (galley.size().x + 14.0).min(max_w);
     let rect = Rect::from_min_size(pos2(left_center.x, left_center.y - 11.0), vec2(w, 22.0));
-    painter.rect_filled(rect, CornerRadius::same(11), p.tint(color));
-    painter.circle_filled(rect.left_center() + vec2(10.0, 0.0), 3.0, color);
+    painter.circle_filled(rect.left_center() + vec2(3.0, 0.0), 3.0, color);
     painter.with_clip_rect(rect.shrink(1.0)).galley(
-        pos2(rect.left() + 18.0, rect.center().y - galley.size().y / 2.0),
+        pos2(rect.left() + 12.0, rect.center().y - galley.size().y / 2.0),
         galley,
-        color,
+        fg,
     );
     rect
 }
 
 /// Pill-shaped status badge.
 pub fn pill(ui: &mut Ui, text: &str, color: Color32) -> Response {
-    let galley = ui.painter().layout_no_wrap(text.to_owned(), FontId::new(12.0, crate::theme::semi()), color);
-    let size = galley.size() + vec2(18.0, 6.0);
+    let galley = ui.painter().layout_no_wrap(text.to_owned(), FontId::proportional(12.5), color);
+    let size = galley.size() + vec2(12.0, 6.0);
     let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
-    ui.painter().rect_filled(rect, CornerRadius::same(255), color.gamma_multiply(0.15));
-    ui.painter().galley(rect.center() - galley.size() / 2.0, galley, color);
+    ui.painter().circle_filled(rect.left_center() + vec2(3.0, 0.0), 3.0, color);
+    ui.painter().galley(pos2(rect.left() + 12.0, rect.center().y - galley.size().y / 2.0), galley, color);
     response
 }
 
