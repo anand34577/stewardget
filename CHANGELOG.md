@@ -6,6 +6,8 @@ All notable changes to StewardGet are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-11-10
+
 ### Changed
 - **A calmer, more exact look.** Surfaces are neutral with hairline borders; there are no glows, gradients or tinted cards. One accent colour marks what is live: the primary button, the selection, live progress and the speed chart. Finished progress bars turn grey so the downloads still moving stand out.
 - **Overview leads with the live speed**: a large reading with a live dot, and the last minute's chart across the full width beneath it. The duplicate speed card in the sidebar is gone; the speed stays in the status bar.
