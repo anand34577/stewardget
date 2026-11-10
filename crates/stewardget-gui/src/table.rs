@@ -226,7 +226,7 @@ impl StewardGetApp {
         );
 
         // Live figures for everything in the list; skipped when the window is short.
-        if cards && full.height() > 600.0 && summary_shown(ui.ctx()) {
+        if cards && full.height() > 560.0 && summary_shown(ui.ctx()) {
             self.kpi_strip(ui, full.width());
             ui.add_space(14.0);
         }
@@ -642,8 +642,10 @@ impl StewardGetApp {
             ui.spacing_mut().item_spacing.x = gap;
             // Tiles line up with the cards below (the cards sit inside the panel margin).
             ui.add_space(CARD_X - gap + 11.0);
-            let speed_sub = if speed > 1.0 {
+            let speed_sub = if speed > 1.0 && tile_w >= 270.0 {
                 format!("peak {} \u{00b7} {connections} connections", format_speed(peak as f64))
+            } else if speed > 1.0 {
+                format!("{connections} connections")
             } else if active > 0 {
                 "Connecting\u{2026}".to_owned()
             } else {
@@ -663,7 +665,7 @@ impl StewardGetApp {
             if r.on_hover_text("Speed over the last minute").on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
                 self.filter = ListFilter::Active;
             }
-            let eta = if speed > 1.0 && left > 0 {
+            let eta = if speed > 1.0 && left > 0 && tile_w >= 270.0 {
                 format!(" \u{00b7} ~{}", format_duration((left as f64 / speed) as u64))
             } else {
                 String::new()
@@ -690,7 +692,7 @@ impl StewardGetApp {
                     p.green,
                     "Today",
                     &format_bytes(today),
-                    &format!("{finished_today} finished in the last 24 hours"),
+                    &format!("{finished_today} finished in 24 h"),
                     widgets::KpiExtra::Spark(&week),
                     &p,
                 );

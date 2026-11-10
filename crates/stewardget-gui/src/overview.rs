@@ -61,8 +61,9 @@ impl StewardGetApp {
                     }
                 });
                 ui.add_space(12.0);
-                // Hero: the live speed over its own graph.
-                card(&p).show(ui, |ui| {
+                // Hero: the live speed over its own graph, lit in the accent while data flows.
+                let hero_tint = if snap.speed > 1.0 { p.accent2 } else { p.accent };
+                widgets::tinted_card(ui, hero_tint, &p, |ui| {
                     ui.set_min_width(ui.available_width());
                     ui.horizontal(|ui| {
                         ui.vertical(|ui| {
@@ -72,7 +73,7 @@ impl StewardGetApp {
                             let color = if live { p.text } else { p.text_dim };
                             ui.label(
                                 RichText::new(value)
-                                    .size(crate::theme::size::DISPLAY)
+                                    .size(crate::theme::size::DISPLAY + 4.0)
                                     .family(crate::theme::semi())
                                     .color(color),
                             );
@@ -105,7 +106,7 @@ impl StewardGetApp {
                         });
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             let w = (ui.available_width() - 20.0).clamp(120.0, 560.0);
-                            widgets::area_chart(ui, &snap.history, vec2(w, 112.0), p.accent2, &p);
+                            widgets::area_chart(ui, &snap.history, vec2(w, 124.0), p.accent2, &p);
                         });
                     });
                 });
@@ -166,6 +167,7 @@ impl StewardGetApp {
                     ui.add_space(12.0);
                 }
 
+                self.breakdown_card(ui);
                 self.data_cap_card(ui);
                 self.links_card(ui);
                 let wide = ui.available_width() > 880.0;
@@ -384,6 +386,97 @@ impl StewardGetApp {
 }
 
 impl StewardGetApp {
+    /// Everything in the list as one bar split by state, with a legend that
+    /// opens each group: how things stand, at a glance.
+    fn breakdown_card(&mut self, ui: &mut Ui) {
+        let p = self.palette;
+        let s = &self.snap;
+        if s.downloads.is_empty() {
+            return;
+        }
+        let parts = [
+            ("Downloading", s.count(Status::is_active), p.accent2, ListFilter::Active),
+            ("Queued", s.count(|x| x == Status::Queued), p.text_dim, ListFilter::Waiting),
+            ("Paused", s.count(|x| x == Status::Paused), p.yellow, ListFilter::Waiting),
+            ("Failed", s.count(|x| x == Status::Failed), p.red, ListFilter::Failed),
+            ("Completed", s.count(|x| x == Status::Completed), p.green, ListFilter::Completed),
+        ];
+        let total: usize = parts.iter().map(|x| x.1).sum();
+        let mut open = None;
+        card(&p).show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            let noun = if total == 1 { "download" } else { "downloads" };
+            if widgets::card_header(ui, &format!("{total} {noun} in the list"), Some("See all"), &p) {
+                open = Some(ListFilter::All);
+            }
+            // The bar: one rounded piece per state, sized by its share.
+            let (bar, _) = ui.allocate_exact_size(vec2(ui.available_width(), 10.0), Sense::hover());
+            let shown: Vec<_> = parts.iter().filter(|x| x.1 > 0).collect();
+            let gap = 3.0;
+            let room = bar.width() - gap * shown.len().saturating_sub(1) as f32;
+            // Every state present stays visible, however small its share.
+            let min_w = 10.0f32.min(room / shown.len().max(1) as f32);
+            let spare = room - min_w * shown.len() as f32;
+            let mut x = bar.left();
+            for (_, n, color, _) in &shown {
+                let w = min_w + spare * *n as f32 / total.max(1) as f32;
+                let piece = egui::Rect::from_min_size(egui::pos2(x, bar.top()), vec2(w, bar.height()));
+                widgets::paint_gradient_rect(
+                    ui.painter(),
+                    piece,
+                    5.0,
+                    widgets::lerp_color(*color, p.card, 0.22),
+                    *color,
+                    false,
+                );
+                x += w + gap;
+            }
+            ui.add_space(8.0);
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = vec2(6.0, 4.0);
+                for (label, n, color, filter) in parts {
+                    let font = egui::FontId::proportional(crate::theme::size::SM);
+                    let strong = egui::FontId::new(crate::theme::size::SM, crate::theme::semi());
+                    let count = ui.painter().layout_no_wrap(n.to_string(), strong, p.text);
+                    let text = ui.painter().layout_no_wrap(label.to_owned(), font, p.text_dim);
+                    let size = vec2(22.0 + count.size().x + 6.0 + text.size().x + 10.0, 26.0);
+                    let (rect, r) = ui.allocate_exact_size(size, Sense::click());
+                    if r.hovered() {
+                        ui.painter().rect_filled(
+                            rect,
+                            egui::CornerRadius::same(crate::theme::radius::SM),
+                            p.card_hover,
+                        );
+                    }
+                    let dim = if n == 0 { 0.45 } else { 1.0 };
+                    widgets::dot(ui.painter(), rect.left_center() + vec2(11.0, 0.0), color.gamma_multiply(dim));
+                    let cx = rect.left() + 22.0;
+                    ui.painter().galley(
+                        egui::pos2(cx, rect.center().y - count.size().y / 2.0),
+                        count.clone(),
+                        p.text.gamma_multiply(dim),
+                    );
+                    ui.painter().galley(
+                        egui::pos2(cx + count.size().x + 6.0, rect.center().y - text.size().y / 2.0),
+                        text,
+                        p.text_dim,
+                    );
+                    if r.on_hover_cursor(egui::CursorIcon::PointingHand)
+                        .on_hover_text(format!("Show the {} downloads", label.to_lowercase()))
+                        .clicked()
+                    {
+                        open = Some(filter);
+                    }
+                }
+            });
+        });
+        ui.add_space(12.0);
+        if let Some(filter) = open {
+            self.page = Page::Downloads;
+            self.filter = filter;
+        }
+    }
+
     /// This month's data against the limit, when there is one.
     fn data_cap_card(&mut self, ui: &mut Ui) {
         let p = self.palette;

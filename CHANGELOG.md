@@ -6,6 +6,19 @@ All notable changes to StewardGet are listed here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- **A richer look.** Depth is back: cards float on a softly lit canvas, primary buttons and live progress bars run in the accent gradient with a glow, summary tiles carry the colour of what they show, and charts fade towards the baseline. Finished progress bars step back so the downloads still moving stand out.
+- **Overview shows the whole list at a glance**: one bar split into downloading, queued, paused, failed and completed, with a legend that opens each group.
+- **The window opens larger** (1280×800), with the menus visible and the details beside the list instead of below it.
+- The details pane of a finished download uses its full width instead of leaving two empty columns.
+
+### Fixed
+- Moving or renaming a download to another drive no longer freezes the app: the copy runs in the background and other downloads keep going.
+- Downloads removed within the Undo window came back after closing the window with the close button.
+- A download removed "with its files" at the moment it finished left the finished file behind.
+- History showed "average 0 B/s" for files that downloaded in under a second.
+- Summary tiles: the graph no longer draws over a long value, and captions fit without being cut off.
+
 ## [0.12.1] - 2026-11-04
 
 ### Changed

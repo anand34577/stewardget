@@ -118,25 +118,37 @@ impl StewardGetApp {
         ui.add_space(6.0);
 
         let wide = ui.available_width() > 760.0;
+        // A finished download has no map, and no graph unless it ran in this session:
+        // the information then takes the room instead of sharing it with empty columns.
+        let has_map = d.status != Status::Completed;
+        let has_speed = !(d.history.is_empty() && d.status == Status::Completed);
         if wide {
             let avail = ui.available_width();
             let height = ui.available_height();
+            let info_w = match (has_map, has_speed) {
+                (true, true) => avail * 0.38,
+                (false, false) => avail,
+                _ => avail * 0.55,
+            };
             ui.horizontal_top(|ui| {
                 let column = Layout::top_down(Align::Min);
-                ui.allocate_ui_with_layout(vec2(avail * 0.38, height), column, |ui| {
+                ui.allocate_ui_with_layout(vec2(info_w, height), column, |ui| {
                     egui::ScrollArea::vertical()
                         .id_salt("info")
                         .auto_shrink([false, false])
                         .show(ui, |ui| self.info_grid(ui, &d));
                 });
-                ui.separator();
-                ui.allocate_ui_with_layout(vec2(avail * 0.34, height), column, |ui| {
-                    self.map_block(ui, &d, height, true)
-                });
-                ui.separator();
-                ui.allocate_ui_with_layout(vec2(ui.available_width(), height), column, |ui| {
-                    self.speed_block(ui, &d, height, true)
-                });
+                if has_map {
+                    ui.separator();
+                    let w = if has_speed { avail * 0.34 } else { ui.available_width() };
+                    ui.allocate_ui_with_layout(vec2(w, height), column, |ui| self.map_block(ui, &d, height, true));
+                }
+                if has_speed {
+                    ui.separator();
+                    ui.allocate_ui_with_layout(vec2(ui.available_width(), height), column, |ui| {
+                        self.speed_block(ui, &d, height, true)
+                    });
+                }
             });
         } else {
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {

@@ -963,7 +963,7 @@ impl StewardGetApp {
             crate::frame::drag_area(ui, ui.max_rect(), "header");
         }
         // Too narrow for four menu titles, the search box and the buttons: fold the menus.
-        let fold_menus = ui.available_width() < 960.0;
+        let fold_menus = ui.available_width() < 840.0;
         ui.horizontal_centered(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
             let tip = if collapsed { "Expand sidebar" } else { "Collapse sidebar" };
@@ -2225,11 +2225,27 @@ impl eframe::App for StewardGetApp {
                         // Rounded corners: keep page content from painting over them.
                         let canvas = ui.max_rect();
                         ui.set_clip_rect(canvas.shrink(1.0).intersect(ui.clip_rect()));
+                        // A soft light in the accent colours behind the top of the page gives the
+                        // canvas some depth; cards and lists sit on top of it.
+                        let glow = ui.painter().with_clip_rect(canvas.shrink(1.0));
+                        let strength = if p.dark { 0.11 } else { 0.07 };
+                        widgets::paint_glow(
+                            &glow,
+                            canvas.left_top() + vec2(canvas.width() * 0.16, -40.0),
+                            (canvas.width() * 0.55).clamp(320.0, 760.0),
+                            p.accent.gamma_multiply(strength),
+                        );
+                        widgets::paint_glow(
+                            &glow,
+                            canvas.right_top() + vec2(-canvas.width() * 0.12, -90.0),
+                            (canvas.width() * 0.4).clamp(260.0, 560.0),
+                            p.accent2.gamma_multiply(strength * 0.8),
+                        );
                         let details = self.page == Page::Downloads && self.show_details && !self.selection.is_empty();
-                        if details && canvas.width() >= 980.0 {
+                        if details && canvas.width() >= 900.0 {
                             egui::Panel::right("stewardget-inspector")
                                 .resizable(true)
-                                .default_size(372.0)
+                                .default_size(if canvas.width() >= 1020.0 { 372.0 } else { 340.0 })
                                 .size_range(330.0..=500.0)
                                 .frame(
                                     Frame::new()
@@ -2372,6 +2388,9 @@ impl eframe::App for StewardGetApp {
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        // Removed a moment ago and still inside the Undo window: closing the
+        // app (whichever way) must not bring those downloads back.
+        self.commit_removal();
         // The browser already let go of downloads waiting in the new-download
         // window: keep single ones, paused, rather than lose them.
         let mut waiting: Vec<Vec<stewardget_core::NewDownload>> = self.inbox.lock_ok().drain(..).collect();

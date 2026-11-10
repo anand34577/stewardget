@@ -220,12 +220,14 @@ impl StewardGetApp {
                 ui.spacing_mut().item_spacing.x = 0.0;
                 let dim = |t: String| RichText::new(t).size(crate::theme::size::SM).color(p.text_dim);
                 let failed = shown.len().saturating_sub(ok);
+                // Entries from before transfer time was recorded have no speed to average.
+                let average =
+                    if mean > 0.0 { format!("  \u{00b7}  average {}", format_speed(mean)) } else { String::new() };
                 ui.label(dim(format!(
-                    "{} of {} shown  \u{00b7}  {ok} finished  \u{00b7}  {}  \u{00b7}  average {}",
+                    "{} of {} shown  \u{00b7}  {ok} finished  \u{00b7}  {}{average}",
                     shown.len(),
                     self.history.entries.len(),
                     format_bytes(bytes),
-                    format_speed(mean)
                 )));
                 if failed > 0 {
                     ui.label(dim("  \u{00b7}  ".to_owned()));

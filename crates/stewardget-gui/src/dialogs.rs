@@ -848,7 +848,12 @@ pub struct PropertiesDialog {
     headers: String,
     mirrors: String,
     error: Option<String>,
+    /// Saving is moving the file in the background; its result lands here.
+    job: Option<SaveJob>,
 }
+
+/// Where a background save puts its result.
+type SaveJob = std::sync::Arc<std::sync::Mutex<Option<Result<(), String>>>>;
 
 impl PropertiesDialog {
     pub fn new(d: &DownloadView, config: &Config) -> Self {
@@ -870,6 +875,7 @@ impl PropertiesDialog {
 ",
             ),
             error: None,
+            job: None,
         }
     }
 
@@ -910,6 +916,20 @@ impl StewardGetApp {
         let mut close = false;
         let mut save = false;
         let running = view.status.is_active();
+        // A save that moves the file to another drive takes a while; it reports here.
+        let finished = d.job.as_ref().and_then(|job| job.lock_ok().take());
+        if let Some(result) = finished {
+            d.job = None;
+            match result {
+                Ok(()) => {
+                    let green = p.green;
+                    self.toast("Properties saved", green);
+                    return;
+                }
+                Err(e) => d.error = Some(e),
+            }
+        }
+        let busy = d.job.is_some();
         let width = (ctx.content_rect().width() - 80.0).clamp(380.0, 620.0);
         let modal = modal("stewardget-properties", &p).show(ctx, |ui| {
             ui.set_width(width);
@@ -926,7 +946,7 @@ impl StewardGetApp {
             ui.add_space(6.0);
             widgets::caption(ui, "FILE", &p);
             ui.add_space(4.0);
-            ui.add_enabled_ui(!running, |ui| {
+            ui.add_enabled_ui(!running && !busy, |ui| {
                 widgets::form_row(ui, LABEL_W, "File name", &p, |ui| {
                     ui.add(widgets::input(&mut d.name).desired_width(f32::INFINITY));
                 });
@@ -983,23 +1003,31 @@ impl StewardGetApp {
                 ui.add_space(6.0);
                 note(ui, e.as_str(), p.red);
             }
+            if busy {
+                ui.add_space(6.0);
+                note(ui, "Moving the file\u{2026} This can take a while when it goes to another drive.", p.text_dim);
+                ui.ctx().request_repaint_after(std::time::Duration::from_millis(150));
+            }
             footer(ui, |ui| {
-                if widgets::button(ui, ButtonKind::Primary, Some(Icon::Check), "Save", true, &p).clicked() {
+                let label = if busy { "Moving\u{2026}" } else { "Save" };
+                if widgets::button(ui, ButtonKind::Primary, Some(Icon::Check), label, !busy, &p).clicked() {
                     save = true;
                 }
-                if widgets::button(ui, ButtonKind::Ghost, None, "Cancel", true, &p).clicked() {
+                if widgets::button(ui, ButtonKind::Ghost, None, "Cancel", !busy, &p).clicked() {
                     close = true;
                 }
             });
         });
-        close |= modal.should_close();
+        // A move in flight can't be abandoned half-way: the window stays until it is done.
+        close |= modal.should_close() && !busy;
         if save {
-            match self.apply_properties(&d, &view) {
-                Ok(()) => {
+            match self.apply_properties(&mut d, &view, ctx) {
+                Ok(true) => {
                     let green = p.green;
                     self.toast("Properties saved", green);
                     close = true;
                 }
+                Ok(false) => {}
                 Err(e) => d.error = Some(e),
             }
         }
@@ -1008,22 +1036,47 @@ impl StewardGetApp {
         }
     }
 
-    fn apply_properties(&mut self, d: &PropertiesDialog, view: &DownloadView) -> Result<(), String> {
+    /// Applies the dialog. `Ok(false)` when the file has to move on disk: that
+    /// runs on its own thread (a copy to another drive can take minutes, and the
+    /// window must not freeze meanwhile) and reports through `d.job`.
+    fn apply_properties(
+        &mut self,
+        d: &mut PropertiesDialog,
+        view: &DownloadView,
+        ctx: &egui::Context,
+    ) -> Result<bool, String> {
         let err = |e: stewardget_core::Error| capitalize(&e.to_string());
         let options = d.options(&view.options)?;
         let dir = PathBuf::from(d.dir.trim());
-        let moved = d.name.trim() != view.file_name || Some(dir.as_path()) != view.path.parent();
-        if moved {
-            if d.name.trim().is_empty() {
-                return Err("The file name can't be empty.".into());
+        let name = d.name.trim().to_owned();
+        let moved = name != view.file_name || Some(dir.as_path()) != view.path.parent();
+        if moved && name.is_empty() {
+            return Err("The file name can't be empty.".into());
+        }
+        let new_url = (d.url.trim() != view.url && view.status != Status::Completed).then(|| d.url.trim().to_owned());
+        let (engine, id) = (self.engine.clone(), d.id);
+        let apply = move || -> Result<(), String> {
+            if moved {
+                engine.relocate(id, dir, &name).map_err(err)?;
             }
-            self.engine.relocate(d.id, dir, d.name.trim()).map_err(err)?;
+            engine.update_options(id, options).map_err(err)?;
+            if let Some(url) = new_url {
+                engine.set_url(id, &url).map_err(err)?;
+            }
+            Ok(())
+        };
+        if !moved {
+            return apply().map(|()| true);
         }
-        self.engine.update_options(d.id, options).map_err(err)?;
-        if d.url.trim() != view.url && view.status != Status::Completed {
-            self.engine.set_url(d.id, d.url.trim()).map_err(err)?;
-        }
-        Ok(())
+        d.error = None;
+        let job = SaveJob::default();
+        let (slot, ctx) = (std::sync::Arc::clone(&job), ctx.clone());
+        std::thread::spawn(move || {
+            *slot.lock_ok() = Some(apply());
+            ctx.request_repaint();
+        });
+        d.job = Some(job);
+        Ok(false)
     }
 }
 

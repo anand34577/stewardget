@@ -85,7 +85,7 @@ impl StewardGetApp {
                         Icon::Calendar,
                         "Today",
                         format_bytes(s.today(now)),
-                        "The graph shows the last 7 days".to_owned(),
+                        "Graph: last 7 days".to_owned(),
                         p.accent2,
                         widgets::KpiExtra::Spark(&volume[volume.len().saturating_sub(7)..]),
                     ),

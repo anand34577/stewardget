@@ -29,9 +29,9 @@ pub mod size {
 pub mod radius {
     pub const XS: u8 = 4;
     pub const SM: u8 = 6;
-    pub const MD: u8 = 8;
-    pub const LG: u8 = 10;
-    pub const XL: u8 = 12;
+    pub const MD: u8 = 9;
+    pub const LG: u8 = 12;
+    pub const XL: u8 = 14;
 }
 
 /// Letter spacing for short upper-case labels (about 7% of their size).
@@ -73,11 +73,11 @@ impl Palette {
         let rgb = Color32::from_rgb;
         let mut p = match theme {
             Theme::Light | Theme::System => Self {
-                bg: rgb(252, 252, 253),
-                sidebar: rgb(241, 242, 246),
+                bg: rgb(247, 248, 251),
+                sidebar: rgb(236, 238, 244),
                 card: rgb(255, 255, 255),
-                card_hover: rgb(243, 244, 248),
-                border: rgb(228, 230, 237),
+                card_hover: rgb(241, 243, 249),
+                border: rgb(224, 227, 236),
                 control_border: rgb(208, 212, 223),
                 input_bg: rgb(255, 255, 255),
                 track: rgb(232, 234, 241),
@@ -93,16 +93,16 @@ impl Palette {
                 dark: false,
             },
             Theme::Dark => Self {
-                bg: rgb(16, 18, 24),
-                sidebar: rgb(10, 11, 15),
-                card: rgb(22, 25, 33),
-                card_hover: rgb(30, 34, 45),
-                border: rgb(36, 40, 52),
-                control_border: rgb(54, 60, 77),
-                input_bg: rgb(12, 14, 19),
-                track: rgb(37, 42, 55),
-                text: rgb(237, 239, 245),
-                text_dim: rgb(150, 157, 176),
+                bg: rgb(15, 17, 25),
+                sidebar: rgb(9, 10, 16),
+                card: rgb(23, 26, 38),
+                card_hover: rgb(32, 36, 52),
+                border: rgb(39, 44, 62),
+                control_border: rgb(58, 65, 88),
+                input_bg: rgb(11, 13, 20),
+                track: rgb(40, 45, 63),
+                text: rgb(240, 242, 248),
+                text_dim: rgb(158, 166, 190),
                 ..Self::dark_base()
             },
             Theme::Midnight => Self {
@@ -205,9 +205,21 @@ impl Palette {
         color.gamma_multiply(if self.dark { 0.16 } else { 0.11 })
     }
 
-    /// Kept for callers that ask for two ends: both are the accent, the interface is flat.
+    /// The two ends of the accent gradient (primary buttons, live progress): the
+    /// accent running towards its partner colour.
     pub fn gradient(&self) -> (Color32, Color32) {
-        (self.accent, self.accent)
+        let mix = |a: Color32, b: Color32, t: f32| {
+            let l = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
+            Color32::from_rgb(l(a.r(), b.r()), l(a.g(), b.g()), l(a.b(), b.b()))
+        };
+        // Shaded away from the label colour, so the label keeps its contrast across the button.
+        let away = if self.on_accent == Color32::WHITE { Color32::BLACK } else { Color32::WHITE };
+        (mix(self.accent, away, 0.06), mix(mix(self.accent, self.accent2, 0.35), away, 0.14))
+    }
+
+    /// A faint wash of `color` over a card: the top of hero cards and tiles.
+    pub fn wash(&self, color: Color32) -> Color32 {
+        color.gamma_multiply(if self.dark { 0.13 } else { 0.07 })
     }
 
     /// Text drawn on a solid fill of `color`.
@@ -225,21 +237,26 @@ impl Palette {
         if self.dark { Color32::from_black_alpha(165) } else { Color32::from_rgba_unmultiplied(15, 17, 26, 90) }
     }
 
-    /// Elevation for things that float above the page (dialogs, menus). Small
-    /// shadows on cards and buttons are dropped: the interface is flat and
-    /// separates surfaces by fill and outline.
+    /// Elevation: the larger the blur, the higher the thing floats. Cards and
+    /// buttons sit just above the page; dialogs and menus well above it.
     pub fn shadow(&self, offset: i8, blur: u8) -> Shadow {
-        if blur < 18 {
-            return Shadow::NONE;
-        }
-        let alpha = if self.dark { 120 } else { 22 };
+        let alpha = match (self.dark, blur >= 18) {
+            (true, true) => 130,
+            (true, false) => 70,
+            (false, true) => 26,
+            (false, false) => 14,
+        };
         Shadow { offset: [0, offset], blur, spread: 0, color: Color32::from_black_alpha(alpha) }
     }
 
-    /// No halo: the interface is flat. Kept so callers don't need to change.
+    /// The soft lift under a card.
+    pub fn card_shadow(&self) -> Shadow {
+        self.shadow(if self.dark { 3 } else { 2 }, if self.dark { 14 } else { 12 })
+    }
+
+    /// Coloured halo under primary buttons and live progress.
     pub fn glow(&self, color: Color32, blur: u8) -> Shadow {
-        let _ = (color, blur);
-        Shadow::NONE
+        Shadow { offset: [0, 3], blur, spread: 0, color: color.gamma_multiply(if self.dark { 0.38 } else { 0.30 }) }
     }
 
     pub fn apply(&self, ctx: &egui::Context) {
