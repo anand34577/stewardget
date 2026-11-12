@@ -592,7 +592,7 @@ impl StewardGetApp {
         let room = if fit { ui.available_height().min(height) } else { height };
         let map_h = (room - 24.0).clamp(28.0, 220.0);
         widgets::connection_map(ui, d, &p, map_h);
-        let text = if d.segments.is_empty() {
+        let mut text = if d.segments.is_empty() {
             if d.resumable || d.status == Status::Completed { String::new() } else { "single connection".into() }
         } else {
             format!(
@@ -603,7 +603,26 @@ impl StewardGetApp {
                 if d.connections == 1 { "connection" } else { "connections" }
             )
         };
-        ui.label(RichText::new(text).size(12.0).color(p.text_dim));
+        ui.horizontal(|ui| {
+            if crate::progress::can_change_connections(d) {
+                ui.label(RichText::new("Connections").size(12.5).color(p.text_dim));
+                let mut n = crate::progress::shown_connections(d, self.cfg.connections);
+                let hint = if d.status.is_active() {
+                    "Changes take effect right away, without reconnecting or losing data"
+                } else {
+                    "Used the next time this download runs"
+                };
+                if widgets::stepper(ui, &mut n, 1..=32, hint, &p) {
+                    let r = self.engine.set_connections(d.id, n);
+                    self.report(r);
+                }
+                ui.add_space(6.0);
+                if !text.is_empty() {
+                    text = format!("\u{00b7} {text}");
+                }
+            }
+            ui.label(RichText::new(text).size(12.0).color(p.text_dim));
+        });
     }
 
     fn speed_block(&mut self, ui: &mut Ui, d: &DownloadView, height: f32, fit: bool) {

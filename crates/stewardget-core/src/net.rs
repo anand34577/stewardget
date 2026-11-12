@@ -93,6 +93,9 @@ pub(crate) struct LaneStat {
     pub bytes: AtomicU64,
     /// Dropped after repeated failures.
     pub failed: AtomicBool,
+    /// Switched off by the user while the download runs; its connections
+    /// move to the other lanes at once and nothing is lost.
+    pub disabled: AtomicBool,
     /// Connections currently using the lane.
     pub workers: AtomicUsize,
     /// Why it was dropped, for the interface.
@@ -107,13 +110,14 @@ impl LaneStat {
             mirror,
             bytes: AtomicU64::new(0),
             failed: AtomicBool::new(false),
+            disabled: AtomicBool::new(false),
             workers: AtomicUsize::new(0),
             reason: std::sync::Mutex::new(None),
         }
     }
 
     pub fn is_alive(&self) -> bool {
-        !self.failed.load(Ordering::Relaxed)
+        !self.failed.load(Ordering::Relaxed) && !self.disabled.load(Ordering::Relaxed)
     }
 }
 
@@ -131,6 +135,9 @@ pub struct LaneView {
     pub speed: f64,
     pub workers: usize,
     pub failed: bool,
+    /// Switched off by the user (see `Engine::set_lane_enabled`); `failed` is
+    /// then false.
+    pub disabled: bool,
     pub reason: Option<String>,
 }
 

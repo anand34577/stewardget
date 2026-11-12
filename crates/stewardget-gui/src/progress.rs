@@ -114,6 +114,7 @@ impl StewardGetApp {
         let mut open = true;
         let mut action: Option<Action> = None;
         let mut details = self.progress_details;
+        let default_connections = self.cfg.connections;
         ctx.show_viewport_immediate(ViewportId::from_hash_of(("stewardget-progress", w.id)), builder, |ui, class| {
             if std::mem::take(&mut w.focus) && class == egui::ViewportClass::Immediate {
                 ui.ctx().send_viewport_cmd(egui::ViewportCommand::Focus);
@@ -128,7 +129,11 @@ impl StewardGetApp {
                     if let Some(e) = &w.error {
                         ui.add(egui::Label::new(RichText::new(e).size(12.5).color(p.red)).wrap());
                     }
-                    action = if done { complete_body(ui, &p, d, w) } else { running_body(ui, &p, d, w, &mut details) };
+                    action = if done {
+                        complete_body(ui, &p, d, w)
+                    } else {
+                        running_body(ui, &p, d, w, &mut details, default_connections)
+                    };
                 })
             });
             // Fit the window to what it shows (details open or not, finished or not).
@@ -159,6 +164,7 @@ impl StewardGetApp {
             Some(Action::Resume) => self.engine.resume(d.id),
             Some(Action::Restart) => self.engine.restart(d.id),
             Some(Action::Limit(bytes)) => self.engine.set_download_speed_limit(d.id, bytes),
+            Some(Action::Connections(n)) => self.engine.set_connections(d.id, n),
             Some(Action::Open) => {
                 open = false;
                 stewardget_core::util::open_with_system(&d.path).map_err(|e| stewardget_core::Error::Io(e.to_string()))
@@ -195,11 +201,34 @@ enum Action {
     Resume,
     Restart,
     Limit(u64),
+    /// Connections changed with the stepper; applied without reconnecting.
+    Connections(usize),
     Open,
     Folder,
     ShowInList,
     NeverAnnounce,
     Close,
+}
+
+/// Whether a download's connection count can be changed: not once it is
+/// done, and not while it runs over one connection to a server that can't
+/// split the file (more connections could do nothing there).
+pub fn can_change_connections(d: &DownloadView) -> bool {
+    match d.status {
+        Status::Completed | Status::Verifying => false,
+        Status::Downloading | Status::Connecting => d.resumable || d.segments.len() > 1,
+        _ => true,
+    }
+}
+
+/// The connection count to show in the stepper: the auto-tuner's current
+/// count while it works, else the download's own setting or the default.
+pub fn shown_connections(d: &DownloadView, default_connections: usize) -> usize {
+    d.options
+        .connections
+        .or(d.tuned_connections.filter(|_| d.status.is_active()))
+        .unwrap_or(default_connections)
+        .clamp(1, 32)
 }
 
 /// File icon, name and where it comes from.
@@ -225,6 +254,7 @@ fn running_body(
     d: &DownloadView,
     w: &mut ProgressWindow,
     details: &mut bool,
+    default_connections: usize,
 ) -> Option<Action> {
     let mut action = None;
     facts(ui, p, d);
@@ -255,6 +285,14 @@ fn running_body(
                     }
                 },
             );
+            if can_change_connections(d) {
+                ui.add_space(10.0);
+                ui.label(RichText::new("Connections").color(p.text_dim));
+                let mut n = shown_connections(d, default_connections);
+                if widgets::stepper(ui, &mut n, 1..=32, "Changes take effect right away, without reconnecting", p) {
+                    action = Some(Action::Connections(n));
+                }
+            }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.checkbox(&mut w.close_when_done, "Close when finished");
             });

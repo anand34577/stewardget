@@ -48,6 +48,14 @@ pub(crate) struct Shared {
     pub lanes: Mutex<Vec<Arc<LaneStat>>>,
     /// Connections the auto-tuner is currently allowing; `0` = not tuned.
     pub target_connections: AtomicUsize,
+    /// Connections the user asked for while the download runs; `0` = none
+    /// asked (the count it started with stands). See [`Shared::resize`].
+    pub desired_connections: AtomicUsize,
+    /// Connection tasks currently running.
+    pub workers: AtomicUsize,
+    /// Wakes the task when `desired_connections` changed or a lane was
+    /// switched back on, so it can start connections right away.
+    pub resized: tokio::sync::Notify,
 }
 
 impl Shared {
@@ -61,7 +69,20 @@ impl Shared {
             limiter: RateLimiter::new(speed_limit),
             lanes: Mutex::new(Vec::new()),
             target_connections: AtomicUsize::new(0),
+            desired_connections: AtomicUsize::new(0),
+            workers: AtomicUsize::new(0),
+            resized: tokio::sync::Notify::new(),
         }
+    }
+
+    /// Asks a running download to use `connections` from now on. More are
+    /// started at once; extra ones finish the bytes in hand, hand back the
+    /// rest of their range and stop. No data is lost and nothing reconnects.
+    pub fn resize(&self, connections: usize) {
+        self.desired_connections.store(connections.clamp(1, 64), Ordering::Relaxed);
+        // The user decided: the auto-tuner steps aside.
+        self.target_connections.store(0, Ordering::Relaxed);
+        self.resized.notify_one();
     }
 
     pub fn total(&self) -> Option<u64> {
@@ -216,8 +237,15 @@ async fn run_inner(job: &Job) -> Result<Outcome, Error> {
     }
     // Auto-tuning: begin modestly and grow while more connections still help.
     let start = TUNE_START.max(lanes.len());
-    let tuned = ranged && job.config.auto_tune && job.options.connections.is_none() && max_workers > start;
+    let mut tuned = ranged && job.config.auto_tune && job.options.connections.is_none() && max_workers > start;
     let mut spawned = if tuned { start } else { max_workers };
+    // A change asked for before the connections even started.
+    let early = shared.desired_connections.load(Ordering::Relaxed);
+    if ranged && early > 0 {
+        tuned = false;
+        spawned = early.max(1);
+        max_workers = spawned;
+    }
     job.shared.target_connections.store(if tuned { spawned } else { 0 }, Ordering::Relaxed);
     *job.shared.lanes.lock_ok() = lanes.iter().map(|l| Arc::clone(&l.stat)).collect();
     let file = Arc::new(file);
@@ -247,6 +275,8 @@ async fn run_inner(job: &Job) -> Result<Outcome, Error> {
     for n in 0..spawned {
         set.spawn(worker(Arc::clone(&ctx), n));
     }
+    // Spreads connections started later over the lanes, like the first ones.
+    let mut next_index = spawned;
     let mut tuner = Tuner::default();
     let mut tick = tokio::time::interval(CHECKPOINT_INTERVAL);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -275,8 +305,9 @@ async fn run_inner(job: &Job) -> Result<Outcome, Error> {
                 if !ctx.stop.is_cancelled() && !shared.table.lock_ok().is_complete() {
                     match tuner.step(moved, spawned, max_workers) {
                         Tune::Grow(add) => {
-                            for n in spawned..spawned + add {
-                                set.spawn(worker(Arc::clone(&ctx), n));
+                            for _ in 0..add {
+                                set.spawn(worker(Arc::clone(&ctx), next_index));
+                                next_index += 1;
                             }
                             spawned += add;
                             shared.target_connections.store(spawned, Ordering::Relaxed);
@@ -284,6 +315,35 @@ async fn run_inner(job: &Job) -> Result<Outcome, Error> {
                         // Growth stopped helping: this is the right count.
                         Tune::Settled => max_workers = spawned,
                         Tune::Wait => {}
+                    }
+                }
+            }
+            // The user changed the connection count, or switched a lane back on.
+            _ = shared.resized.notified(), if ranged => {
+                tuned = false;
+                let want = shared.desired_connections.load(Ordering::Relaxed);
+                if want > 0 {
+                    max_workers = want;
+                }
+                let live = shared.workers.load(Ordering::Relaxed);
+                if !ctx.stop.is_cancelled() && !shared.table.lock_ok().is_complete() {
+                    // A lane switched back on gets connections of its own; the
+                    // extra ones are trimmed from the busiest lanes as they retire.
+                    let idle_lanes: Vec<usize> = ctx
+                        .lanes
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, l)| l.stat.is_alive() && l.stat.workers.load(Ordering::Relaxed) == 0)
+                        .map(|(i, _)| i)
+                        .collect();
+                    let mut add = max_workers.saturating_sub(live);
+                    if add == 0 && !idle_lanes.is_empty() && live > 0 {
+                        add = idle_lanes.len().min(max_workers);
+                    }
+                    for k in 0..add {
+                        let first = idle_lanes.get(k).copied().unwrap_or(next_index);
+                        set.spawn(worker(Arc::clone(&ctx), first));
+                        next_index += 1;
                     }
                 }
             }
@@ -551,14 +611,66 @@ impl WorkerCtx {
 async fn worker(ctx: Arc<WorkerCtx>, first_lane: usize) -> Result<(), Error> {
     let mut lane = ctx.alive_lane(first_lane);
     ctx.lanes[lane].stat.workers.fetch_add(1, Ordering::Relaxed);
-    let result = work(&ctx, &mut lane).await;
+    ctx.shared.workers.fetch_add(1, Ordering::Relaxed);
+    let mut flow = Flow::Run;
+    let result = work(&ctx, &mut lane, &mut flow).await;
     ctx.lanes[lane].stat.workers.fetch_sub(1, Ordering::Relaxed);
+    // A retiring connection already gave up its place in the count.
+    if flow != Flow::Retire {
+        ctx.shared.workers.fetch_sub(1, Ordering::Relaxed);
+    }
     result
 }
 
-async fn work(ctx: &Arc<WorkerCtx>, lane: &mut usize) -> Result<(), Error> {
+/// Why a connection stopped streaming its segment early, apart from errors.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Flow {
+    Run,
+    /// Fewer connections were asked for: this one stops.
+    Retire,
+    /// Its lane was switched off: it carries on over another one.
+    LaneOff,
+}
+
+impl WorkerCtx {
+    /// Whether this connection should stop because the user lowered the
+    /// connection count. Connections on the lanes with the most of them go
+    /// first, so the remaining ones stay spread over every link. Takes its
+    /// place out of the count when it says yes, so exactly the surplus stops.
+    fn should_retire(&self, lane: usize) -> bool {
+        let want = self.shared.desired_connections.load(Ordering::Relaxed);
+        if want == 0 {
+            return false;
+        }
+        let workers = &self.shared.workers;
+        if workers.load(Ordering::Relaxed) <= want {
+            return false;
+        }
+        let mine = self.lanes[lane].stat.workers.load(Ordering::Relaxed);
+        let busier =
+            self.lanes.iter().filter(|l| l.stat.is_alive()).any(|l| l.stat.workers.load(Ordering::Relaxed) > mine);
+        if self.lanes[lane].stat.is_alive() && busier {
+            return false; // a busier lane gives one up first
+        }
+        let mut live = workers.load(Ordering::Relaxed);
+        while live > want {
+            match workers.compare_exchange_weak(live, live - 1, Ordering::AcqRel, Ordering::Relaxed) {
+                Ok(_) => return true,
+                Err(now) => live = now,
+            }
+        }
+        false
+    }
+}
+
+async fn work(ctx: &Arc<WorkerCtx>, lane: &mut usize, flow: &mut Flow) -> Result<(), Error> {
     loop {
         if ctx.stop.is_cancelled() {
+            return Ok(());
+        }
+        // Between segments is the cheapest moment to bow out.
+        if ctx.ranged && ctx.should_retire(*lane) {
+            *flow = Flow::Retire;
             return Ok(());
         }
         let Some(idx) = ctx.table().claim(ctx.min_split) else { return Ok(()) };
@@ -573,10 +685,16 @@ async fn work(ctx: &Arc<WorkerCtx>, lane: &mut usize) -> Result<(), Error> {
             let this = &ctx.lanes[*lane];
             let before = ctx.table().segments[idx].written;
             let url = ctx.lane_url(this);
-            match fetch_segment(ctx, idx, this, &url).await {
+            match fetch_segment(ctx, idx, this, *lane, &url, flow).await {
                 Ok(()) => {
                     ctx.table().segments[idx].active = false;
                     break;
+                }
+                // Its lane was switched off: the top of the loop moves it to a
+                // live lane and it continues the same range from where it got.
+                Err(Error::Cancelled) if *flow == Flow::LaneOff && !ctx.stop.is_cancelled() => {
+                    *flow = Flow::Run;
+                    attempt = 0;
                 }
                 Err(Error::Cancelled) => {
                     ctx.table().release(idx);
@@ -637,7 +755,14 @@ async fn work(ctx: &Arc<WorkerCtx>, lane: &mut usize) -> Result<(), Error> {
 
 /// Streams one segment into the file. Returns `Ok` once the segment's
 /// (possibly shrunk) end is reached.
-async fn fetch_segment(ctx: &WorkerCtx, idx: usize, lane: &Lane, url: &Url) -> Result<(), Error> {
+async fn fetch_segment(
+    ctx: &WorkerCtx,
+    idx: usize,
+    lane: &Lane,
+    lane_idx: usize,
+    url: &Url,
+    flow: &mut Flow,
+) -> Result<(), Error> {
     let (offset, end) = {
         let mut t = ctx.table();
         let s = &mut t.segments[idx];
@@ -713,6 +838,17 @@ async fn fetch_segment(ctx: &WorkerCtx, idx: usize, lane: &Lane, url: &Url) -> R
         }
         if reached_end {
             break Ok(true);
+        }
+        // Live changes from the user. The bytes in hand are written below.
+        if ctx.ranged {
+            if lane.stat.disabled.load(Ordering::Relaxed) && ctx.alive_lanes() > 0 {
+                *flow = Flow::LaneOff;
+                break Err(Error::Cancelled);
+            }
+            if ctx.should_retire(lane_idx) {
+                *flow = Flow::Retire;
+                break Err(Error::Cancelled);
+            }
         }
     };
 

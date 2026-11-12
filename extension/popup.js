@@ -1,5 +1,14 @@
 const ext = globalThis.browser ?? globalThis.chrome;
-const DEFAULTS = { enabled: true, port: 7853, token: "", minSizeKb: 0, skipExtensions: "", skipSites: "" };
+const DEFAULTS = {
+  enabled: true,
+  port: 7853,
+  token: "",
+  minSizeKb: 0,
+  skipExtensions: "",
+  skipSites: "",
+  videoButton: true,
+  videoButtonSkipSites: "",
+};
 const ALL_SITES = { origins: ["<all_urls>"] };
 const $ = (id) => document.getElementById(id);
 
@@ -11,6 +20,8 @@ async function load() {
   $("minSizeKb").value = s.minSizeKb;
   $("skipExtensions").value = s.skipExtensions;
   $("skipSites").value = s.skipSites;
+  $("videoButton").checked = s.videoButton;
+  $("videoButtonSkipSites").value = s.videoButtonSkipSites;
   $("version").textContent = `v${ext.runtime.getManifest().version}`;
   await showSiteButton();
   await showMedia();
@@ -126,6 +137,8 @@ async function save() {
     minSizeKb: Math.max(0, Number($("minSizeKb").value) || 0),
     skipExtensions: $("skipExtensions").value,
     skipSites: $("skipSites").value,
+    videoButton: $("videoButton").checked,
+    videoButtonSkipSites: $("videoButtonSkipSites").value,
   });
   $("save").textContent = "Saved";
   setTimeout(() => ($("save").textContent = "Save"), 1200);
@@ -186,6 +199,7 @@ $("all").addEventListener("click", async () => {
   $("all").disabled = false;
 });
 $("enabled").addEventListener("change", save);
+$("videoButton").addEventListener("change", save);
 $("grant").addEventListener("click", async () => {
   try {
     await ext.permissions.request(ALL_SITES);

@@ -168,8 +168,54 @@ fn parse_version(name: &str, first_line: &str) -> Option<String> {
     looks_like_date.then(|| first_line.to_owned())
 }
 
+/// What the browser knows about the page, passed on to yt-dlp so pages
+/// behind a sign-in, an age check or a consent wall work as they do in the
+/// browser. All optional; nothing of it is kept.
+#[derive(Debug, Clone, Default)]
+pub struct MediaContext {
+    /// `Cookie` header value for the page ("a=1; b=2").
+    pub cookies: Option<String>,
+    pub user_agent: Option<String>,
+    pub referrer: Option<String>,
+}
+
+/// A Netscape cookie file for yt-dlp, deleted again when dropped.
+struct CookieFile(PathBuf);
+
+impl CookieFile {
+    fn write(page: &url::Url, cookies: &str) -> Option<Self> {
+        let host = page.host_str()?.to_ascii_lowercase();
+        // Cookies the browser sent to this page; offered to the whole site
+        // (www.example.com → .example.com) as most video sites call several hosts.
+        let domain = format!(".{}", host.strip_prefix("www.").unwrap_or(&host));
+        let mut text = String::from("# Netscape HTTP Cookie File\n");
+        for pair in cookies.split(';') {
+            let Some((name, value)) = pair.trim().split_once('=') else { continue };
+            let (name, value) = (name.trim(), value.trim());
+            if name.is_empty() || name.contains(['\t', '\n', '\r']) || value.contains(['\t', '\n', '\r']) {
+                continue;
+            }
+            text.push_str(&format!("{domain}\tTRUE\t/\tFALSE\t0\t{name}\t{value}\n"));
+        }
+        let path = std::env::temp_dir().join(format!("stewardget-cookies-{}.txt", crate::util::random_token()));
+        std::fs::write(&path, text).ok()?;
+        Some(Self(path))
+    }
+}
+
+impl Drop for CookieFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
 /// What a page or manifest offers.
-pub async fn inspect(client: &Client, ytdlp: Option<&Path>, url: &str) -> Result<MediaInfo, Error> {
+pub async fn inspect(
+    client: &Client,
+    ytdlp: Option<&Path>,
+    url: &str,
+    context: &MediaContext,
+) -> Result<MediaInfo, Error> {
     let lower = url.split(['?', '#']).next().unwrap_or("").to_ascii_lowercase();
     if lower.ends_with(".mpd") {
         let text = client.get(url).send().await?.error_for_status()?.text().await?;
@@ -180,30 +226,185 @@ pub async fn inspect(client: &Client, ytdlp: Option<&Path>, url: &str) -> Result
     }
     let Some(tool) = ytdlp else {
         return Err(Error::Unsupported(
-            "this page needs yt-dlp, which isn't installed. Install it (for example `winget install yt-dlp`) and try again".into(),
+            "this page needs yt-dlp, which isn't set up yet. Use “Set up yt-dlp” (one click) and try again".into(),
         ));
     };
-    let output = tokio::time::timeout(
-        Duration::from_secs(90),
-        tokio::process::Command::new(tool)
-            .args(["-J", "--no-playlist", "--no-warnings"])
-            .arg("--")
-            .arg(url)
-            .stdin(std::process::Stdio::null())
-            .kill_on_drop(true)
-            .output(),
-    )
-    .await
-    .map_err(|_| Error::Timeout)?
-    .map_err(|e| Error::Io(format!("could not start yt-dlp: {e}")))?;
+    let page = url::Url::parse(url).map_err(|e| Error::InvalidUrl(e.to_string()))?;
+    let cookie_file =
+        context.cookies.as_deref().filter(|c| !c.trim().is_empty()).and_then(|c| CookieFile::write(&page, c));
+    let mut cmd = tokio::process::Command::new(tool);
+    cmd.args(["-J", "--no-playlist", "--socket-timeout", "20", "--extractor-retries", "2"]);
+    if let Some(ua) = context.user_agent.as_deref().filter(|u| !u.is_empty()) {
+        cmd.arg("--user-agent").arg(ua);
+    }
+    if let Some(r) = context.referrer.as_deref().filter(|r| r.starts_with("http")) {
+        cmd.arg("--referer").arg(r);
+    }
+    if let Some(f) = &cookie_file {
+        cmd.arg("--cookies").arg(&f.0);
+    }
+    cmd.arg("--").arg(url).stdin(std::process::Stdio::null()).kill_on_drop(true);
+    #[cfg(windows)]
+    cmd.creation_flags(0x0800_0000);
+    let output = tokio::time::timeout(Duration::from_secs(120), cmd.output())
+        .await
+        .map_err(|_| Error::Unsupported("yt-dlp took too long to read the page (2 minutes)".into()))?
+        .map_err(|e| Error::Io(format!("could not start yt-dlp: {e}")))?;
+    drop(cookie_file);
+    let stderr = String::from_utf8_lossy(&output.stderr);
     if !output.status.success() {
-        let msg = String::from_utf8_lossy(&output.stderr);
-        let last = msg.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("yt-dlp failed");
-        return Err(Error::Unsupported(last.trim().trim_start_matches("ERROR: ").to_owned()));
+        return Err(Error::Unsupported(explain_ytdlp_error(&stderr)));
     }
     let json: Value =
         serde_json::from_slice(&output.stdout).map_err(|e| Error::Io(format!("unreadable yt-dlp answer: {e}")))?;
-    Ok(options_from_ytdlp(&json))
+    let info = options_from_ytdlp(&json);
+    if info.options.is_empty() {
+        let warning = stderr
+            .lines()
+            .filter_map(|l| l.trim().strip_prefix("WARNING: "))
+            .find(|l| !l.is_empty())
+            .map(|w| format!(" yt-dlp said: {w}"))
+            .unwrap_or_default();
+        return Err(Error::Unsupported(format!(
+            "the page has a video, but no format StewardGet can fetch directly (only small pieces, or protected).{warning}"
+        )));
+    }
+    Ok(info)
+}
+
+/// yt-dlp's last error line, with a hint for the common cases.
+fn explain_ytdlp_error(stderr: &str) -> String {
+    let last = stderr
+        .lines()
+        .rev()
+        .find(|l| l.trim_start().starts_with("ERROR:"))
+        .or_else(|| stderr.lines().rev().find(|l| !l.trim().is_empty()))
+        .unwrap_or("yt-dlp failed")
+        .trim()
+        .trim_start_matches("ERROR: ")
+        .to_owned();
+    let lower = last.to_ascii_lowercase();
+    let hint = if lower.contains("sign in")
+        || lower.contains("login")
+        || lower.contains("cookies")
+        || lower.contains("not a bot")
+    {
+        " — the site wants a signed-in browser: use the download button on the video in your browser, which brings your sign-in along"
+    } else if lower.contains("unsupported url") {
+        " — yt-dlp doesn't know this site; play the video in the browser and pick it from the StewardGet button there"
+    } else if lower.contains("drm") {
+        " — the video is copy-protected (DRM) and can't be saved"
+    } else if lower.contains("http error 403")
+        || lower.contains("unable to extract")
+        || lower.contains("nsig")
+        || lower.contains("signature")
+    {
+        " — the site changed something; update yt-dlp (Settings › Integrations › Update) and try again"
+    } else {
+        ""
+    };
+    format!("{last}{hint}")
+}
+
+/// The standalone yt-dlp build for this computer, as named on its releases page.
+pub fn ytdlp_asset() -> Option<&'static str> {
+    if cfg!(windows) {
+        if cfg!(target_arch = "x86_64") {
+            Some("yt-dlp.exe")
+        } else if cfg!(target_arch = "aarch64") {
+            Some("yt-dlp_arm64.exe")
+        } else {
+            Some("yt-dlp_x86.exe")
+        }
+    } else if cfg!(target_os = "macos") {
+        Some("yt-dlp_macos")
+    } else if cfg!(target_os = "linux") {
+        if cfg!(target_arch = "x86_64") {
+            Some("yt-dlp_linux")
+        } else if cfg!(target_arch = "aarch64") {
+            Some("yt-dlp_linux_aarch64")
+        } else {
+            None
+        }
+    } else {
+        None
+    }
+}
+
+const YTDLP_RELEASES: &str = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/";
+
+/// Downloads the official standalone yt-dlp into `dir`, checks it against
+/// the SHA-256 list published with the release, and returns its path. A
+/// standalone copy can update itself (`yt-dlp -U`), which a packaged one
+/// often can't; sites change often enough for that to matter.
+pub async fn install_ytdlp(client: &Client, dir: &Path) -> Result<PathBuf, Error> {
+    use sha2::Digest;
+    let asset =
+        ytdlp_asset().ok_or_else(|| Error::Unsupported("there is no ready-made yt-dlp for this system".into()))?;
+    let get = |name: &str| client.get(format!("{YTDLP_RELEASES}{name}")).timeout(Duration::from_secs(600)).send();
+    let sums = get("SHA2-256SUMS").await?.error_for_status()?.text().await?;
+    let expected = sums
+        .lines()
+        .find_map(|l| {
+            let (hash, name) = l.split_once(char::is_whitespace)?;
+            (name.trim().trim_start_matches('*') == asset).then(|| hash.trim().to_ascii_lowercase())
+        })
+        .ok_or_else(|| Error::Unsupported(format!("the yt-dlp release lists no {asset}")))?;
+    let bytes = get(asset).await?.error_for_status()?.bytes().await?;
+    let actual: String = sha2::Sha256::digest(&bytes).iter().map(|b| format!("{b:02x}")).collect();
+    if actual != expected {
+        return Err(Error::Io(
+            "the downloaded yt-dlp didn't match its published checksum; nothing was installed".into(),
+        ));
+    }
+    std::fs::create_dir_all(dir)?;
+    let target = dir.join(if cfg!(windows) { "yt-dlp.exe" } else { "yt-dlp" });
+    let temp = dir.join(format!(".yt-dlp-{}.download", crate::util::random_token()));
+    std::fs::write(&temp, &bytes)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&temp, std::fs::Permissions::from_mode(0o755))?;
+    }
+    if let Err(e) = crate::fsio::rename(&temp, &target) {
+        let _ = std::fs::remove_file(&temp);
+        return Err(e.into());
+    }
+    Ok(target)
+}
+
+/// Asks yt-dlp to update itself (`yt-dlp -U`) and returns what it said.
+/// Blocking, up to two minutes. Copies installed by a package manager say
+/// how to update them instead, which is passed on.
+pub fn update_ytdlp(path: &Path) -> Result<String, String> {
+    let mut cmd = std::process::Command::new(path);
+    cmd.arg("-U")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000);
+    }
+    let child = cmd.spawn().map_err(|e| format!("could not start yt-dlp: {e}"))?;
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(child.wait_with_output());
+    });
+    let out = rx
+        .recv_timeout(Duration::from_secs(120))
+        .map_err(|_| "yt-dlp didn't finish updating in time".to_owned())?
+        .map_err(|e| e.to_string())?;
+    let text = format!("{}\n{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    let last = text
+        .lines()
+        .map(str::trim)
+        .rfind(|l| !l.is_empty() && !l.starts_with("[debug]"))
+        .unwrap_or("")
+        .trim_start_matches("ERROR: ")
+        .to_owned();
+    if out.status.success() { Ok(last) } else { Err(last) }
 }
 
 fn text(v: &Value, key: &str) -> Option<String> {
@@ -217,17 +418,24 @@ fn number(v: &Value, key: &str) -> Option<f64> {
 struct Format {
     part: MediaPart,
     height: u32,
+    fps: u32,
     has_video: bool,
     has_audio: bool,
     rate: f64,
-    codec: String,
+    vcodec: String,
+    acodec: String,
+    /// Delivered as an HLS playlist; StewardGet's stream downloader fetches it.
+    hls: bool,
 }
 
 fn format_of(f: &Value) -> Option<Format> {
     let url = text(f, "url")?;
-    // Fragmented streams (HLS, DASH segments) have no single file to fetch.
     let protocol = text(f, "protocol").unwrap_or_default();
-    if !matches!(protocol.as_str(), "https" | "http" | "") {
+    // Direct files, and HLS playlists (fetched piece by piece and joined).
+    // DASH segment lists and other fragment schemes have no URL that holds
+    // the whole stream.
+    let hls = protocol.starts_with("m3u8");
+    if !hls && !matches!(protocol.as_str(), "https" | "http" | "") {
         return None;
     }
     let has_video = text(f, "vcodec").is_some();
@@ -235,26 +443,79 @@ fn format_of(f: &Value) -> Option<Format> {
     if !has_video && !has_audio {
         return None;
     }
+    // Storyboards and thumbnails sheets.
+    if text(f, "ext").as_deref() == Some("mhtml") {
+        return None;
+    }
     let headers = f
         .get("http_headers")
         .and_then(Value::as_object)
         .map(|m| m.iter().filter_map(|(k, v)| v.as_str().map(|v| (k.clone(), v.to_owned()))).collect())
         .unwrap_or_default();
-    let ext = text(f, "ext").unwrap_or_else(|| "bin".into());
+    let real_ext = text(f, "ext").unwrap_or_else(|| "bin".into());
     Some(Format {
         part: MediaPart {
             url,
             headers,
-            ext,
+            // A stream is named after its playlist; the engine gives the
+            // result its real extension (.ts or .mp4).
+            ext: if hls { "m3u8".into() } else { real_ext },
             stream: None,
             size: number(f, "filesize").or_else(|| number(f, "filesize_approx")).map(|n| n as u64),
         },
         height: number(f, "height").unwrap_or(0.0) as u32,
+        fps: number(f, "fps").unwrap_or(0.0).round() as u32,
         has_video,
         has_audio,
-        rate: number(f, "tbr").or_else(|| number(f, "abr")).unwrap_or(0.0),
-        codec: text(f, "acodec").unwrap_or_default(),
+        rate: number(f, "tbr").or_else(|| number(f, "vbr")).or_else(|| number(f, "abr")).unwrap_or(0.0),
+        vcodec: text(f, "vcodec").unwrap_or_default(),
+        acodec: text(f, "acodec").unwrap_or_default(),
+        hls,
     })
+}
+
+/// "H.264", "VP9", "AV1"… from a codec string such as `avc1.640028`.
+fn codec_name(codec: &str) -> &'static str {
+    let c = codec.to_ascii_lowercase();
+    if c.starts_with("avc") || c.starts_with("h264") {
+        "H.264"
+    } else if c.starts_with("vp09") || c.starts_with("vp9") {
+        "VP9"
+    } else if c.starts_with("av01") {
+        "AV1"
+    } else if c.starts_with("hev") || c.starts_with("hvc") || c.starts_with("h265") {
+        "HEVC"
+    } else if c.starts_with("mp4a") || c == "aac" {
+        "AAC"
+    } else if c.starts_with("opus") {
+        "Opus"
+    } else if c.starts_with("vorbis") {
+        "Vorbis"
+    } else if c.starts_with("mp3") {
+        "MP3"
+    } else {
+        ""
+    }
+}
+
+/// The container a format's file has, for labels (a stream says so).
+fn container(f: &Format) -> String {
+    if f.hls { "stream".into() } else { f.part.ext.to_uppercase() }
+}
+
+/// "1080p60", "720p".
+fn quality(f: &Format) -> String {
+    let mut q = height_label(f.height);
+    if f.height > 0 && f.fps > 30 {
+        q.push_str(&f.fps.to_string());
+    }
+    q
+}
+
+/// Order of preference among formats of the same picture height: direct
+/// files before streams, MP4 (plays everywhere) before WebM, then bit rate.
+fn preference(f: &Format) -> (bool, bool, std::cmp::Reverse<i64>) {
+    (f.hls, f.part.ext != "mp4", std::cmp::Reverse((f.rate * 1000.0) as i64))
 }
 
 /// Turns yt-dlp's JSON into choices: ready-made files, separate video and audio
@@ -268,22 +529,25 @@ pub(crate) fn options_from_ytdlp(json: &Value) -> MediaInfo {
         .unwrap_or_default();
     // A single-file answer (no formats list) still has a top-level url.
     let formats = if formats.is_empty() { format_of(json).into_iter().collect() } else { formats };
-    let best = |list: &mut Vec<&Format>| {
-        list.sort_by(|a, b| b.rate.partial_cmp(&a.rate).unwrap_or(std::cmp::Ordering::Equal));
-    };
     let mut options = Vec::new();
 
-    // Files with picture and sound: best bit rate per picture height.
+    // Files with picture and sound: the preferred one per picture height.
     let mut whole: Vec<&Format> = formats.iter().filter(|f| f.has_video && f.has_audio).collect();
-    best(&mut whole);
+    whole.sort_by_key(|f| preference(f));
     let mut seen = Vec::new();
     for f in whole {
         if seen.contains(&f.height) {
             continue;
         }
         seen.push(f.height);
+        let codec = codec_name(&f.vcodec);
         options.push(MediaOption {
-            label: format!("{} · {} (picture and sound)", height_label(f.height), f.part.ext.to_uppercase()),
+            label: format!(
+                "{} · {}{} (picture and sound)",
+                quality(f),
+                container(f),
+                if codec.is_empty() { String::new() } else { format!(" {codec}") }
+            ),
             parts: vec![f.part.clone()],
             height: f.height,
         });
@@ -291,28 +555,32 @@ pub(crate) fn options_from_ytdlp(json: &Value) -> MediaInfo {
 
     // Separate streams: usually the highest quality. Needs joining.
     let mut audio: Vec<&Format> = formats.iter().filter(|f| f.has_audio && !f.has_video).collect();
-    best(&mut audio);
+    audio.sort_by_key(|f| (f.hls, std::cmp::Reverse((f.rate * 1000.0) as i64)));
     let mut video: Vec<&Format> = formats.iter().filter(|f| f.has_video && !f.has_audio).collect();
-    best(&mut video);
+    video.sort_by_key(|f| preference(f));
     let mut seen = Vec::new();
     for v in video {
+        // Same height with picture and sound in one file already listed and
+        // at least as good: no need to join anything.
         if seen.contains(&v.height) {
             continue;
         }
         // MP4 video joins best with AAC; WebM with Opus/Vorbis; otherwise take the best.
         let wants = if v.part.ext == "mp4" { "m4a" } else { "webm" };
-        let Some(a) = audio.iter().find(|a| a.part.ext == wants).or_else(|| audio.first()) else { continue };
+        let Some(a) = audio.iter().find(|a| !a.hls && a.part.ext == wants).or_else(|| audio.first()) else { continue };
         seen.push(v.height);
         let mut vp = v.part.clone();
         let mut ap = a.part.clone();
         vp.stream = Some(Stream::Video);
         ap.stream = Some(Stream::Audio);
+        let codec = codec_name(&v.vcodec);
         options.push(MediaOption {
             label: format!(
-                "{} · {} + {} (joined with ffmpeg)",
-                height_label(v.height),
-                v.part.ext.to_uppercase(),
-                a.part.ext.to_uppercase()
+                "{} · {}{} + {} (joined with ffmpeg)",
+                quality(v),
+                container(v),
+                if codec.is_empty() { String::new() } else { format!(" {codec}") },
+                container(a)
             ),
             parts: vec![vp, ap],
             height: v.height,
@@ -320,20 +588,26 @@ pub(crate) fn options_from_ytdlp(json: &Value) -> MediaInfo {
     }
     options.sort_by_key(|o| std::cmp::Reverse((o.height, o.needs_merge())));
 
-    // Sound only.
-    for a in audio.iter().take(2) {
+    // Sound only: the best of each kind (AAC in M4A plays everywhere).
+    let mut kinds = Vec::new();
+    for a in audio.iter().filter(|a| !a.hls).chain(audio.iter().filter(|a| a.hls)) {
+        if kinds.contains(&a.part.ext) || kinds.len() >= 3 {
+            continue;
+        }
+        kinds.push(a.part.ext.clone());
         let kbps = if a.rate > 0.0 { format!(" {:.0} kbps", a.rate) } else { String::new() };
+        let codec = codec_name(&a.acodec);
         options.push(MediaOption {
             label: format!(
                 "Audio only · {}{kbps}{}",
-                a.part.ext.to_uppercase(),
-                if a.codec.is_empty() { String::new() } else { format!(" ({})", a.codec) }
+                container(a),
+                if codec.is_empty() { String::new() } else { format!(" ({codec})") }
             ),
             parts: vec![a.part.clone()],
             height: 0,
         });
     }
-    options.truncate(14);
+    options.truncate(24);
     MediaInfo { title, source: "yt-dlp", options }
 }
 
@@ -474,14 +748,64 @@ mod tests {
         }));
         assert_eq!(info.title, "Demo");
         let labels: Vec<_> = info.options.iter().map(|o| o.label.as_str()).collect();
-        assert!(labels[0].starts_with("1080p") && labels[0].contains("joined"), "{labels:?}");
+        assert!(labels[0].starts_with("2160p"), "highest first: {labels:?}");
+        assert!(labels[1].starts_with("1080p") && labels[1].contains("joined"), "{labels:?}");
         assert!(labels.iter().any(|l| l.starts_with("360p") && l.contains("picture and sound")));
         assert!(labels.iter().any(|l| l.starts_with("Audio only")));
-        assert!(!labels.iter().any(|l| l.contains("2160")), "fragmented streams are left out");
-        let merged = &info.options[0];
+        // An HLS stream is offered (fetched piece by piece by the stream downloader).
+        let uhd = info.options.iter().find(|o| o.height == 2160).expect("HLS formats are offered");
+        assert!(uhd.label.contains("stream"), "{}", uhd.label);
+        assert_eq!(uhd.parts[0].ext, "m3u8");
+        let merged = &info.options[1];
         assert_eq!(merged.parts[0].stream, Some(Stream::Video));
         assert_eq!(merged.parts[1].ext, "m4a", "mp4 video pairs with m4a audio");
         assert_eq!(merged.parts[0].headers, vec![("User-Agent".to_owned(), "yt".to_owned())]);
+    }
+
+    #[test]
+    fn direct_files_win_over_streams_and_mp4_over_webm() {
+        let mut hls = fmt("hls720", "mp4", "avc1", "mp4a", 720, 9000.0);
+        hls["protocol"] = json!("m3u8_native");
+        let mut webm = fmt("247", "webm", "vp09.00.40.08", "none", 720, 3000.0);
+        webm["fps"] = json!(60);
+        let info = options_from_ytdlp(&json!({
+            "title": "Pick",
+            "formats": [
+                hls,
+                fmt("22", "mp4", "avc1.64001F", "mp4a.40.2", 720, 1500.0),
+                webm,
+                fmt("136", "mp4", "avc1.4d401f", "none", 720, 1200.0),
+                fmt("140", "m4a", "none", "mp4a.40.2", 0, 128.0),
+                fmt("sb0", "mhtml", "none", "none", 0, 0.0),
+            ]
+        }));
+        let whole = info.options.iter().find(|o| !o.needs_merge() && o.height == 720).unwrap();
+        assert!(whole.label.contains("MP4") && whole.label.contains("H.264"), "{}", whole.label);
+        let joined = info.options.iter().find(|o| o.needs_merge()).unwrap();
+        assert!(joined.label.contains("MP4") && !joined.label.contains("60"), "MP4 preferred: {}", joined.label);
+        assert!(!info.options.iter().any(|o| o.label.contains("MHTML")), "storyboards are not videos");
+    }
+
+    #[test]
+    fn ytdlp_errors_come_with_a_way_forward() {
+        let e = explain_ytdlp_error(
+            "[youtube] abc: Downloading webpage\nERROR: [youtube] abc: Sign in to confirm you’re not a bot",
+        );
+        assert!(e.starts_with("[youtube] abc: Sign in") && e.contains("signed-in browser"), "{e}");
+        assert!(explain_ytdlp_error("ERROR: Unsupported URL: https://x.test/").contains("doesn't know this site"));
+    }
+
+    #[test]
+    fn cookie_files_are_written_for_the_whole_site_and_removed() {
+        let page = url::Url::parse("https://www.example.com/watch?v=1").unwrap();
+        let path = {
+            let f = CookieFile::write(&page, "a=1; b=two=2; bad").unwrap();
+            let text = std::fs::read_to_string(&f.0).unwrap();
+            assert!(text.contains(".example.com\tTRUE\t/\tFALSE\t0\ta\t1\n"), "{text}");
+            assert!(text.contains("\tb\ttwo=2\n"), "{text}");
+            f.0.clone()
+        };
+        assert!(!path.exists(), "removed once dropped");
     }
 
     #[test]

@@ -134,6 +134,7 @@ impl StewardGetApp {
                 },
                 &mut draft.ytdlp_path,
             );
+            self.ytdlp_upkeep(ui, draft);
             tool_block(
                 ui,
                 &p,
@@ -392,6 +393,93 @@ struct ToolInfo {
 
 type Check = std::sync::Arc<std::sync::Mutex<Option<Result<String, String>>>>;
 type Install = std::sync::Arc<std::sync::Mutex<Option<Result<(), String>>>>;
+
+/// A yt-dlp install or update running in the background: `None` until done;
+/// then the new location (an install) and what to tell the user.
+pub type YtdlpJob = std::sync::Arc<std::sync::Mutex<Option<Result<(Option<std::path::PathBuf>, String), String>>>>;
+
+impl StewardGetApp {
+    /// Starts installing the standalone yt-dlp, or updating the one in use.
+    pub fn start_ytdlp_job(&self, ctx: &egui::Context, update: Option<std::path::PathBuf>) -> YtdlpJob {
+        let job: YtdlpJob = Default::default();
+        let (out, engine, ctx) = (std::sync::Arc::clone(&job), self.engine.clone(), ctx.clone());
+        match update {
+            Some(path) => {
+                std::thread::spawn(move || {
+                    let r = stewardget_core::update_ytdlp(&path)
+                        .map(|said| (None, if said.is_empty() { "yt-dlp is up to date.".to_owned() } else { said }));
+                    *out.lock_ok() = Some(r);
+                    ctx.request_repaint();
+                });
+            }
+            None => {
+                self.runtime.spawn(async move {
+                    let r = engine
+                        .install_ytdlp()
+                        .await
+                        .map(|p| (Some(p), "yt-dlp is installed and ready.".to_owned()))
+                        .map_err(|e| crate::app::capitalize(&e.to_string()));
+                    *out.lock_ok() = Some(r);
+                    ctx.request_repaint();
+                });
+            }
+        }
+        job
+    }
+
+    /// One-click install of the official standalone yt-dlp (verified against
+    /// its published checksum), and an Update button: sites change often and
+    /// an old yt-dlp is the usual reason a video page stops working.
+    fn ytdlp_upkeep(&mut self, ui: &mut Ui, draft: &mut Config) {
+        let p = self.palette;
+        let id = egui::Id::unique("ytdlp-upkeep");
+        let job: Option<YtdlpJob> = ui.data(|d| d.get_temp(id));
+        let running = job.as_ref().is_some_and(|j| j.lock_ok().is_none());
+        let found = stewardget_core::find_tool(draft.ytdlp_path.as_deref(), "yt-dlp");
+        ui.horizontal_wrapped(|ui| {
+            if stewardget_core::ytdlp_asset().is_some()
+                && widgets::button(
+                    ui,
+                    if found.is_none() { ButtonKind::Primary } else { ButtonKind::Ghost },
+                    Some(Icon::Download),
+                    if found.is_none() { "Install yt-dlp (one click)" } else { "Reinstall standalone copy" },
+                    !running,
+                    &p,
+                )
+                .on_hover_text("Downloads the official yt-dlp from GitHub into StewardGet's folder and checks its SHA-256. No admin rights needed.")
+                .clicked()
+            {
+                let j = self.start_ytdlp_job(ui.ctx(), None);
+                ui.data_mut(|d| d.insert_temp(id, j));
+            }
+            if let Some(path) = &found
+                && widgets::button(ui, ButtonKind::Ghost, Some(Icon::Retry), "Update yt-dlp", !running, &p)
+                    .on_hover_text("Runs yt-dlp -U. Do this when a site that used to work stops working.")
+                    .clicked()
+            {
+                let j = self.start_ytdlp_job(ui.ctx(), Some(path.clone()));
+                ui.data_mut(|d| d.insert_temp(id, j));
+            }
+        });
+        if running {
+            ctx_repaint(ui);
+            ui.label(RichText::new("Working on yt-dlp\u{2026}").size(12.0).color(p.accent2));
+        } else if let Some(result) = job.as_ref().and_then(|j| j.lock_ok().clone()) {
+            match result {
+                Ok((path, said)) => {
+                    if let Some(path) = path {
+                        // Saving these settings later must keep the new copy.
+                        draft.ytdlp_path = Some(path);
+                    }
+                    ui.label(RichText::new(said).size(12.0).color(p.green));
+                }
+                Err(e) => {
+                    ui.add(egui::Label::new(RichText::new(e).size(12.0).color(p.red)).wrap());
+                }
+            }
+        }
+    }
+}
 
 /// The version check of `path`, started once per path and remembered.
 fn checked(ui: &Ui, name: &str, path: &std::path::Path) -> Option<Result<String, String>> {

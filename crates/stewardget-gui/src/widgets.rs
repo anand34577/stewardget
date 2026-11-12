@@ -868,6 +868,56 @@ pub fn segmented<T: PartialEq + Copy>(ui: &mut Ui, value: &mut T, options: &[(T,
     response
 }
 
+/// A compact `[−] 8 [+]` number control. Returns whether the value changed.
+/// The minus and plus are drawn, not typed, so they look the same in every font.
+pub fn stepper(
+    ui: &mut Ui,
+    value: &mut usize,
+    range: std::ops::RangeInclusive<usize>,
+    tooltip: &str,
+    p: &Palette,
+) -> bool {
+    let before = *value;
+    let h = 24.0;
+    let step = |ui: &mut Ui, plus: bool, enabled: bool| {
+        let (rect, r) = ui.allocate_exact_size(vec2(h, h), if enabled { Sense::click() } else { Sense::hover() });
+        let hovered = enabled && r.hovered();
+        let fill = if hovered { p.card_hover } else { p.card };
+        ui.painter().rect(
+            rect,
+            CornerRadius::same(radius::SM),
+            fill,
+            Stroke::new(1.0, p.control_border),
+            StrokeKind::Inside,
+        );
+        let color = if !enabled {
+            p.text_dim.gamma_multiply(0.5)
+        } else if hovered {
+            p.text
+        } else {
+            p.text_dim
+        };
+        let c = rect.center();
+        let stroke = Stroke::new(1.6, color);
+        ui.painter().line_segment([c - vec2(5.0, 0.0), c + vec2(5.0, 0.0)], stroke);
+        if plus {
+            ui.painter().line_segment([c - vec2(0.0, 5.0), c + vec2(0.0, 5.0)], stroke);
+        }
+        let r = r.on_hover_text(tooltip);
+        if enabled { r.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() } else { false }
+    };
+    ui.spacing_mut().item_spacing.x = 4.0;
+    if step(ui, false, *value > *range.start()) {
+        *value -= 1;
+    }
+    let (rect, _) = ui.allocate_exact_size(vec2(26.0, h), Sense::hover());
+    ui.painter().text(rect.center(), Align2::CENTER_CENTER, value.to_string(), FontId::proportional(13.5), p.text);
+    if step(ui, true, *value < *range.end()) {
+        *value += 1;
+    }
+    *value != before
+}
+
 /// iOS-style switch.
 pub fn toggle(ui: &mut Ui, on: &mut bool, p: &Palette) -> Response {
     let (rect, mut response) = ui.allocate_exact_size(vec2(38.0, 22.0), Sense::click());

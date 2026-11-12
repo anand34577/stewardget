@@ -47,9 +47,16 @@ pub(crate) fn title(ui: &mut Ui, p: &Palette, icon: Icon, text: &str) {
 }
 
 /// Right-aligned button row at the bottom of a dialog.
+///
+/// The row is wrapped in `horizontal` on purpose: a bare right-to-left layout
+/// in a vertical dialog centres itself in *all* the height left in the
+/// window, which pushed the buttons into the middle of a large empty band
+/// (and grew the dialog with it) whenever the dialog sat high on the screen.
 pub(crate) fn footer(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
     ui.add_space(16.0);
-    ui.with_layout(Layout::right_to_left(Align::Center), add);
+    ui.horizontal(|ui| {
+        ui.with_layout(Layout::right_to_left(Align::Center), add);
+    });
 }
 
 pub(crate) fn note(ui: &mut Ui, text: impl Into<String>, color: Color32) {

@@ -340,7 +340,8 @@ impl Item {
                 bytes: l.bytes.load(Ordering::Relaxed),
                 speed: self.lane_speed.get(i).copied().unwrap_or(0.0),
                 workers: l.workers.load(Ordering::Relaxed),
-                failed: !l.is_alive(),
+                failed: l.failed.load(Ordering::Relaxed),
+                disabled: l.disabled.load(Ordering::Relaxed),
                 reason: l.reason.lock_ok().clone(),
             })
             .collect()
@@ -672,6 +673,7 @@ impl Engine {
     /// checksum...). A running download picks them up by reconnecting; its data
     /// is kept. Name and folder are changed with [`Engine::relocate`].
     pub fn update_options(&self, id: DownloadId, mut options: DownloadOptions) -> Result<(), Error> {
+        let config = self.config();
         self.inner.with_item(id, |item, _| {
             options.file_name = item.rec.options.file_name.clone();
             options.directory = item.rec.options.directory.clone();
@@ -680,14 +682,19 @@ impl Engine {
             let reconnect = options.headers != item.rec.options.headers
                 || options.referrer != item.rec.options.referrer
                 || options.user_agent != item.rec.options.user_agent
-                || options.connections != item.rec.options.connections
+                || options.mirrors != item.rec.options.mirrors
                 // The task verifies with the checksum it started with.
                 || options.checksum != item.rec.options.checksum;
+            let connections = options.connections.unwrap_or(config.connections);
+            let resize = options.connections != item.rec.options.connections;
             if let Some(run) = &mut item.run {
                 run.shared.limiter.set_rate(options.speed_limit);
                 if reconnect {
                     run.on_stop = AfterStop::Requeue;
                     run.cancel.cancel();
+                } else if resize {
+                    // Applied live: no reconnect, no data dropped.
+                    run.shared.resize(connections);
                 }
             }
             item.rec.options = options;
@@ -1000,6 +1007,57 @@ impl Engine {
         target_dir(&config, &DownloadOptions::default(), config.categorize(file_name))
     }
 
+    /// Changes how many connections a download uses. A running download
+    /// adjusts on the spot: new connections start at once, and surplus ones
+    /// write what they hold, hand the rest of their range back and stop, so
+    /// nothing is downloaded twice and nothing reconnects. The choice is kept
+    /// for later runs, and the auto-tuner leaves this download alone.
+    pub fn set_connections(&self, id: DownloadId, connections: usize) -> Result<(), Error> {
+        let connections = connections.clamp(1, 64);
+        self.inner.with_item(id, |item, _| {
+            item.rec.options.connections = Some(connections);
+            if let Some(run) = &item.run {
+                run.shared.resize(connections);
+            }
+        })
+    }
+
+    /// Switches one lane (a network link, or a mirror over a link) of a
+    /// running download on or off, as listed in [`DownloadView::lanes`]. Its
+    /// connections move to the other lanes mid-transfer; switched back on, it
+    /// gets connections again straight away. The last working lane can't be
+    /// switched off.
+    pub fn set_lane_enabled(&self, id: DownloadId, lane: usize, enabled: bool) -> Result<(), Error> {
+        let mut outcome = Ok(());
+        self.inner.with_item(id, |item, _| {
+            let Some(run) = &item.run else {
+                outcome = Err(Error::Io("the download isn't running".into()));
+                return;
+            };
+            let lanes = run.shared.lanes.lock_ok();
+            let Some(stat) = lanes.get(lane) else {
+                outcome = Err(Error::NotFound);
+                return;
+            };
+            if !enabled {
+                let others = lanes.iter().enumerate().filter(|(i, l)| *i != lane && l.is_alive()).count();
+                if others == 0 {
+                    outcome = Err(Error::Io("at least one link has to stay on".into()));
+                    return;
+                }
+            }
+            stat.disabled.store(!enabled, Ordering::Relaxed);
+            if enabled {
+                // A link that was dropped for failing gets another chance too.
+                stat.failed.store(false, Ordering::Relaxed);
+                *stat.reason.lock_ok() = None;
+                drop(lanes);
+                run.shared.resized.notify_one();
+            }
+        })?;
+        outcome
+    }
+
     /// Global speed cap, bytes/second (`0` = unlimited). Applies instantly.
     pub fn set_speed_limit(&self, bytes_per_sec: u64) {
         let _one_at_a_time = self.inner.config_lock.lock_ok();
@@ -1065,6 +1123,21 @@ impl Engine {
             Some(pool) => {
                 *self.inner.links.write_ok() = Arc::new(pool);
                 self.inner.link_stats.lock_ok().clear();
+                // Running downloads move onto the new set of links (adapters
+                // added or removed, a new proxy) by reconnecting; the ones that
+                // can resume keep every byte. Ones that can't are left alone
+                // rather than start over.
+                let mut st = self.inner.lock();
+                for item in &mut st.items {
+                    if let Some(run) = &mut item.run
+                        && run.shared.resumable.load(Ordering::Relaxed)
+                        && matches!(run.on_stop, AfterStop::Pause)
+                        && item.rec.status == Status::Downloading
+                    {
+                        run.on_stop = AfterStop::Requeue;
+                        run.cancel.cancel();
+                    }
+                }
             }
             None => {
                 // Only the caps changed: apply them without dropping connections.
@@ -1229,10 +1302,37 @@ impl Engine {
 
     /// Asks yt-dlp (or reads a DASH manifest) for what a page offers.
     pub async fn inspect_media(&self, url: &str) -> Result<crate::MediaInfo, Error> {
+        self.inspect_media_with(url, &crate::MediaContext::default()).await
+    }
+
+    /// [`Engine::inspect_media`] with what the browser knows about the page
+    /// (its cookies, user agent and referrer), for pages behind a sign-in.
+    pub async fn inspect_media_with(
+        &self,
+        url: &str,
+        context: &crate::MediaContext,
+    ) -> Result<crate::MediaInfo, Error> {
         let config = self.config();
         let client = self.inner.client.read_ok().clone();
         let ytdlp = crate::find_tool(config.ytdlp_path.as_deref(), "yt-dlp");
-        crate::media::inspect(&client, ytdlp.as_deref(), url.trim()).await
+        crate::media::inspect(&client, ytdlp.as_deref(), url.trim(), context).await
+    }
+
+    /// Downloads the official standalone yt-dlp (checked against its published
+    /// SHA-256) into StewardGet's data folder and starts using it. It can then
+    /// keep itself current with [`crate::update_ytdlp`].
+    pub async fn install_ytdlp(&self) -> Result<PathBuf, Error> {
+        let dir = self
+            .data_dir()
+            .map(|d| d.join("tools"))
+            .ok_or_else(|| Error::Io("StewardGet runs without a data folder".into()))?;
+        let client = self.inner.client.read_ok().clone();
+        let path = crate::media::install_ytdlp(&client, &dir).await?;
+        let _one_at_a_time = self.inner.config_lock.lock_ok();
+        let mut config = self.config();
+        config.ytdlp_path = Some(path.clone());
+        self.apply_config(config)?;
+        Ok(path)
     }
 
     /// Where yt-dlp and ffmpeg were found, if anywhere.

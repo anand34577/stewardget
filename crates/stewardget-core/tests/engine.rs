@@ -1266,3 +1266,193 @@ async fn new_installs_sort_downloads_into_category_folders() {
     let chosen = Config { auto_categorize: false, ..old }.sanitized();
     assert!(!chosen.auto_categorize, "a later choice is kept");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn connections_change_while_running_without_reconnecting() {
+    // Each connection is limited, so the download stays busy long enough to steer.
+    let opts = ServerOpts { ranges: true, throttle: 1024 * 1024, ..Default::default() };
+    let server = serve(20 * 1024 * 1024, opts).await;
+    let dir = temp_dir("live-connections");
+    let cfg = Config { connections: 8, auto_tune: false, ..config(&dir) };
+    let engine = Engine::start(EngineOptions::in_memory().with_config(cfg)).unwrap();
+    let mut events = engine.subscribe();
+    let id = engine.add(NewDownload::new(&server.url)).unwrap();
+
+    let until = |want: fn(usize) -> bool, secs: u64| {
+        let engine = engine.clone();
+        async move {
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(secs);
+            loop {
+                let d = engine.download(id).unwrap();
+                if want(d.connections) && d.status == Status::Downloading {
+                    return d.connections;
+                }
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "connections stayed at {} ({:?})",
+                    d.connections,
+                    d.status
+                );
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        }
+    };
+    until(|n| n >= 6, 15).await;
+
+    engine.set_connections(id, 2).unwrap();
+    until(|n| n <= 2, 10).await;
+    assert_eq!(engine.download(id).unwrap().options.connections, Some(2), "the choice is kept");
+
+    engine.set_connections(id, 6).unwrap();
+    until(|n| n >= 5, 10).await;
+
+    assert_eq!(wait_for(&engine, id, Status::Completed, 60).await, Status::Completed);
+    assert_eq!(std::fs::read(&engine.download(id).unwrap().path).unwrap(), *server.data);
+    // Nothing was stopped and queued again on the way: it was changed in place.
+    let mut statuses = Vec::new();
+    while let Ok(e) = events.try_recv() {
+        if let Event::StatusChanged(i, s) = e
+            && i == id
+        {
+            statuses.push(s);
+        }
+    }
+    let started = statuses.iter().position(|s| *s == Status::Downloading).unwrap();
+    assert!(
+        !statuses[started..].iter().any(|s| matches!(s, Status::Queued | Status::Connecting | Status::Paused)),
+        "no reconnect: {statuses:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_lane_can_be_switched_off_and_on_while_running() {
+    let len = 16 * 1024 * 1024;
+    let opts = ServerOpts { ranges: true, throttle: 1024 * 1024, ..Default::default() };
+    let primary = serve(len, opts).await;
+    let mirror = serve(len, opts).await;
+    let dir = temp_dir("lane-switch");
+    let cfg = Config { connections: 6, auto_tune: false, ..config(&dir) };
+    let engine = Engine::start(EngineOptions::in_memory().with_config(cfg)).unwrap();
+    let id = engine
+        .add(NewDownload {
+            url: primary.url.clone(),
+            options: DownloadOptions { mirrors: vec![mirror.url.clone()], ..Default::default() },
+            ..Default::default()
+        })
+        .unwrap();
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    loop {
+        let d = engine.download(id).unwrap();
+        if d.lanes.len() == 2 && d.lanes.iter().all(|l| l.workers > 0 && l.bytes > 0) {
+            break;
+        }
+        assert!(tokio::time::Instant::now() < deadline, "both lanes should carry traffic: {:?}", d.lanes);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    engine.set_lane_enabled(id, 1, false).unwrap();
+    // The other lane is now the last one on: it can't go off as well.
+    assert!(engine.set_lane_enabled(id, 0, false).is_err());
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while engine.download(id).unwrap().lanes[1].workers > 0 {
+        assert!(tokio::time::Instant::now() < deadline, "connections should leave the lane switched off");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let lane = engine.download(id).unwrap().lanes[1].clone();
+    assert!(lane.disabled && !lane.failed, "{lane:?}");
+    let before = lane.bytes;
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    assert_eq!(engine.download(id).unwrap().lanes[1].bytes, before, "an off lane carries nothing");
+
+    engine.set_lane_enabled(id, 1, true).unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while engine.download(id).unwrap().lanes.get(1).is_some_and(|l| l.workers == 0) {
+        if engine.download(id).unwrap().status.is_finished() {
+            break;
+        }
+        assert!(tokio::time::Instant::now() < deadline, "a lane switched back on gets connections");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    assert_eq!(wait_for(&engine, id, Status::Completed, 60).await, Status::Completed);
+    assert_eq!(std::fs::read(&engine.download(id).unwrap().path).unwrap(), *primary.data);
+}
+
+/// Serves one fixed text document at any path.
+async fn serve_text(body: String) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut sock, _)) = listener.accept().await else { return };
+            let body = body.clone();
+            tokio::spawn(async move {
+                let mut buf = [0u8; 4096];
+                let _ = sock.read(&mut buf).await;
+                let head = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/dash+xml\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = sock.write_all(head.as_bytes()).await;
+                let _ = sock.write_all(body.as_bytes()).await;
+            });
+        }
+    });
+    format!("http://{addr}/show/stream.mpd")
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_video_button_api_lists_formats_and_downloads_the_one_picked() {
+    let audio = serve(3 * 1024 * 1024, ServerOpts { ranges: true, ..Default::default() }).await;
+    let video = serve(1024 * 1024, ServerOpts { ranges: true, ..Default::default() }).await;
+    let mpd = serve_text(format!(
+        r#"<MPD><Period>
+          <AdaptationSet mimeType="video/mp4"><Representation bandwidth="3000000" height="720"><BaseURL>{}</BaseURL></Representation></AdaptationSet>
+          <AdaptationSet mimeType="audio/mp4"><Representation bandwidth="128000"><BaseURL>{}</BaseURL></Representation></AdaptationSet>
+        </Period></MPD>"#,
+        video.url, audio.url
+    ))
+    .await;
+    let dir = temp_dir("video-api");
+    let port = 20_000 + ((std::process::id() + 13) % 20_000) as u16;
+    let cfg = Config { api_port: port, ..config(&dir) };
+    let engine = Engine::start(EngineOptions { data_dir: Some(dir.join("state")), config: Some(cfg) }).unwrap();
+    let head = |path: &str| format!("POST {path} HTTP/1.1\r\nx-stewardget-client: extension\r\n");
+
+    // A web page can't ask.
+    let web = http(
+        port,
+        "POST /api/v1/media/inspect HTTP/1.1\r\norigin: https://evil.example\r\nx-stewardget-client: x\r\n",
+        "{}",
+    )
+    .await;
+    assert!(web.starts_with("HTTP/1.1 403"), "{web}");
+    let bad = http(port, &head("/api/v1/media/inspect"), r#"{"url":"file:///etc/passwd"}"#).await;
+    assert!(bad.starts_with("HTTP/1.1 400"), "{bad}");
+
+    let asked = http(port, &head("/api/v1/media/inspect"), &format!(r#"{{"url":"{mpd}","cookies":"a=1"}}"#)).await;
+    assert!(asked.starts_with("HTTP/1.1 200"), "{asked}");
+    let found = json_body(&asked);
+    let token = found["token"].as_str().unwrap().to_owned();
+    let options = found["options"].as_array().unwrap();
+    let audio_only = options.iter().find(|o| o["height"] == 0).expect("an audio-only choice");
+    assert_eq!(audio_only["available"], true);
+    assert!(options.iter().any(|o| o["merge"] == true), "{options:?}");
+
+    let wrong = http(port, &head("/api/v1/media/download"), r#"{"token":"nope","index":0}"#).await;
+    assert!(wrong.starts_with("HTTP/1.1 404"), "{wrong}");
+    let picked = http(
+        port,
+        &head("/api/v1/media/download"),
+        &format!(r#"{{"token":"{token}","index":{}}}"#, audio_only["index"]),
+    )
+    .await;
+    assert!(picked.starts_with("HTTP/1.1 200"), "{picked}");
+    let id = json_body(&picked)["ids"][0].as_u64().unwrap();
+    assert_eq!(wait_for(&engine, id, Status::Completed, 30).await, Status::Completed);
+    let d = engine.download(id).unwrap();
+    assert_eq!(std::fs::read(&d.path).unwrap(), *audio.data);
+    assert!(d.file_name.starts_with("stream"), "{}", d.file_name);
+    engine.shutdown().await;
+}

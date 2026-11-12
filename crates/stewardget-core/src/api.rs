@@ -28,6 +28,9 @@
 //!   `POST /api/v1/speed-limit` (`{ "bytes_per_sec" }`)
 //! * `POST /mcp`               – Model Context Protocol (JSON-RPC), see [`crate::mcp`]
 //! * `POST /api/v1/quit`       – close the desktop app (used by the installer); `{ "quitting" }`
+//! * `POST /api/v1/media/inspect` – `{ "url", "cookies"?, "user_agent"?, "referrer"? }`: what a
+//!   video page offers (through yt-dlp); `{ "token", "title", "source", "ffmpeg", "options": [ … ] }`
+//! * `POST /api/v1/media/download` – `{ "token", "index" }`: downloads one of those options
 //!
 //! The extension identifies itself with `X-StewardGet-Browser` and
 //! `X-StewardGet-Extension-Version`, so the app can show that it is connected.
@@ -63,7 +66,9 @@ pub(crate) async fn serve(listener: TcpListener, inner: Weak<Inner>, stop: Cance
         let inner = inner.clone();
         tokio::spawn(async move {
             let _slot = slot;
-            let _ = tokio::time::timeout(Duration::from_secs(10), handle(stream, inner)).await;
+            // Reading the request is limited to 10 s inside `handle`; asking
+            // yt-dlp about a video page can take a good while longer.
+            let _ = tokio::time::timeout(Duration::from_secs(150), handle(stream, inner)).await;
         });
     }
 }
@@ -202,6 +207,77 @@ impl From<crate::DownloadView> for Summary {
     }
 }
 
+/// Formats found for a page, kept a while so the browser can pick one by
+/// token without asking yt-dlp again (which takes seconds).
+static MEDIA: std::sync::Mutex<Vec<(String, std::time::Instant, crate::MediaInfo)>> = std::sync::Mutex::new(Vec::new());
+const MEDIA_KEEP: Duration = Duration::from_secs(30 * 60);
+
+fn remember_media(info: crate::MediaInfo) -> String {
+    use crate::util::LockExt;
+    let token = crate::util::random_token();
+    let mut list = MEDIA.lock_ok();
+    list.retain(|(_, at, _)| at.elapsed() < MEDIA_KEEP);
+    if list.len() >= 32 {
+        list.remove(0);
+    }
+    list.push((token.clone(), std::time::Instant::now(), info));
+    token
+}
+
+fn recall_media(token: &str) -> Option<crate::MediaInfo> {
+    use crate::util::LockExt;
+    let list = MEDIA.lock_ok();
+    list.iter()
+        .find(|(t, at, _)| crate::util::secrets_equal(t, token) && at.elapsed() < MEDIA_KEEP)
+        .map(|(_, _, info)| info.clone())
+}
+
+#[derive(Serialize)]
+struct MediaReply {
+    token: String,
+    title: String,
+    source: &'static str,
+    ffmpeg: bool,
+    options: Vec<MediaChoice>,
+}
+
+#[derive(Serialize)]
+struct MediaChoice {
+    index: usize,
+    label: String,
+    size: Option<u64>,
+    /// Picture and sound come separately and are joined with ffmpeg.
+    merge: bool,
+    /// `false` when it needs ffmpeg, which isn't installed.
+    available: bool,
+    /// Picture height; 0 for sound only.
+    height: u32,
+}
+
+impl MediaReply {
+    fn new(token: String, info: &crate::MediaInfo, ffmpeg: bool) -> Self {
+        Self {
+            token,
+            title: info.title.clone(),
+            source: info.source,
+            ffmpeg,
+            options: info
+                .options
+                .iter()
+                .enumerate()
+                .map(|(index, o)| MediaChoice {
+                    index,
+                    label: o.label.clone(),
+                    size: o.size(),
+                    merge: o.needs_merge(),
+                    available: !o.needs_merge() || ffmpeg,
+                    height: o.height,
+                })
+                .collect(),
+        }
+    }
+}
+
 /// Accepts either one capture or `{ "items": [ … ] }`.
 #[derive(serde::Deserialize)]
 #[serde(untagged)]
@@ -211,7 +287,7 @@ enum CaptureBody {
 }
 
 async fn handle(mut stream: TcpStream, inner: Weak<Inner>) {
-    let Some(req) = read_request(&mut stream).await else { return };
+    let Ok(Some(req)) = tokio::time::timeout(Duration::from_secs(10), read_request(&mut stream)).await else { return };
 
     // Web pages must never drive the API.
     if req.header("origin").is_some_and(|o| o.starts_with("http://") || o.starts_with("https://")) {
@@ -261,7 +337,11 @@ async fn handle(mut stream: TcpStream, inner: Weak<Inner>) {
     // scripts, which hold the control token or the user's API token.
     let open = matches!(
         (req.method.as_str(), req.path.as_str()),
-        ("GET", "/api/v1/ping") | ("POST", "/api/v1/downloads") | ("POST", "/api/v1/show")
+        ("GET", "/api/v1/ping")
+            | ("POST", "/api/v1/downloads")
+            | ("POST", "/api/v1/show")
+            | ("POST", "/api/v1/media/inspect")
+            | ("POST", "/api/v1/media/download")
     );
     let bearer = req.header("authorization").and_then(|v| v.strip_prefix("Bearer "));
     let holds = |token: &Option<String>| match (bearer, token) {
@@ -325,6 +405,65 @@ async fn handle(mut stream: TcpStream, inner: Weak<Inner>) {
                     let results: Vec<Added> = results.into_iter().map(|(id, action)| Added { id, action }).collect();
                     respond(&mut stream, 200, &results).await;
                 }
+                Err(e) => respond(&mut stream, 400, &Message { error: &e.to_string() }).await,
+            }
+        }
+        ("POST", "/api/v1/media/inspect") => {
+            #[derive(serde::Deserialize)]
+            struct Ask {
+                url: String,
+                #[serde(default)]
+                cookies: Option<String>,
+                #[serde(default)]
+                user_agent: Option<String>,
+                #[serde(default)]
+                referrer: Option<String>,
+            }
+            let ask = match serde_json::from_slice::<Ask>(&req.body) {
+                Ok(a) if a.url.starts_with("http://") || a.url.starts_with("https://") => a,
+                Ok(_) => return respond(&mut stream, 400, &Message { error: "only web pages can be read" }).await,
+                Err(e) => return respond(&mut stream, 400, &Message { error: &e.to_string() }).await,
+            };
+            let context =
+                crate::MediaContext { cookies: ask.cookies, user_agent: ask.user_agent, referrer: ask.referrer };
+            match engine.inspect_media_with(&ask.url, &context).await {
+                Ok(info) => {
+                    let ffmpeg = engine.media_tools().1.is_some();
+                    let reply = MediaReply::new(remember_media(info.clone()), &info, ffmpeg);
+                    respond(&mut stream, 200, &reply).await;
+                }
+                Err(e) => {
+                    #[derive(Serialize)]
+                    struct Failed {
+                        error: String,
+                        ytdlp: bool,
+                    }
+                    let ytdlp = engine.media_tools().0.is_some();
+                    respond(&mut stream, 422, &Failed { error: e.to_string(), ytdlp }).await;
+                }
+            }
+        }
+        ("POST", "/api/v1/media/download") => {
+            #[derive(serde::Deserialize)]
+            struct Pick {
+                token: String,
+                index: usize,
+            }
+            let pick = match serde_json::from_slice::<Pick>(&req.body) {
+                Ok(p) => p,
+                Err(e) => return respond(&mut stream, 400, &Message { error: &e.to_string() }).await,
+            };
+            let Some(info) = recall_media(&pick.token) else {
+                return respond(&mut stream, 404, &Message { error: "that list of formats expired; open it again" })
+                    .await;
+            };
+            #[derive(Serialize)]
+            struct Added {
+                ids: Vec<u64>,
+                title: String,
+            }
+            match engine.add_media(&info, pick.index, None, None) {
+                Ok(ids) => respond(&mut stream, 200, &Added { ids, title: info.title.clone() }).await,
                 Err(e) => respond(&mut stream, 400, &Message { error: &e.to_string() }).await,
             }
         }

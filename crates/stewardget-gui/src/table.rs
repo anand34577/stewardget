@@ -1133,20 +1133,34 @@ impl StewardGetApp {
     }
 }
 
+thread_local! {
+    static FILES_SEEN: std::cell::RefCell<std::collections::HashMap<std::path::PathBuf, (std::time::Instant, bool)>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// Drops what [`file_exists`] remembers about `path`, so the next look goes
+/// to the disk. Called whenever a download changes state or place: the add
+/// dialog looks for a file of the same name before it exists, and a small
+/// download that finished within the next few seconds was shown as
+/// "moved or deleted" until that stale answer ran out.
+pub fn forget_file(path: &std::path::Path) {
+    FILES_SEEN.with_borrow_mut(|seen| {
+        seen.remove(path);
+    });
+}
+
 /// Whether a file exists, re-checked at most every few seconds. Rows and the
 /// details pane ask every frame, and on a network drive each check can stall.
+/// A "missing" answer is trusted for a shorter time than a "present" one: a
+/// file appearing (a download finishing, a move completing) must show at once.
 pub fn file_exists(path: &std::path::Path) -> bool {
-    use std::cell::RefCell;
-    use std::collections::HashMap;
     use std::time::{Duration, Instant};
-    thread_local! {
-        static SEEN: RefCell<HashMap<std::path::PathBuf, (Instant, bool)>> = RefCell::new(HashMap::new());
-    }
-    SEEN.with_borrow_mut(|seen| {
-        if let Some(&(at, exists)) = seen.get(path)
-            && at.elapsed() < Duration::from_secs(3)
-        {
-            return exists;
+    FILES_SEEN.with_borrow_mut(|seen| {
+        if let Some(&(at, exists)) = seen.get(path) {
+            let ttl = if exists { Duration::from_secs(3) } else { Duration::from_millis(750) };
+            if at.elapsed() < ttl {
+                return exists;
+            }
         }
         if seen.len() > 4096 {
             seen.clear();

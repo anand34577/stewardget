@@ -18,6 +18,9 @@ const DEFAULTS = {
   // Comma-separated sites whose downloads stay in the browser ("example.com"
   // also covers its subdomains).
   skipSites: "",
+  // The "Download" button over videos (content.js), and sites where it stays away.
+  videoButton: true,
+  videoButtonSkipSites: "",
 };
 
 /** Links Alt+clicked in a page (see content.js), kept in the browser for a few seconds. */
@@ -167,6 +170,61 @@ async function sendToStewardGet({ url, fallbackUrl, fileName, size, referrer, st
   } catch {
     lastFailure = describeFailure(0);
     return null;
+  }
+}
+
+/**
+ * Asks StewardGet (yt-dlp) which formats a video page offers. The page's
+ * cookies go along, so videos behind a sign-in or an age check work as they
+ * do in the browser. Resolves to the app's answer plus `sniffed`, the media
+ * this tab played, or `{ offline: true }` when StewardGet can't be reached.
+ */
+async function videoFormats(pageUrl, tab) {
+  const s = await settings();
+  const sniffed = [...((await mediaOf(tab?.id))?.values() ?? [])]
+    .map((m) => ({ ...m, name: mediaName(m, tab) }))
+    .sort((a, b) => (a.kind === b.kind ? (b.size || 0) - (a.size || 0) : a.kind === "hls" ? -1 : 1));
+  const body = {
+    url: pageUrl,
+    cookies: await cookieHeader(pageUrl, tab?.cookieStoreId),
+    user_agent: navigator.userAgent,
+    referrer: tab?.url && tab.url !== pageUrl ? tab.url : null,
+  };
+  try {
+    const r = await fetch(apiUrl(s, "media/inspect"), {
+      method: "POST",
+      headers: headers(s),
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(130000),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (r.status === 404 && !data.error) {
+      return { sniffed, error: "This StewardGet is too old for the video button; update it." };
+    }
+    if (!r.ok) return { sniffed, error: data.error || describeFailure(r.status), ytdlp: data.ytdlp };
+    return { ...data, sniffed };
+  } catch (e) {
+    if (e?.name === "TimeoutError") return { sniffed, error: "StewardGet took too long to read the page." };
+    return { sniffed, offline: true };
+  }
+}
+
+/** Downloads one format from a `videoFormats` answer. */
+async function videoDownload(token, index) {
+  const s = await settings();
+  try {
+    const r = await fetch(apiUrl(s, "media/download"), {
+      method: "POST",
+      headers: headers(s),
+      body: JSON.stringify({ token, index }),
+      signal: AbortSignal.timeout(8000),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) return { ok: false, error: data.error || describeFailure(r.status) };
+    note(true, `Sent ${data.title || "a video"} to StewardGet`);
+    return { ok: true };
+  } catch {
+    return { ok: false, error: describeFailure(0) };
   }
 }
 
@@ -580,7 +638,15 @@ async function showStewardGet() {
 }
 
 // Messages from the popup and from content.js.
-ext.runtime.onMessage.addListener((msg, _sender, reply) => {
+ext.runtime.onMessage.addListener((msg, sender, reply) => {
+  if (msg?.type === "video-formats" && typeof msg.pageUrl === "string" && /^https?:/i.test(msg.pageUrl)) {
+    videoFormats(msg.pageUrl, sender.tab).then(reply);
+    return true;
+  }
+  if (msg?.type === "video-download" && typeof msg.token === "string" && Number.isInteger(msg.index)) {
+    videoDownload(msg.token, msg.index).then(reply);
+    return true;
+  }
   if (msg?.type === "bypass" && typeof msg.url === "string") {
     bypass.set(stripHash(msg.url), Date.now() + BYPASS_MS);
     return false;
@@ -603,7 +669,9 @@ ext.runtime.onMessage.addListener((msg, _sender, reply) => {
     return true;
   }
   if (msg?.type === "grab-media" && typeof msg.url === "string") {
-    ext.tabs.query({ active: true, currentWindow: true }).then(async ([tab]) => {
+    // From a page (the video button) the sender's own tab; from the popup the active one.
+    const which = sender.tab ? Promise.resolve([sender.tab]) : ext.tabs.query({ active: true, currentWindow: true });
+    which.then(async ([tab]) => {
       const entry = (await mediaOf(tab?.id))?.get(msg.url) ?? { url: msg.url, kind: "file", type: "" };
       const result = await sendToStewardGet({
         url: msg.url,
@@ -612,7 +680,7 @@ ext.runtime.onMessage.addListener((msg, _sender, reply) => {
         storeId: tab?.cookieStoreId,
       });
       note(Boolean(result), result ? `Sent ${mediaName(entry, tab)} to StewardGet` : lastFailure);
-      reply({ ok: Boolean(result) });
+      reply({ ok: Boolean(result), error: result ? undefined : lastFailure });
     });
     return true;
   }
