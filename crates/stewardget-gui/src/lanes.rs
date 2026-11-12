@@ -17,6 +17,8 @@ impl StewardGetApp {
         if d.lanes.len() < 2 && tuning.is_none() {
             return;
         }
+        let switchable = d.status.is_active() && d.lanes.len() > 1;
+        let mut switch: Option<(usize, bool)> = None;
         card(&p).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             ui.horizontal(|ui| {
@@ -33,8 +35,11 @@ impl StewardGetApp {
             });
             let top = d.lanes.iter().map(|l| l.speed).fold(1.0, f64::max);
             let total: u64 = d.lanes.iter().map(|l| l.bytes).sum::<u64>().max(1);
-            for lane in &d.lanes {
-                let color = if lane.failed {
+            let on_count = d.lanes.iter().filter(|l| !l.disabled && !l.failed).count();
+            for (i, lane) in d.lanes.iter().enumerate() {
+                let color = if lane.disabled {
+                    p.text_dim
+                } else if lane.failed {
                     p.red
                 } else if lane.mirror {
                     p.accent
@@ -49,6 +54,23 @@ impl StewardGetApp {
                         ui.add(egui::Label::new(RichText::new(name).color(p.text)).truncate());
                     },
                     |ui| {
+                        if switchable {
+                            let mut on = !lane.disabled;
+                            // The last working lane can't be switched off.
+                            let last = on && !lane.failed && on_count <= 1;
+                            let tip = if last {
+                                "At least one link has to stay on"
+                            } else if on {
+                                "Switch this link off for this download; its connections move to the others"
+                            } else {
+                                "Use this link again"
+                            };
+                            ui.add_enabled_ui(!last, |ui| {
+                                if widgets::toggle(ui, &mut on, &p).on_hover_text(tip).changed() {
+                                    switch = Some((i, on));
+                                }
+                            });
+                        }
                         if lane.mirror {
                             widgets::pill(ui, "mirror", p.accent);
                         }
@@ -63,7 +85,9 @@ impl StewardGetApp {
                         }
                     },
                     |ui| {
-                        let text = if lane.failed {
+                        let text = if lane.disabled {
+                            "off".to_owned()
+                        } else if lane.failed {
                             "dropped".to_owned()
                         } else {
                             format!(
@@ -83,6 +107,10 @@ impl StewardGetApp {
                 ui.add_space(2.0);
             }
         });
+        if let Some((lane, on)) = switch {
+            let r = self.engine.set_lane_enabled(d.id, lane, on);
+            self.report(r);
+        }
     }
 
     /// Every network link in use, with its live speed. Only when more than

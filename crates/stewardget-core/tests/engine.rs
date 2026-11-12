@@ -1266,3 +1266,115 @@ async fn new_installs_sort_downloads_into_category_folders() {
     let chosen = Config { auto_categorize: false, ..old }.sanitized();
     assert!(!chosen.auto_categorize, "a later choice is kept");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn connections_change_while_running_without_reconnecting() {
+    // Each connection is limited, so the download stays busy long enough to steer.
+    let opts = ServerOpts { ranges: true, throttle: 1024 * 1024, ..Default::default() };
+    let server = serve(20 * 1024 * 1024, opts).await;
+    let dir = temp_dir("live-connections");
+    let cfg = Config { connections: 8, auto_tune: false, ..config(&dir) };
+    let engine = Engine::start(EngineOptions::in_memory().with_config(cfg)).unwrap();
+    let mut events = engine.subscribe();
+    let id = engine.add(NewDownload::new(&server.url)).unwrap();
+
+    let until = |want: fn(usize) -> bool, secs: u64| {
+        let engine = engine.clone();
+        async move {
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(secs);
+            loop {
+                let d = engine.download(id).unwrap();
+                if want(d.connections) && d.status == Status::Downloading {
+                    return d.connections;
+                }
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "connections stayed at {} ({:?})",
+                    d.connections,
+                    d.status
+                );
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        }
+    };
+    until(|n| n >= 6, 15).await;
+
+    engine.set_connections(id, 2).unwrap();
+    until(|n| n <= 2, 10).await;
+    assert_eq!(engine.download(id).unwrap().options.connections, Some(2), "the choice is kept");
+
+    engine.set_connections(id, 6).unwrap();
+    until(|n| n >= 5, 10).await;
+
+    assert_eq!(wait_for(&engine, id, Status::Completed, 60).await, Status::Completed);
+    assert_eq!(std::fs::read(&engine.download(id).unwrap().path).unwrap(), *server.data);
+    // Nothing was stopped and queued again on the way: it was changed in place.
+    let mut statuses = Vec::new();
+    while let Ok(e) = events.try_recv() {
+        if let Event::StatusChanged(i, s) = e
+            && i == id
+        {
+            statuses.push(s);
+        }
+    }
+    let started = statuses.iter().position(|s| *s == Status::Downloading).unwrap();
+    assert!(
+        !statuses[started..].iter().any(|s| matches!(s, Status::Queued | Status::Connecting | Status::Paused)),
+        "no reconnect: {statuses:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_lane_can_be_switched_off_and_on_while_running() {
+    let len = 16 * 1024 * 1024;
+    let opts = ServerOpts { ranges: true, throttle: 1024 * 1024, ..Default::default() };
+    let primary = serve(len, opts).await;
+    let mirror = serve(len, opts).await;
+    let dir = temp_dir("lane-switch");
+    let cfg = Config { connections: 6, auto_tune: false, ..config(&dir) };
+    let engine = Engine::start(EngineOptions::in_memory().with_config(cfg)).unwrap();
+    let id = engine
+        .add(NewDownload {
+            url: primary.url.clone(),
+            options: DownloadOptions { mirrors: vec![mirror.url.clone()], ..Default::default() },
+            ..Default::default()
+        })
+        .unwrap();
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    loop {
+        let d = engine.download(id).unwrap();
+        if d.lanes.len() == 2 && d.lanes.iter().all(|l| l.workers > 0 && l.bytes > 0) {
+            break;
+        }
+        assert!(tokio::time::Instant::now() < deadline, "both lanes should carry traffic: {:?}", d.lanes);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    engine.set_lane_enabled(id, 1, false).unwrap();
+    // The other lane is now the last one on: it can't go off as well.
+    assert!(engine.set_lane_enabled(id, 0, false).is_err());
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while engine.download(id).unwrap().lanes[1].workers > 0 {
+        assert!(tokio::time::Instant::now() < deadline, "connections should leave the lane switched off");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let lane = engine.download(id).unwrap().lanes[1].clone();
+    assert!(lane.disabled && !lane.failed, "{lane:?}");
+    let before = lane.bytes;
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    assert_eq!(engine.download(id).unwrap().lanes[1].bytes, before, "an off lane carries nothing");
+
+    engine.set_lane_enabled(id, 1, true).unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while engine.download(id).unwrap().lanes.get(1).is_some_and(|l| l.workers == 0) {
+        if engine.download(id).unwrap().status.is_finished() {
+            break;
+        }
+        assert!(tokio::time::Instant::now() < deadline, "a lane switched back on gets connections");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    assert_eq!(wait_for(&engine, id, Status::Completed, 60).await, Status::Completed);
+    assert_eq!(std::fs::read(&engine.download(id).unwrap().path).unwrap(), *primary.data);
+}
