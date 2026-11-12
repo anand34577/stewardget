@@ -1302,10 +1302,37 @@ impl Engine {
 
     /// Asks yt-dlp (or reads a DASH manifest) for what a page offers.
     pub async fn inspect_media(&self, url: &str) -> Result<crate::MediaInfo, Error> {
+        self.inspect_media_with(url, &crate::MediaContext::default()).await
+    }
+
+    /// [`Engine::inspect_media`] with what the browser knows about the page
+    /// (its cookies, user agent and referrer), for pages behind a sign-in.
+    pub async fn inspect_media_with(
+        &self,
+        url: &str,
+        context: &crate::MediaContext,
+    ) -> Result<crate::MediaInfo, Error> {
         let config = self.config();
         let client = self.inner.client.read_ok().clone();
         let ytdlp = crate::find_tool(config.ytdlp_path.as_deref(), "yt-dlp");
-        crate::media::inspect(&client, ytdlp.as_deref(), url.trim()).await
+        crate::media::inspect(&client, ytdlp.as_deref(), url.trim(), context).await
+    }
+
+    /// Downloads the official standalone yt-dlp (checked against its published
+    /// SHA-256) into StewardGet's data folder and starts using it. It can then
+    /// keep itself current with [`crate::update_ytdlp`].
+    pub async fn install_ytdlp(&self) -> Result<PathBuf, Error> {
+        let dir = self
+            .data_dir()
+            .map(|d| d.join("tools"))
+            .ok_or_else(|| Error::Io("StewardGet runs without a data folder".into()))?;
+        let client = self.inner.client.read_ok().clone();
+        let path = crate::media::install_ytdlp(&client, &dir).await?;
+        let _one_at_a_time = self.inner.config_lock.lock_ok();
+        let mut config = self.config();
+        config.ytdlp_path = Some(path.clone());
+        self.apply_config(config)?;
+        Ok(path)
     }
 
     /// Where yt-dlp and ffmpeg were found, if anywhere.

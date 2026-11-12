@@ -28,6 +28,8 @@ pub struct MediaDialog {
     task: Option<tokio::task::JoinHandle<()>>,
     message: Option<String>,
     focus: bool,
+    /// yt-dlp being installed from this window.
+    install: Option<crate::automation::YtdlpJob>,
 }
 
 impl MediaDialog {
@@ -41,6 +43,7 @@ impl MediaDialog {
             task: None,
             message: None,
             focus: true,
+            install: None,
         }
     }
 }
@@ -95,14 +98,33 @@ impl StewardGetApp {
                     r.request_focus();
                 }
             });
+            let installing = d.install.as_ref().is_some_and(|j| j.lock_ok().is_none());
+            if let Some(result) = d.install.as_ref().and_then(|j| j.lock_ok().clone()) {
+                match result {
+                    Ok(_) => crate::dialogs::note(ui, "yt-dlp is installed. Press Find.", p.green),
+                    Err(e) => crate::dialogs::note(ui, e, p.red),
+                }
+            }
             if ytdlp.is_none() {
                 crate::dialogs::note(
                     ui,
-                    "yt-dlp isn't installed, so only DASH manifests (.mpd) can be read. Video pages need it.",
+                    "Video pages need yt-dlp, which isn't set up yet. Only DASH manifests (.mpd) can be read without it.",
                     p.yellow,
                 );
-                if widgets::button(ui, ButtonKind::Tool, Some(Icon::Download), "Set up yt-dlp…", true, &p).clicked() {
-                    setup = true;
+                ui.horizontal(|ui| {
+                    if stewardget_core::ytdlp_asset().is_some()
+                        && widgets::button(ui, ButtonKind::Primary, Some(Icon::Download), "Install yt-dlp", !installing, &p)
+                            .on_hover_text("Downloads the official yt-dlp from GitHub and checks it. Takes a few seconds.")
+                            .clicked()
+                    {
+                        d.install = Some(self.start_ytdlp_job(ctx, None));
+                    }
+                    if widgets::button(ui, ButtonKind::Tool, None, "Other ways…", !installing, &p).clicked() {
+                        setup = true;
+                    }
+                });
+                if installing {
+                    crate::dialogs::note(ui, "Installing yt-dlp\u{2026}", p.text_dim);
                 }
             }
             if let Some(info) = &d.info
@@ -200,7 +222,7 @@ impl StewardGetApp {
                 ctx2.request_repaint();
             }));
         }
-        if looking {
+        if looking || d.install.as_ref().is_some_and(|j| j.lock_ok().is_none()) {
             ctx.request_repaint_after(std::time::Duration::from_millis(200));
         }
         self.media_dialog = Some(d);

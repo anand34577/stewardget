@@ -81,6 +81,10 @@
       <span>Capture browser downloads</span>
       <label class="switch"><input id="enabled" type="checkbox"><span class="slider"></span></label>
     </div>
+    <div class="row">
+      <span>Download button on videos</span>
+      <label class="switch"><input id="videoButton" type="checkbox"><span class="slider"></span></label>
+    </div>
     <button id="site" class="secondary" hidden></button>
     <button id="all" class="secondary">Download all links on this page…</button>
     <p id="allResult" class="hint" hidden></p>
@@ -99,6 +103,10 @@
       <label for="skipSites">Never capture on these sites</label>
       <input id="skipSites" type="text" placeholder="e.g. mybank.com, intranet.local">
     </div>
+    <div class="field">
+      <label for="videoButtonSkipSites">Never show the video button on these sites</label>
+      <input id="videoButtonSkipSites" type="text" placeholder="e.g. netflix.com">
+    </div>
     <div class="row">
       <div class="field" style="flex:1"><label for="port">Port</label><input id="port" type="number" min="1024" max="65535"></div>
       <div class="field" style="flex:2"><label for="token">Token (optional)</label><input id="token" type="password"></div>
@@ -106,7 +114,7 @@
     <button id="save">Save</button>
       </div>
     </details>
-    <p class="hint">Hold Alt while clicking a link to keep that download in the browser. Right-click any link → “Download with StewardGet”, or the page → “Download all links with StewardGet…” to pick from a list in StewardGet. Expired link? Use “Refresh link” in StewardGet, then download the file again here — StewardGet resumes where it stopped.</p>
+    <p class="hint">Point at a video and press its <b>Download</b> button to pick a quality; × hides it for that video. Hold Alt while clicking a link to keep that download in the browser. Right-click any link → “Download with StewardGet”, or the page → “Download all links with StewardGet…” to pick from a list in StewardGet. Expired link? Use “Refresh link” in StewardGet, then download the file again here — StewardGet resumes where it stopped.</p>
   </main>
   <script src="popup.js"></script>
 </body>

@@ -1378,3 +1378,81 @@ async fn a_lane_can_be_switched_off_and_on_while_running() {
     assert_eq!(wait_for(&engine, id, Status::Completed, 60).await, Status::Completed);
     assert_eq!(std::fs::read(&engine.download(id).unwrap().path).unwrap(), *primary.data);
 }
+
+/// Serves one fixed text document at any path.
+async fn serve_text(body: String) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut sock, _)) = listener.accept().await else { return };
+            let body = body.clone();
+            tokio::spawn(async move {
+                let mut buf = [0u8; 4096];
+                let _ = sock.read(&mut buf).await;
+                let head = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/dash+xml\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = sock.write_all(head.as_bytes()).await;
+                let _ = sock.write_all(body.as_bytes()).await;
+            });
+        }
+    });
+    format!("http://{addr}/show/stream.mpd")
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_video_button_api_lists_formats_and_downloads_the_one_picked() {
+    let audio = serve(3 * 1024 * 1024, ServerOpts { ranges: true, ..Default::default() }).await;
+    let video = serve(1024 * 1024, ServerOpts { ranges: true, ..Default::default() }).await;
+    let mpd = serve_text(format!(
+        r#"<MPD><Period>
+          <AdaptationSet mimeType="video/mp4"><Representation bandwidth="3000000" height="720"><BaseURL>{}</BaseURL></Representation></AdaptationSet>
+          <AdaptationSet mimeType="audio/mp4"><Representation bandwidth="128000"><BaseURL>{}</BaseURL></Representation></AdaptationSet>
+        </Period></MPD>"#,
+        video.url, audio.url
+    ))
+    .await;
+    let dir = temp_dir("video-api");
+    let port = 20_000 + ((std::process::id() + 13) % 20_000) as u16;
+    let cfg = Config { api_port: port, ..config(&dir) };
+    let engine = Engine::start(EngineOptions { data_dir: Some(dir.join("state")), config: Some(cfg) }).unwrap();
+    let head = |path: &str| format!("POST {path} HTTP/1.1\r\nx-stewardget-client: extension\r\n");
+
+    // A web page can't ask.
+    let web = http(
+        port,
+        "POST /api/v1/media/inspect HTTP/1.1\r\norigin: https://evil.example\r\nx-stewardget-client: x\r\n",
+        "{}",
+    )
+    .await;
+    assert!(web.starts_with("HTTP/1.1 403"), "{web}");
+    let bad = http(port, &head("/api/v1/media/inspect"), r#"{"url":"file:///etc/passwd"}"#).await;
+    assert!(bad.starts_with("HTTP/1.1 400"), "{bad}");
+
+    let asked = http(port, &head("/api/v1/media/inspect"), &format!(r#"{{"url":"{mpd}","cookies":"a=1"}}"#)).await;
+    assert!(asked.starts_with("HTTP/1.1 200"), "{asked}");
+    let found = json_body(&asked);
+    let token = found["token"].as_str().unwrap().to_owned();
+    let options = found["options"].as_array().unwrap();
+    let audio_only = options.iter().find(|o| o["height"] == 0).expect("an audio-only choice");
+    assert_eq!(audio_only["available"], true);
+    assert!(options.iter().any(|o| o["merge"] == true), "{options:?}");
+
+    let wrong = http(port, &head("/api/v1/media/download"), r#"{"token":"nope","index":0}"#).await;
+    assert!(wrong.starts_with("HTTP/1.1 404"), "{wrong}");
+    let picked = http(
+        port,
+        &head("/api/v1/media/download"),
+        &format!(r#"{{"token":"{token}","index":{}}}"#, audio_only["index"]),
+    )
+    .await;
+    assert!(picked.starts_with("HTTP/1.1 200"), "{picked}");
+    let id = json_body(&picked)["ids"][0].as_u64().unwrap();
+    assert_eq!(wait_for(&engine, id, Status::Completed, 30).await, Status::Completed);
+    let d = engine.download(id).unwrap();
+    assert_eq!(std::fs::read(&d.path).unwrap(), *audio.data);
+    assert!(d.file_name.starts_with("stream"), "{}", d.file_name);
+    engine.shutdown().await;
+}

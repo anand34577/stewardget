@@ -6,6 +6,21 @@ All notable changes to StewardGet are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **Download button on videos in the browser**, like IDM's: point at a video and a small *Download* button appears at its top-right corner. It lists every quality yt-dlp finds (video, joined video + audio, audio only, with sizes) plus the files and streams the page played; pick one and StewardGet downloads it. × hides it for that video, *Hide on this site* for the site, and the extension popup turns it off everywhere. Your browser's sign-in goes along with the request, so videos behind a login or an age check work too. It also works in full screen.
+- **Change the number of connections while a download runs**, in the details pane and the progress window. More connections start at once; fewer finish what they hold and hand their range back. Nothing reconnects and no byte is fetched twice.
+- **Switch network links (and mirrors) on or off per download while it runs**, in *Sources and links*. Connections move to the other links mid-transfer; a link switched back on gets connections straight away. Changing the adapters in Settings now moves running downloads onto the new set right away (resumable downloads keep their data).
+- **One-click yt-dlp**: *Install yt-dlp* downloads the official standalone build into StewardGet's folder and checks its SHA-256; *Update yt-dlp* keeps it current, which is the usual fix when a site stops working.
+
+### Changed
+- yt-dlp now also offers HLS streams (many sites offer nothing else), prefers MP4/H.264 per quality for compatibility, and labels formats with frame rate and codec ("1080p60 · MP4 H.264 + M4A").
+- When yt-dlp fails, the reason comes with a way forward (sign-in needed, unknown site, DRM, outdated yt-dlp).
+
+### Fixed
+- A finished download was briefly shown as "File missing" / "moved or deleted" before the file appeared: the add window had already looked for that file name and the "not there" answer was kept for a few seconds.
+- Dialogs (most visibly *Add downloads*) sometimes opened far too tall, with the buttons floating in a large empty band: the button row centred itself in all the height left in the window.
+- In the browser, a video button that had faded out could still catch clicks meant for the player.
+
 ## [0.13.0] - 2026-11-10
 
 ### Changed
