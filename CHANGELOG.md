@@ -6,6 +6,8 @@ All notable changes to StewardGet are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-11-12
+
 ### Added
 - **Download button on videos in the browser**, like IDM's: point at a video and a small *Download* button appears at its top-right corner. It lists every quality yt-dlp finds (video, joined video + audio, audio only, with sizes) plus the files and streams the page played; pick one and StewardGet downloads it. × hides it for that video, *Hide on this site* for the site, and the extension popup turns it off everywhere. Your browser's sign-in goes along with the request, so videos behind a login or an age check work too. It also works in full screen.
 - **Change the number of connections while a download runs**, in the details pane and the progress window. More connections start at once; fewer finish what they hold and hand their range back. Nothing reconnects and no byte is fetched twice.
