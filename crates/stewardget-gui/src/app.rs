@@ -684,6 +684,11 @@ impl StewardGetApp {
         let mut announce = Vec::new();
         for d in &self.snap.downloads {
             let prev = self.last_status.insert(d.id, d.status);
+            if prev != Some(d.status) {
+                // The file appears (finished), moves or goes away with a state
+                // change: what was remembered about it is out of date.
+                crate::table::forget_file(&d.path);
+            }
             // A small file can be done, or a bad link have failed, before the
             // first look: it still gets its window, which then says "Download
             // complete" or what went wrong.
