@@ -163,9 +163,7 @@ impl StewardGetApp {
             ui.add_space(4.0);
             let mut remove = None;
             let mut up = None;
-            let count = draft.post_actions.len();
-            for i in 0..count {
-                let rule = &mut draft.post_actions[i];
+            for (i, rule) in draft.post_actions.iter_mut().enumerate() {
                 ui.push_id(("post-rule", i), |ui| {
                     egui::Frame::new()
                         .fill(p.card_hover.gamma_multiply(0.5))

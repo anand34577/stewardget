@@ -1913,8 +1913,10 @@ mod windows_hwnd {
     /// A window handle, where there are such things.
     #[cfg(windows)]
     pub type Hwnd = isize;
+    /// Never made where windows can't be cloaked ([`cloak`] returns `None`);
+    /// a plain unit type, so calls to [`uncloak`] stay reachable code.
     #[cfg(not(windows))]
-    pub type Hwnd = std::convert::Infallible;
+    pub type Hwnd = ();
 
     /// Cloaks the new main window. `None` where that isn't possible.
     #[cfg(windows)]
@@ -1936,9 +1938,7 @@ mod windows_hwnd {
     }
 
     #[cfg(not(windows))]
-    pub fn uncloak(hwnd: Hwnd) {
-        match hwnd {}
-    }
+    pub fn uncloak(_hwnd: Hwnd) {}
 
     /// Asks Windows 11 to round the corners of the frameless window, as it
     /// does for windows with a system frame. Older Windows ignores it.
