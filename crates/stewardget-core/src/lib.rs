@@ -83,8 +83,8 @@ pub use insight::{
     Fix, Insight, InsightContext, Kind as InsightKind, Tone as InsightTone, explain as explain_speed, limit_notices,
 };
 pub use media::{
-    MediaContext, MediaInfo, MediaOption, MediaPart, Mux, Stream as MuxStream, find_tool, merge as merge_media,
-    tool_version, update_ytdlp, ytdlp_asset,
+    MediaContext, MediaInfo, MediaOption, MediaPart, MediaSource, Mux, Stream as MuxStream, find_tool,
+    merge as merge_media, tool_version, update_ytdlp, ytdlp_asset,
 };
 pub use model::{
     ApiState, Capture, CaptureAction, DownloadId, DownloadOptions, DownloadView, EngineSnapshot, Event, ExtensionInfo,

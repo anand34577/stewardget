@@ -154,6 +154,9 @@ pub struct StewardGetApp {
     pub palette_box: Option<crate::palette::Palette>,
     pub limit_text: String,
     pub toasts: Vec<Toast>,
+    /// Outcomes of fresh links asked of yt-dlp ("Refresh link" on a video),
+    /// reported as toasts on the next frame.
+    renewals: std::sync::Arc<std::sync::Mutex<Vec<Result<(), String>>>>,
     pub pending_removal: Option<PendingRemoval>,
     /// Bumped when the set of hidden (pending removal) downloads changes.
     pub hidden_gen: u64,
@@ -325,6 +328,7 @@ impl StewardGetApp {
             palette_box: None,
             limit_text: String::new(),
             toasts: Vec::new(),
+            renewals: Default::default(),
             pending_removal: None,
             hidden_gen: 0,
             progress: Vec::new(),
@@ -505,11 +509,29 @@ impl StewardGetApp {
     }
 
     pub fn open_refresh(&mut self, d: &DownloadView) {
+        // A video found through yt-dlp: yt-dlp fetches the fresh link itself, so
+        // there is no need to find the video in the browser again.
+        if d.options.media.is_some() {
+            let (engine, id) = (self.engine.clone(), d.id);
+            let outcome = std::sync::Arc::clone(&self.renewals);
+            let dim = self.palette.text_dim;
+            self.toast("Asking yt-dlp for a fresh link…", dim);
+            self.runtime.spawn(async move {
+                let r = engine.renew_media_link(id).await.map_err(|e| e.to_string());
+                outcome.lock_ok().push(r);
+            });
+            return;
+        }
         self.refresh = Some(RefreshDialog::new(d));
     }
 
     pub fn open_properties(&mut self, d: &DownloadView) {
         self.properties = Some(PropertiesDialog::new(d, &self.engine.config()));
+    }
+
+    /// Whether answers from yt-dlp are still to be reported.
+    fn renewing(renewals: &std::sync::Arc<std::sync::Mutex<Vec<Result<(), String>>>>) -> bool {
+        std::sync::Arc::strong_count(renewals) > 1
     }
 
     /// Closes the window for real: no "keep running" prompt.
@@ -1152,12 +1174,21 @@ impl StewardGetApp {
                 }),
             )
             .on_hover_text("Search names and links (Ctrl+F). Ctrl+K finds any page, setting or action.");
+        let focused = r.has_focus();
         icons::paint(
             ui.painter(),
             egui::Rect::from_center_size(r.rect.left_center() + vec2(18.0, 0.0), vec2(15.0, 15.0)),
             Icon::Search,
-            p.text_dim,
+            if focused { p.accent } else { p.text_dim },
         );
+        if focused {
+            ui.painter().rect_stroke(
+                r.rect.expand(2.0),
+                CornerRadius::same(theme::radius::MD + 2),
+                Stroke::new(3.0, p.accent.gamma_multiply(0.25)),
+                egui::StrokeKind::Outside,
+            );
+        }
         if roomy && !r.has_focus() && self.search.is_empty() {
             // Keyboard hint, like a key cap.
             let galley = ui.painter().layout_no_wrap("Ctrl K".to_owned(), FontId::proportional(11.0), p.text_dim);
@@ -1215,7 +1246,10 @@ impl StewardGetApp {
         }
         ui.separator();
         ui.add_space(2.0);
-        ui.label(RichText::new("   When all downloads finish").size(12.0).color(p.text_dim));
+        ui.horizontal(|ui| {
+            ui.add_space(10.0);
+            ui.label(RichText::new("When all downloads finish").size(12.0).color(p.text_dim));
+        });
         for action in AfterAll::ALL {
             if menu_row(ui, &p, None, action.label(), true, self.after_all == action) {
                 self.after_all = action;
@@ -1443,7 +1477,8 @@ impl StewardGetApp {
         let roomy = width > 760.0;
         ui.horizontal_centered(|ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
-            widgets::icon(ui, Icon::Download, 14.0, p.accent2);
+            let live = speed > 1.0;
+            widgets::icon(ui, Icon::Download, 14.0, if live { p.accent } else { p.text_dim });
             ui.label(RichText::new(format_speed(speed)).size(12.0).family(theme::semi()).color(p.text));
             sep(ui, &p);
             let paused = if paused > 0 { format!(" · {paused} paused") } else { String::new() };
@@ -1586,9 +1621,13 @@ impl StewardGetApp {
                     .shadow(p.shadow(4, 18))
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
+                            widgets::icon(ui, Icon::Trash, 16.0, p.text_dim);
                             let what =
                                 if n == 1 { "Download removed".to_owned() } else { format!("{n} downloads removed") };
                             ui.label(RichText::new(what).color(p.text));
+                            // Seconds left to change one's mind.
+                            let left = UNDO_WINDOW.saturating_sub(pending.since.elapsed()).as_secs() + 1;
+                            ui.label(RichText::new(format!("{left}s")).size(12.0).color(p.text_dim));
                             if widgets::button(ui, ButtonKind::Ghost, Some(Icon::Retry), "Undo", true, &p).clicked() {
                                 undo = true;
                             }
@@ -1603,6 +1642,17 @@ impl StewardGetApp {
     }
 
     fn draw_toasts(&mut self, ctx: &egui::Context) {
+        let renewed: Vec<_> = std::mem::take(&mut *self.renewals.lock_ok());
+        for r in renewed {
+            let (green, red) = (self.palette.green, self.palette.red);
+            match r {
+                Ok(()) => self.toast("Got a fresh link; the download continues where it stopped", green),
+                Err(e) => self.toast(format!("Couldn't renew the link: {e}"), red),
+            }
+        }
+        if Self::renewing(&self.renewals) {
+            ctx.request_repaint_after(Duration::from_millis(250));
+        }
         self.draw_undo_bar(ctx);
         self.toasts.retain(|t| t.born.elapsed() < Duration::from_millis(4500));
         if self.toasts.is_empty() {
@@ -1625,8 +1675,28 @@ impl StewardGetApp {
                         .show(ui, |ui| {
                             ui.set_max_width(380.0);
                             ui.horizontal(|ui| {
-                                let (r, _) = ui.allocate_exact_size(vec2(8.0, 8.0), Sense::hover());
-                                widgets::dot(ui.painter(), r.center(), t.color.gamma_multiply(fade));
+                                let icon = if t.color == p.red {
+                                    Icon::Alert
+                                } else if t.color == p.green {
+                                    Icon::CheckCircle
+                                } else if t.color == p.yellow {
+                                    Icon::Warning
+                                } else {
+                                    Icon::Info
+                                };
+                                let (r, _) = ui.allocate_exact_size(vec2(26.0, 26.0), Sense::hover());
+                                ui.painter().rect_filled(
+                                    r,
+                                    CornerRadius::same(theme::radius::SM),
+                                    p.tint(t.color).gamma_multiply(fade),
+                                );
+                                icons::paint(
+                                    ui.painter(),
+                                    egui::Rect::from_center_size(r.center(), vec2(15.0, 15.0)),
+                                    icon,
+                                    t.color.gamma_multiply(fade),
+                                );
+                                ui.add_space(2.0);
                                 ui.add(
                                     egui::Label::new(RichText::new(&t.text).color(p.text.gamma_multiply(fade))).wrap(),
                                 );
@@ -1758,6 +1828,15 @@ fn menu_row(ui: &mut Ui, p: &Palette, icon: Option<Icon>, text: &str, enabled: b
             p.text_dim,
         );
     }
+    if enabled && response.has_focus() {
+        painter.rect_stroke(
+            rect,
+            CornerRadius::same(theme::radius::SM),
+            Stroke::new(1.5, p.accent.gamma_multiply(0.85)),
+            egui::StrokeKind::Inside,
+        );
+    }
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::MenuItem, enabled, checked, label));
     let response = if enabled { response.on_hover_cursor(egui::CursorIcon::PointingHand) } else { response };
     response.clicked()
 }
@@ -1780,13 +1859,16 @@ fn nav_item(
     let response = ui.interact(rect, egui::Id::unique(("stewardget-nav", label, format!("{icon:?}"))), Sense::click());
     let painter = ui.painter();
     let corner = CornerRadius::same(theme::radius::MD);
+    let hover_t = ui.ctx().animate_bool_with_time(response.id.with("hover"), response.hovered(), 0.12);
     if selected {
-        // A surface step with a hairline; the icon carries the accent.
-        painter.rect(rect, corner, p.card, Stroke::new(1.0, p.border), egui::StrokeKind::Inside);
-    } else if response.hovered() {
-        painter.rect_filled(rect, corner, p.card_hover);
+        // An accent wash with a short bar at the leading edge.
+        painter.rect_filled(rect, corner, p.selected_fill());
+        let bar = egui::Rect::from_center_size(rect.left_center() + vec2(1.5, 0.0), vec2(3.0, rect.height() * 0.5));
+        painter.rect_filled(bar, CornerRadius::same(2), p.accent);
+    } else if hover_t > 0.0 {
+        painter.rect_filled(rect, corner, p.card_hover.gamma_multiply(hover_t));
     }
-    let fg = if selected { p.text } else { lerp_color(p.text_dim, p.text, 0.25) };
+    let fg = if selected { p.text } else { lerp_color(lerp_color(p.text_dim, p.text, 0.25), p.text, hover_t) };
     let icon_color = tint.unwrap_or(if selected { p.accent } else { p.text_dim });
     let icon_x = if collapsed { rect.center().x } else { rect.left() + 20.0 };
     icons::paint(
@@ -1803,14 +1885,27 @@ fn nav_item(
         let text = widgets::fit_text(painter, label, &font, text_rect.width());
         painter.text(text_rect.left_center(), Align2::LEFT_CENTER, text, font, fg);
         if count > 0 {
-            let (bg, color) = (Color32::TRANSPARENT, p.text_dim);
+            let (bg, color) = if selected {
+                (p.accent.gamma_multiply(if p.dark { 0.22 } else { 0.14 }), p.text)
+            } else {
+                (p.track.gamma_multiply(0.7), p.text_dim)
+            };
             widgets::paint_badge(painter, rect.right_center() - vec2(8.0, 0.0), &count.to_string(), color, bg);
         }
     } else if count > 0 && selected {
         painter.circle_filled(rect.right_top() + vec2(-8.0, 8.0), 3.0, p.accent);
     }
+    if response.has_focus() {
+        widgets::focus_ring(ui, rect, theme::radius::MD, p);
+    }
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Tab, true, selected, label));
     let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
-    if collapsed { response.on_hover_text(format!("{label} ({count})")) } else { response }
+    // Collapsed, the name (and the count, where there is one) shows on hover.
+    match (collapsed, count) {
+        (false, _) => response,
+        (true, 0) => response.on_hover_text(label),
+        (true, n) => response.on_hover_text(format!("{label} ({n})")),
+    }
 }
 
 /// Cloaking a window with the DWM keeps it from being drawn without hiding it.

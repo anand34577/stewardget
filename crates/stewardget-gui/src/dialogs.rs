@@ -205,6 +205,7 @@ impl AddDialog {
             fallback_url: None,
             mirrors: stewardget_core::util::split_links(&self.mirrors),
             mux: None,
+            media: None,
             existing: self.existing,
         })
     }
@@ -669,9 +670,9 @@ Connections are shared across all of them.",
                                     let size = info.size.map_or("Unknown size".to_owned(), format_bytes);
                                     ui.label(RichText::new(size).size(12.5).color(p.text_dim));
                                     if info.resumable {
-                                        widgets::pill(ui, "Resumable · multi-connection", p.green);
+                                        widgets::pill(ui, "Resumable · multi-connection", p.green, &p);
                                     } else {
-                                        widgets::pill(ui, "No resume support", p.yellow)
+                                        widgets::pill(ui, "No resume support", p.yellow, &p)
                                             .on_hover_text("The server doesn't support byte ranges: one connection, and pausing restarts from zero.");
                                     }
                                 });
@@ -943,7 +944,7 @@ impl StewardGetApp {
             title(ui, &p, Icon::Sliders, "Download properties");
             ui.horizontal(|ui| {
                 let (label, color) = crate::table::status_label(&view, &p);
-                widgets::pill(ui, &label, color);
+                widgets::pill(ui, &label, color, &p);
                 let size = match view.total {
                     Some(t) => format!("{} of {}", format_bytes(view.downloaded), format_bytes(t)),
                     None => format_bytes(view.downloaded),

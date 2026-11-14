@@ -1185,6 +1185,7 @@ async fn video_and_audio_halves_are_downloaded_and_a_failed_join_keeps_both_file
     let audio = serve(1024 * 1024 + 7, ServerOpts { ranges: true, ..Default::default() }).await;
     let part = |url: &str, ext: &str, stream| MediaPart {
         url: url.to_owned(),
+        format_id: None,
         headers: vec![("Accept-Encoding".into(), "gzip".into())],
         ext: ext.to_owned(),
         stream: Some(stream),
@@ -1192,6 +1193,7 @@ async fn video_and_audio_halves_are_downloaded_and_a_failed_join_keeps_both_file
     };
     let info = MediaInfo {
         title: "Demo clip".into(),
+        page: String::new(),
         source: "test",
         options: vec![MediaOption {
             label: "1080p".into(),
@@ -1224,6 +1226,11 @@ async fn video_and_audio_halves_are_downloaded_and_a_failed_join_keeps_both_file
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     assert!(dir.join("Demo clip.video.mp4").exists() && dir.join("Demo clip.audio.m4a").exists());
+    // The failure shows on the downloads themselves, not only in the history.
+    for id in &ids {
+        let error = engine.download(*id).and_then(|d| d.error).unwrap_or_default();
+        assert!(error.starts_with("could not join"), "download {id} says {error:?}");
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

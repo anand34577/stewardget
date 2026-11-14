@@ -75,6 +75,11 @@ impl TableState {
     }
 }
 
+/// The direction a column sorts in first: biggest, fastest and newest on top.
+fn natural_ascending(key: SortKey) -> bool {
+    !matches!(key, SortKey::Size | SortKey::Speed | SortKey::Added)
+}
+
 fn status_rank(s: Status) -> u8 {
     match s {
         Status::Downloading => 0,
@@ -332,9 +337,10 @@ impl StewardGetApp {
             icons::paint(ui.painter(), Rect::from_center_size(at, vec2(10.0, 10.0)), caret, p.accent);
         }
         if response.clicked() {
+            let natural = natural_ascending(col.key);
             if active {
-                if !self.table.ascending && col.key != SortKey::Queue {
-                    // third click returns to queue order
+                if self.table.ascending != natural && col.key != SortKey::Queue {
+                    // Third click: back to queue order.
                     self.table.sort = SortKey::Queue;
                     self.table.ascending = true;
                 } else {
@@ -342,7 +348,7 @@ impl StewardGetApp {
                 }
             } else {
                 self.table.sort = col.key;
-                self.table.ascending = !matches!(col.key, SortKey::Size | SortKey::Speed | SortKey::Added);
+                self.table.ascending = natural;
             }
         }
         // The column chooser opens from any header cell, not only the gaps between them.
@@ -424,12 +430,17 @@ impl StewardGetApp {
             );
         }
 
+        if d.status.is_active() {
+            let edge = Rect::from_center_size(band.left_center() + vec2(1.5, 0.0), vec2(3.0, band.height() * 0.46));
+            painter.rect_filled(edge, CornerRadius::same(2), p.accent);
+        }
+
         // Name cell
         let mut x = rect.left() + PAD_X;
         let compact = row_h <= ROW_H_COMPACT;
         let tile = if compact { 22.0 } else { 34.0 };
         let icon_rect = Rect::from_min_size(pos2(x, rect.center().y - tile / 2.0), vec2(tile, tile));
-        widgets::paint_icon_tile(&painter, icon_rect, Icon::for_category(d.category), p.text_dim, &p);
+        widgets::paint_icon_tile(&painter, icon_rect, Icon::for_category(d.category), p.category(d.category), &p);
         let text_x = x + tile + 12.0;
         let name_rect = Rect::from_min_max(pos2(text_x, rect.top()), pos2(x + name_w - 12.0, rect.bottom()));
         let name_font = FontId::new(
@@ -753,7 +764,7 @@ impl StewardGetApp {
                     });
                 if chosen != self.table.sort {
                     self.table.sort = chosen;
-                    self.table.ascending = !matches!(chosen, SortKey::Size | SortKey::Speed | SortKey::Added);
+                    self.table.ascending = natural_ascending(chosen);
                 }
                 ui.label(RichText::new("Sort by").size(12.5).color(p.text_dim));
             },
@@ -814,14 +825,13 @@ impl StewardGetApp {
 
         // Line 1: name and status.
         let (label, color) = status_label(d, &p);
-        let pill_w =
-            painter.layout_no_wrap(label.clone(), FontId::new(12.0, crate::theme::semi()), color).size().x + 26.0;
-        let pill_w = pill_w.min((x1 - x0) * 0.45);
+        let pill_w = widgets::pill_width(&painter, &label).min((x1 - x0) * 0.45);
         widgets::paint_pill(&painter, pos2(x1 - pill_w, top + 19.0), &label, color, pill_w, &p);
         let name_font = FontId::new(crate::theme::size::MD + 0.5, crate::theme::semi());
-        let name = widgets::fit_text(&painter, &d.file_name, &name_font, x1 - pill_w - 12.0 - x0);
-        if name != d.file_name && response.hovered() {
-            response.clone().on_hover_text(&d.file_name);
+        let shown = widgets::display_name(&d.file_name, &d.url);
+        let name = widgets::fit_text(&painter, &shown, &name_font, x1 - pill_w - 12.0 - x0);
+        if name != shown && response.hovered() {
+            response.clone().on_hover_text(&shown);
         }
         painter.text(pos2(x0, top + 19.0), Align2::LEFT_CENTER, name, name_font, p.text);
 
@@ -833,8 +843,8 @@ impl StewardGetApp {
             meta.push(host);
         }
         meta.push(format!("added {}", stewardget_core::util::format_relative(d.added_at, now)));
-        if self.engine.config().queues.len() > 1 {
-            meta.push(self.engine.config().queue(d.queue).name.clone());
+        if self.cfg.queues.len() > 1 {
+            meta.push(self.cfg.queue(d.queue).name.clone());
         }
         let meta_font = FontId::proportional(crate::theme::size::SM);
         let meta = widgets::fit_text(&painter, &meta.join("  \u{00b7}  "), &meta_font, x1 - x0);
@@ -1074,10 +1084,11 @@ impl StewardGetApp {
         ui.vertical_centered(|ui| {
             let empty_icon = if !self.snap.downloads.is_empty() && !self.search.is_empty() { Icon::Search } else { Icon::Download };
             widgets::icon_tile(ui, empty_icon, 64.0, p.accent, &p);
+            ui.add_space(4.0);
             ui.add_space(12.0);
             let (title, sub): (String, &str) = if self.snap.downloads.is_empty() {
                 ("No downloads yet".to_owned(),
-                    "Click Add URL, paste a link (Ctrl+V), copy a file link anywhere, or download from your browser with the StewardGet extension.",
+                    "Click Add download, paste a link (Ctrl+V), copy a file link anywhere, or download from your browser with the StewardGet extension.",
                 )
             } else if !self.search.is_empty() {
                 (format!("No downloads match “{}”", self.search.trim()), "Check the spelling, or search by site or file type.")
@@ -1108,9 +1119,15 @@ impl StewardGetApp {
             });
             ui.add_space(6.0);
             if self.snap.downloads.is_empty() {
+                ui.add_space(6.0);
                 ui.horizontal_wrapped(|ui| {
-                    ui.add_space(((ui.available_width() - 420.0) / 2.0).max(0.0));
-                    if widgets::button(ui, ButtonKind::Primary, Some(Icon::Plus), "Add URL", true, &p).clicked() {
+                    let spacing = ui.spacing().item_spacing.x;
+                    let total = widgets::button_width(ui, true, "Add download", true)
+                        + widgets::button_width(ui, true, "Connect browser", false)
+                        + widgets::button_width(ui, true, "Import links", false)
+                        + spacing * 2.0;
+                    ui.add_space(((ui.available_width() - total) / 2.0).max(0.0));
+                    if widgets::button(ui, ButtonKind::Primary, Some(Icon::Plus), "Add download", true, &p).clicked() {
                         self.open_add(None);
                     }
                     if widgets::button(ui, ButtonKind::Ghost, Some(Icon::Link), "Connect browser", true, &p).clicked() {
@@ -1212,6 +1229,15 @@ fn short_dir(path: &std::path::Path) -> String {
 pub fn status_label(d: &DownloadView, p: &Palette) -> (String, Color32) {
     if d.awaiting_link {
         return ("Waiting for link".into(), p.yellow);
+    }
+    if d.status == Status::Paused
+        && d.options.media.is_some()
+        && d.error.as_deref().is_some_and(|e| e.contains("fresh one"))
+    {
+        return ("Renewing link\u{2026}".into(), p.accent);
+    }
+    if d.status == Status::Completed && d.error.as_deref().is_some_and(|e| e.starts_with("could not join")) {
+        return ("Not joined".into(), p.red);
     }
     if let Some(secs) = d.retry_in {
         return (format!("Retry in {}", format_duration(secs)), p.yellow);

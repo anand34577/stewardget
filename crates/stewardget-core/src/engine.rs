@@ -216,6 +216,9 @@ struct Item {
     /// Its files are being moved or renamed on disk ([`Engine::relocate`]): it
     /// must not start, restart or be removed until that is done.
     moving: bool,
+    /// Fresh links fetched from yt-dlp since the user last touched it; caps the
+    /// automatic renewals so a link that keeps failing ends as "Failed".
+    media_renewals: u32,
 }
 
 struct Running {
@@ -250,6 +253,7 @@ impl Item {
             lane_prev: Vec::new(),
             lane_speed: Vec::new(),
             moving: false,
+            media_renewals: 0,
         }
     }
 
@@ -859,6 +863,7 @@ impl Engine {
             }
             item.rec.error = None;
             item.auto_retries = 0;
+            item.media_renewals = 0;
             item.retry_at = None;
             inner.set_status(item, Status::Queued);
         })?;
@@ -1335,6 +1340,30 @@ impl Engine {
         Ok(path)
     }
 
+    /// Asks yt-dlp for a fresh link to the file a video download was started
+    /// with (its links expire after a few hours) and continues the download
+    /// from its partial data. Only for downloads found through yt-dlp.
+    pub async fn renew_media_link(&self, id: DownloadId) -> Result<(), Error> {
+        let source = self
+            .download(id)
+            .ok_or(Error::NotFound)?
+            .options
+            .media
+            .ok_or_else(|| Error::Unsupported("this download wasn't found through yt-dlp".into()))?;
+        let ytdlp = self.media_tools().0;
+        let (url, headers) = crate::media::fresh_link(ytdlp.as_deref(), &source).await?;
+        let headers: Vec<(String, String)> = headers
+            .into_iter()
+            .filter(|(k, _)| !matches!(k.to_ascii_lowercase().as_str(), "accept-encoding" | "range" | "host"))
+            .collect();
+        self.inner.with_item(id, |item, _| {
+            if !headers.is_empty() {
+                item.rec.options.headers = headers;
+            }
+        })?;
+        self.set_url(id, &url)
+    }
+
     /// Where yt-dlp and ffmpeg were found, if anywhere.
     pub fn media_tools(&self) -> (Option<PathBuf>, Option<PathBuf>) {
         let config = self.config();
@@ -1364,8 +1393,12 @@ impl Engine {
         let group = util::random_token();
         let out_ext = match option.parts.as_slice() {
             [v, a] if v.ext == "mp4" && matches!(a.ext.as_str(), "m4a" | "mp4") => "mp4",
+            [single] => single.ext.as_str(),
             _ => "mkv",
         };
+        // Both halves go to the folder of the finished file, so "sort into category
+        // folders" doesn't put the sound under Music and the picture under Video.
+        let directory = directory.or_else(|| Some(self.folder_for(&format!("{title}.{out_ext}"))));
         let mut ids = Vec::new();
         for part in &option.parts {
             let (file_name, mux) = match part.stream {
@@ -1390,6 +1423,11 @@ impl Engine {
             new.options.directory = directory.clone();
             new.options.headers = headers;
             new.options.mux = mux;
+            new.options.media = part
+                .format_id
+                .clone()
+                .filter(|_| info.page.starts_with("http") && info.source == "yt-dlp")
+                .map(|format_id| crate::MediaSource { page: info.page.clone(), format_id });
             ids.push(self.add(new)?);
         }
         Ok(ids)
@@ -1711,6 +1749,7 @@ impl Inner {
     fn finish(self: &Arc<Self>, id: DownloadId, outcome: Outcome) {
         let config = self.config();
         let mut mux_group = None;
+        let mut renew = None;
         {
             let mut st = self.lock();
             let Some(pos) = st.items.iter().position(|i| i.rec.id == id) else { return };
@@ -1762,7 +1801,10 @@ impl Inner {
                     self.set_status(item, Status::Completed);
                     completed = true;
                     mux_group = item.rec.options.mux.as_ref().map(|m| m.group.clone());
-                    if config.on_complete_command.is_some() || config.post_actions.iter().any(|r| r.enabled) {
+                    // One half of a video: the rules and command run on the joined file instead.
+                    if mux_group.is_none()
+                        && (config.on_complete_command.is_some() || config.post_actions.iter().any(|r| r.enabled))
+                    {
                         after_command = Some((
                             config.on_complete_command.clone(),
                             config.post_actions.clone(),
@@ -1804,6 +1846,18 @@ impl Inner {
                     item.retry_at = Some(Instant::now() + Duration::from_secs(delay));
                     item.rec.error = Some(e.to_string());
                     self.set_status(item, Status::Queued);
+                }
+                // A video link from yt-dlp expired (they last a few hours): ask for a
+                // fresh one and carry on from the partial data.
+                (Outcome::Failed(e), _)
+                    if item.rec.options.media.is_some()
+                        && matches!(e, Error::Http(401 | 403 | 404 | 410))
+                        && item.media_renewals < 2 =>
+                {
+                    item.media_renewals += 1;
+                    item.rec.error = Some("the video link expired; getting a fresh one from yt-dlp".into());
+                    self.set_status(item, Status::Paused);
+                    renew = Some(id);
                 }
                 (Outcome::Failed(e), _) => {
                     item.rec.error = Some(e.to_string());
@@ -1855,6 +1909,21 @@ impl Inner {
         }
         self.schedule();
         self.persist(false);
+        if let Some(id) = renew {
+            let inner = Arc::clone(self);
+            self.runtime.spawn(async move {
+                let engine = Engine::from_inner(Arc::clone(&inner));
+                if let Err(e) = engine.renew_media_link(id).await {
+                    let _ = inner.with_item(id, |item, inner| {
+                        if item.rec.status == Status::Paused && item.run.is_none() {
+                            item.rec.error = Some(format!("the video link expired and couldn't be renewed: {e}"));
+                            inner.set_status(item, Status::Failed);
+                        }
+                    });
+                    inner.persist(false);
+                }
+            });
+        }
         // After the state lock is released: joining looks at every download.
         if let Some(group) = mux_group {
             self.try_mux(group);
@@ -1902,6 +1971,7 @@ impl Inner {
         target: &Path,
         result: Result<(), String>,
     ) {
+        let mut after = None;
         {
             let mut st = self.lock();
             match &result {
@@ -1916,6 +1986,7 @@ impl Inner {
                         item.rec.category = category;
                         item.rec.options.mux = None;
                         item.rec.total = std::fs::metadata(target).ok().map(|m| m.len());
+                        after = Some((item.rec.url.clone(), category, item.rec.total.unwrap_or(0)));
                     }
                     st.items.retain(|i| i.rec.id != audio_id);
                     st.log.entries.retain(|e| e.id != audio_id);
@@ -1928,10 +1999,15 @@ impl Inner {
                     }
                 }
                 Err(why) => {
+                    let message = format!("could not join video and audio: {why}. The two files were kept");
                     for id in [video_id, audio_id] {
                         if let Some(e) = st.log.entries.iter_mut().find(|e| e.id == id) {
                             e.notes =
                                 vec![format!("✗ Could not join video and audio: {why}. The two files were kept.")];
+                        }
+                        // Shown on the download itself, not only in the history.
+                        if let Some(item) = st.items.iter_mut().find(|i| i.rec.id == id) {
+                            item.rec.error = Some(message.clone());
                         }
                     }
                 }
@@ -1944,6 +2020,22 @@ impl Inner {
             self.emit(Event::Removed(audio_id));
         }
         self.persist(false);
+        // The steps after a download run once, on the joined file.
+        let config = self.config();
+        if let Some((url, category, size)) = after
+            && (config.on_complete_command.is_some() || config.post_actions.iter().any(|r| r.enabled))
+        {
+            let (inner, path) = (Arc::clone(self), target.to_path_buf());
+            self.runtime.spawn_blocking(move || {
+                if let Some(command) = &config.on_complete_command {
+                    let _ = util::run_after_download(command, &path, &url);
+                }
+                let report = crate::run_rules(&config.post_actions, &path, &url, category, size);
+                if !report.outcomes.is_empty() || !report.tags.is_empty() {
+                    inner.apply_report(video_id, report);
+                }
+            });
+        }
     }
 
     /// Records what the post-download rules did: the new place of a moved file,

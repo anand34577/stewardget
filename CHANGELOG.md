@@ -6,6 +6,38 @@ All notable changes to StewardGet are listed here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- **A livelier look.** File types have their own colours again (video, music, images, documents, archives, programs, custom categories), shown as tinted tiles in the list, cards, details, overview and history. The accent gains a partner hue: primary buttons and live progress bars run as a gradient. Primary buttons have a soft glow, cards a soft lift and a line of light along the top.
+- **Less motion when Windows asks for it.** With *Animation effects* off (Settings > Accessibility > Visual effects), the live dot stops pulsing, progress of unknown size stops sweeping, and fades and switches change at once.
+- **Keyboard and screen readers.** Sidebar entries, Settings tabs, menu items, switches, chips, segmented controls and summary tiles show a focus ring when reached with Tab. Icon-only buttons, the window buttons, switches, tabs and tiles now have names (and selected or checked states) for screen readers.
+- Statuses are tinted pills instead of a dot and plain text. Live rows and cards carry a thin accent edge.
+- The selected sidebar entry (and Settings tab) has an accent wash and a short bar at its edge. Its count sits in a pill, and hover fades in.
+- Summary tiles show a coloured icon. Card titles are semibold. The overview's live speed reading is semibold, with a pulsing dot while downloading.
+- Toasts show an icon that matches what they report. The Undo bar counts down the seconds left.
+- The header and Settings search fields highlight their icon and draw a focus ring while typing; Esc clears the Settings search.
+- A folded sidebar section always shows its chevron.
+
+### Fixed
+- Sorting by Size, Speed or Added could never reach ascending order: the second click went straight back to queue order.
+- Cards and the details header showed "download" for files the server gave no name; they now say "Unnamed file from …" like the list.
+- In cards, status pills now line up with the right edge.
+- Overview: *See all* on the Downloading card opened every download instead of the ones downloading. Clicking a running download could land on a list that hid it.
+- Overview: a finished file that was moved or deleted no longer offers to open on click.
+- The details header no longer ends in a stray "·" when the site is unknown.
+- The empty list's text named an "Add URL" button that is called *Add download*, and its buttons were off-centre.
+- Collapsed sidebar tooltips no longer say "(0)" for pages without a count.
+- Settings used a smaller title and a plain search field, unlike every other page.
+- The progress window's *Close when finished* box was squeezed beside the connections control and its label wrapped one letter per line. It now moves to its own line when it doesn't fit.
+
+### Fixed: video downloads (yt-dlp)
+- **YouTube offers its full choice again.** StewardGet now hands yt-dlp a JavaScript runtime it finds on the computer (deno, node or bun). yt-dlp only looks for deno by itself, and without a runtime YouTube hides its formats with picture and sound in one file (and is phasing out the rest), so every choice needed ffmpeg.
+- **Paused or failed videos can be continued after hours.** The links yt-dlp reports expire (YouTube's after about six hours), and a download started from one could only be started over. Each video download now remembers its page and format; when the old link is refused, StewardGet asks yt-dlp for a fresh one by itself and continues from the partial data. *Refresh link* on a video does the same instead of asking you to find the video in the browser again.
+- **A video and its sound no longer end up in different folders.** With *Sort into category folders* on, the sound half of a video sent from the browser went to *Music* and the picture to *Video* while they downloaded.
+- **A failed join is shown on the download** ("Not joined", with ffmpeg's reason). Before, it looked completed while only the picture was on disk, and the reason appeared only in History.
+- **Steps after a download and the "after each download" command run once, on the joined file**, not on each half while ffmpeg may still be reading it.
+- **Playlists, channels, live streams and premieres are refused with the reason** instead of "no format StewardGet can fetch".
+- *Update yt-dlp* on a copy that can't update itself (installed under Program Files or by a package manager) now says so and points to *Install yt-dlp*, which sets up a copy that can.
+
 ## [0.14.0] - 2026-11-12
 
 ### Added

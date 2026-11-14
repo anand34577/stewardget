@@ -72,7 +72,7 @@ impl StewardGetApp {
                             });
                         }
                         if lane.mirror {
-                            widgets::pill(ui, "mirror", p.accent);
+                            widgets::pill(ui, "mirror", p.accent, &p);
                         }
                     },
                 );

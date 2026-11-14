@@ -9,6 +9,10 @@
 //!
 //! Many sites offer the best quality as a separate video and audio stream. Both
 //! are downloaded and joined without re-encoding by `ffmpeg`, if it's installed.
+//!
+//! The links yt-dlp reports expire (YouTube's after about six hours), so each
+//! download remembers its page and format ([`MediaSource`]) and a fresh link
+//! can be fetched for it later ([`fresh_link`]).
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -38,10 +42,22 @@ pub struct Mux {
     pub output: String,
 }
 
+/// Where a download found through yt-dlp came from: enough to ask yt-dlp for
+/// a fresh link to the same file once the old one has expired.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MediaSource {
+    /// The page the video is on.
+    pub page: String,
+    /// yt-dlp's id of the format ("137", "140-drc").
+    pub format_id: String,
+}
+
 /// One file of a choice.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MediaPart {
     pub url: String,
+    /// yt-dlp's id for this format; `None` for files read from a DASH manifest.
+    pub format_id: Option<String>,
     pub headers: Vec<(String, String)>,
     pub ext: String,
     /// `None`: the file already holds picture and sound (or only sound).
@@ -71,6 +87,8 @@ impl MediaOption {
 #[derive(Debug, Clone, PartialEq)]
 pub struct MediaInfo {
     pub title: String,
+    /// The page or manifest that was read.
+    pub page: String,
     /// What found it: `yt-dlp` or `DASH manifest`.
     pub source: &'static str,
     pub options: Vec<MediaOption>,
@@ -229,35 +247,10 @@ pub async fn inspect(
             "this page needs yt-dlp, which isn't set up yet. Use “Set up yt-dlp” (one click) and try again".into(),
         ));
     };
-    let page = url::Url::parse(url).map_err(|e| Error::InvalidUrl(e.to_string()))?;
-    let cookie_file =
-        context.cookies.as_deref().filter(|c| !c.trim().is_empty()).and_then(|c| CookieFile::write(&page, c));
-    let mut cmd = tokio::process::Command::new(tool);
-    cmd.args(["-J", "--no-playlist", "--socket-timeout", "20", "--extractor-retries", "2"]);
-    if let Some(ua) = context.user_agent.as_deref().filter(|u| !u.is_empty()) {
-        cmd.arg("--user-agent").arg(ua);
-    }
-    if let Some(r) = context.referrer.as_deref().filter(|r| r.starts_with("http")) {
-        cmd.arg("--referer").arg(r);
-    }
-    if let Some(f) = &cookie_file {
-        cmd.arg("--cookies").arg(&f.0);
-    }
-    cmd.arg("--").arg(url).stdin(std::process::Stdio::null()).kill_on_drop(true);
-    #[cfg(windows)]
-    cmd.creation_flags(0x0800_0000);
-    let output = tokio::time::timeout(Duration::from_secs(120), cmd.output())
-        .await
-        .map_err(|_| Error::Unsupported("yt-dlp took too long to read the page (2 minutes)".into()))?
-        .map_err(|e| Error::Io(format!("could not start yt-dlp: {e}")))?;
-    drop(cookie_file);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    if !output.status.success() {
-        return Err(Error::Unsupported(explain_ytdlp_error(&stderr)));
-    }
-    let json: Value =
-        serde_json::from_slice(&output.stdout).map_err(|e| Error::Io(format!("unreadable yt-dlp answer: {e}")))?;
-    let info = options_from_ytdlp(&json);
+    let (json, stderr) = run_ytdlp(tool, url, context).await?;
+    refuse_unfit(&json)?;
+    let mut info = options_from_ytdlp(&json);
+    info.page = url.to_owned();
     if info.options.is_empty() {
         let warning = stderr
             .lines()
@@ -270,6 +263,107 @@ pub async fn inspect(
         )));
     }
     Ok(info)
+}
+
+/// A fresh link (and the headers to send with it) for one format of a page,
+/// after the one a download started with has expired.
+pub async fn fresh_link(ytdlp: Option<&Path>, source: &MediaSource) -> Result<(String, Vec<(String, String)>), Error> {
+    let tool = ytdlp.ok_or_else(|| Error::Unsupported("yt-dlp isn't set up, so the link can't be renewed".into()))?;
+    let (json, _) = run_ytdlp(tool, &source.page, &MediaContext::default()).await?;
+    refuse_unfit(&json)?;
+    let formats = json.get("formats").and_then(Value::as_array).cloned().unwrap_or_default();
+    formats
+        .iter()
+        .chain(std::iter::once(&json))
+        .filter(|f| text(f, "format_id").as_deref() == Some(source.format_id.as_str()))
+        .find_map(format_of)
+        .map(|f| (f.part.url, f.part.headers))
+        .ok_or_else(|| {
+            Error::Unsupported(format!(
+                "the page no longer offers the format this download was started with ({}); start it again from the page",
+                source.format_id
+            ))
+        })
+}
+
+/// A JavaScript runtime yt-dlp can use: YouTube hides most formats (and soon
+/// all of them) from a yt-dlp that has none. yt-dlp only looks for deno by
+/// itself, so node and bun, which people have far more often, are passed on.
+fn js_runtime() -> Option<String> {
+    ["deno", "node", "bun"]
+        .into_iter()
+        .find_map(|name| find_tool(None, name).map(|path| format!("{name}:{}", path.display())))
+}
+
+/// Runs `yt-dlp -J` on a page; its JSON and what it wrote to stderr.
+async fn run_ytdlp(tool: &Path, url: &str, context: &MediaContext) -> Result<(Value, String), Error> {
+    let page = url::Url::parse(url).map_err(|e| Error::InvalidUrl(e.to_string()))?;
+    let cookie_file =
+        context.cookies.as_deref().filter(|c| !c.trim().is_empty()).and_then(|c| CookieFile::write(&page, c));
+    let runtime = js_runtime();
+    let run = |with_runtime: bool| {
+        let mut cmd = tokio::process::Command::new(tool);
+        cmd.args(["-J", "--no-playlist", "--socket-timeout", "20", "--extractor-retries", "2"]);
+        if let Some(rt) = runtime.as_deref().filter(|_| with_runtime) {
+            cmd.arg("--js-runtimes").arg(rt);
+        }
+        if let Some(ua) = context.user_agent.as_deref().filter(|u| !u.is_empty()) {
+            cmd.arg("--user-agent").arg(ua);
+        }
+        if let Some(r) = context.referrer.as_deref().filter(|r| r.starts_with("http")) {
+            cmd.arg("--referer").arg(r);
+        }
+        if let Some(f) = &cookie_file {
+            cmd.arg("--cookies").arg(&f.0);
+        }
+        cmd.arg("--").arg(url).stdin(std::process::Stdio::null()).kill_on_drop(true);
+        #[cfg(windows)]
+        cmd.creation_flags(0x0800_0000);
+        async move {
+            tokio::time::timeout(Duration::from_secs(120), cmd.output())
+                .await
+                .map_err(|_| Error::Unsupported("yt-dlp took too long to read the page (2 minutes)".into()))?
+                .map_err(|e| Error::Io(format!("could not start yt-dlp: {e}")))
+        }
+    };
+    let mut output = run(true).await?;
+    // A yt-dlp from before late 2025 doesn't know the option: ask again without it.
+    if !output.status.success()
+        && runtime.is_some()
+        && String::from_utf8_lossy(&output.stderr).contains("no such option: --js-runtimes")
+    {
+        output = run(false).await?;
+    }
+    drop(cookie_file);
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    if !output.status.success() {
+        return Err(Error::Unsupported(explain_ytdlp_error(&stderr)));
+    }
+    let json: Value =
+        serde_json::from_slice(&output.stdout).map_err(|e| Error::Io(format!("unreadable yt-dlp answer: {e}")))?;
+    Ok((json, stderr))
+}
+
+/// Playlists and live streams, which can't become one finished file, are
+/// refused with a reason instead of "no format found".
+fn refuse_unfit(json: &Value) -> Result<(), Error> {
+    if text(json, "_type").as_deref() == Some("playlist") || json.get("entries").is_some() {
+        return Err(Error::Unsupported(
+            "this link is a playlist or channel, not a single video. Open one of its videos and try again".into(),
+        ));
+    }
+    match text(json, "live_status").as_deref() {
+        Some("is_live") => Err(Error::Unsupported(
+            "this is a live stream, which has no end to download to. Try again once the broadcast is over".into(),
+        )),
+        Some("is_upcoming") => {
+            Err(Error::Unsupported("this video hasn't premiered yet. Try again once it has started".into()))
+        }
+        _ if json.get("is_live").and_then(Value::as_bool) == Some(true) => Err(Error::Unsupported(
+            "this is a live stream, which has no end to download to. Try again once the broadcast is over".into(),
+        )),
+        _ => Ok(()),
+    }
 }
 
 /// yt-dlp's last error line, with a hint for the common cases.
@@ -404,7 +498,23 @@ pub fn update_ytdlp(path: &Path) -> Result<String, String> {
         .unwrap_or("")
         .trim_start_matches("ERROR: ")
         .to_owned();
-    if out.status.success() { Ok(last) } else { Err(last) }
+    if out.status.success() {
+        return Ok(last);
+    }
+    let lower = text.to_ascii_lowercase();
+    let stuck = lower.contains("permission")
+        || lower.contains("access is denied")
+        || lower.contains("package manager")
+        || lower.contains("pip")
+        || lower.contains("you installed yt-dlp")
+        || lower.contains("not writable");
+    if stuck {
+        Err(format!(
+            "{last} — this copy of yt-dlp can't update itself (it sits in a protected folder or came from a package manager). Use “Install yt-dlp” to get StewardGet's own copy, which can"
+        ))
+    } else {
+        Err(last)
+    }
 }
 
 fn text(v: &Value, key: &str) -> Option<String> {
@@ -456,6 +566,7 @@ fn format_of(f: &Value) -> Option<Format> {
     Some(Format {
         part: MediaPart {
             url,
+            format_id: text(f, "format_id"),
             headers,
             // A stream is named after its playlist; the engine gives the
             // result its real extension (.ts or .mp4).
@@ -608,7 +719,7 @@ pub(crate) fn options_from_ytdlp(json: &Value) -> MediaInfo {
         });
     }
     options.truncate(24);
-    MediaInfo { title, source: "yt-dlp", options }
+    MediaInfo { title, page: String::new(), source: "yt-dlp", options }
 }
 
 fn height_label(h: u32) -> String {
@@ -656,7 +767,8 @@ pub(crate) fn parse_mpd(xml: &str, manifest_url: &str, title: &str) -> Result<Me
                 other => other,
             }
             .to_owned();
-            let mut part = MediaPart { url: url.to_string(), headers: Vec::new(), ext, stream: None, size: None };
+            let mut part =
+                MediaPart { url: url.to_string(), format_id: None, headers: Vec::new(), ext, stream: None, size: None };
             if mime.starts_with("video") || set_type.starts_with("video") {
                 let height = rep.attribute("height").and_then(|h| h.parse().ok()).unwrap_or(0);
                 part.stream = Some(Stream::Video);
@@ -693,7 +805,7 @@ pub(crate) fn parse_mpd(xml: &str, manifest_url: &str, title: &str) -> Result<Me
             height: 0,
         });
     }
-    Ok(MediaInfo { title: title.to_owned(), source: "DASH manifest", options })
+    Ok(MediaInfo { title: title.to_owned(), page: manifest_url.to_owned(), source: "DASH manifest", options })
 }
 
 /// Joins a video and an audio file into `output` without re-encoding.
@@ -784,6 +896,23 @@ mod tests {
         let joined = info.options.iter().find(|o| o.needs_merge()).unwrap();
         assert!(joined.label.contains("MP4") && !joined.label.contains("60"), "MP4 preferred: {}", joined.label);
         assert!(!info.options.iter().any(|o| o.label.contains("MHTML")), "storyboards are not videos");
+    }
+
+    #[test]
+    fn playlists_and_live_streams_are_refused_with_a_reason() {
+        let e = refuse_unfit(&json!({ "_type": "playlist", "entries": [] })).unwrap_err();
+        assert!(e.to_string().contains("playlist"), "{e}");
+        let e = refuse_unfit(&json!({ "live_status": "is_live", "formats": [] })).unwrap_err();
+        assert!(e.to_string().contains("live stream"), "{e}");
+        assert!(refuse_unfit(&json!({ "live_status": "was_live", "formats": [] })).is_ok());
+        assert!(refuse_unfit(&json!({ "title": "x", "formats": [] })).is_ok());
+    }
+
+    #[test]
+    fn formats_keep_their_id_for_renewing_the_link() {
+        let info =
+            options_from_ytdlp(&json!({ "title": "Id", "formats": [fmt("18", "mp4", "avc1", "mp4a", 360, 500.0)] }));
+        assert_eq!(info.options[0].parts[0].format_id.as_deref(), Some("18"));
     }
 
     #[test]

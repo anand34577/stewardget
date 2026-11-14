@@ -110,14 +110,19 @@ pub fn paint_gradient_rect(painter: &egui::Painter, rect: Rect, r: f32, a: Color
     painter.add(gradient_rect(rect, r, a, b, vertical));
 }
 
-/// The surface of a card that is painted by hand: lift (light theme only), fill
-/// and a hairline outline.
+/// The surface of a card that is painted by hand: a soft lift, the fill, a
+/// hairline outline and a line of light along the top edge.
 pub fn card_surface(rect: Rect, fill: Color32, outline: Stroke, p: &Palette) -> Shape {
     let corner = CornerRadius::same(radius::LG);
+    let r = radius::LG as f32;
     Shape::Vec(vec![
         p.card_shadow().as_shape(rect, corner).into(),
         Shape::rect_filled(rect, corner, fill),
         Shape::rect_stroke(rect, corner, outline, StrokeKind::Inside),
+        Shape::line_segment(
+            [rect.left_top() + vec2(r, 1.0), rect.right_top() + vec2(-r, 1.0)],
+            Stroke::new(1.0, p.highlight()),
+        ),
     ])
 }
 
@@ -163,19 +168,24 @@ fn arc(painter: &egui::Painter, center: Pos2, radius: f32, width: f32, fraction:
 /// The file-type mark used for downloads: a tile shaded in the category colour
 /// with its icon, and (when there is room) the file extension in a tag below.
 pub fn paint_file_tile(painter: &egui::Painter, rect: Rect, icon: Icon, ext: &str, color: Color32, p: &Palette) {
-    let _ = color;
-    let r = (rect.height() * 0.22).round().clamp(radius::XS as f32, radius::LG as f32);
-    painter.rect(rect, CornerRadius::same(r as u8), p.card_hover, Stroke::new(1.0, p.border), StrokeKind::Inside);
+    let r = (rect.height() * 0.26).round().clamp(radius::XS as f32, radius::LG as f32);
+    painter.rect(
+        rect,
+        CornerRadius::same(r as u8),
+        lerp_color(p.card, color, if p.dark { 0.16 } else { 0.11 }),
+        Stroke::new(1.0, color.gamma_multiply(if p.dark { 0.22 } else { 0.18 })),
+        StrokeKind::Inside,
+    );
     let big = rect.height() >= 40.0 && !ext.is_empty();
-    let glyph = (rect.height() * if big { 0.42 } else { 0.5 }).round();
-    let icon_center = if big { rect.center() - vec2(0.0, rect.height() * 0.1) } else { rect.center() };
-    icons::paint(painter, Rect::from_center_size(icon_center, Vec2::splat(glyph)), icon, p.text_dim);
+    let glyph = (rect.height() * if big { 0.4 } else { 0.5 }).round();
+    let icon_center = if big { rect.center() - vec2(0.0, rect.height() * 0.11) } else { rect.center() };
+    icons::paint(painter, Rect::from_center_size(icon_center, Vec2::splat(glyph)), icon, color);
     if big {
-        let text: String = ext.chars().take(4).collect::<String>().to_lowercase();
-        let size = (rect.height() * 0.2).clamp(9.0, 11.0);
-        let galley = painter.layout_no_wrap(text, FontId::monospace(size), p.text_dim);
+        let text: String = ext.chars().take(4).collect::<String>().to_uppercase();
+        let size = (rect.height() * 0.19).clamp(8.5, 10.5);
+        let galley = painter.layout_no_wrap(text, FontId::new(size, crate::theme::semi()), color);
         let at = pos2(rect.center().x - galley.size().x / 2.0, rect.bottom() - size * 0.95 - galley.size().y / 2.0);
-        painter.galley(at, galley, p.text_dim);
+        painter.galley(at, galley, color);
     }
 }
 
@@ -201,8 +211,7 @@ pub fn kpi_tile(
 ) -> Response {
     let (rect, response) = ui.allocate_exact_size(vec2(width, 100.0), Sense::click());
     let painter = ui.painter();
-    let _ = icon;
-    // Only a warning colours the tile, and only its caption.
+    // A warning colours the caption too; otherwise the colour lives in the icon chip.
     let sub_color = if color == p.red { p.red } else { p.text_dim };
     let (fill, outline) = if response.hovered() {
         (p.card_hover, Stroke::new(1.0, p.control_border))
@@ -210,23 +219,29 @@ pub fn kpi_tile(
         (p.card, Stroke::new(1.0, p.border))
     };
     painter.add(card_surface(rect, fill, outline, p));
-    let inner = rect.shrink2(vec2(20.0, 16.0));
+    let inner = rect.shrink2(vec2(18.0, 16.0));
+    let chip = Rect::from_min_size(pos2(inner.right() - 30.0, inner.top() - 2.0), Vec2::splat(30.0));
+    painter.rect_filled(chip, CornerRadius::same(radius::MD), p.tint(color));
+    icons::paint(painter, Rect::from_center_size(chip.center(), Vec2::splat(16.0)), icon, color);
+    // Read out in full, even when the tile has to shorten what it shows.
+    let spoken = format!("{label}: {value}, {sub}");
     let label_font = FontId::proportional(crate::theme::size::SM);
-    let label_galley = painter.layout_no_wrap(label.to_owned(), label_font, p.text_dim);
+    let label = fit_text(painter, label, &label_font, inner.width() - 38.0);
+    let label_galley = painter.layout_no_wrap(label, label_font, p.text_dim);
     let label_bottom = inner.top() + label_galley.size().y;
     painter.galley(inner.min, label_galley, p.text_dim);
     let value_pos = pos2(inner.left(), label_bottom + 8.0);
-    let vg = painter.text(
-        value_pos,
-        Align2::LEFT_TOP,
-        value,
-        FontId::new(crate::theme::size::XL + 3.0, crate::theme::semi()),
-        p.text,
-    );
+    let value_font = FontId::new(crate::theme::size::XL + 3.0, crate::theme::semi());
+    let value = fit_text(painter, value, &value_font, inner.width() - 38.0);
+    let vg = painter.text(value_pos, Align2::LEFT_TOP, value, value_font, p.text);
     // A long caption ends in an ellipsis instead of being cut mid-word.
     let sub_font = FontId::proportional(crate::theme::size::SM);
     let sub = fit_text(painter, sub, &sub_font, inner.width());
     painter.text(pos2(inner.left(), vg.bottom() + 4.0), Align2::LEFT_TOP, sub, sub_font, sub_color);
+    if response.has_focus() {
+        focus_ring(ui, rect, radius::LG, p);
+    }
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &spoken));
     response
 }
 
@@ -237,8 +252,18 @@ pub fn round_button(ui: &mut Ui, icon: Icon, tooltip: &str, primary: bool, p: &P
     let hovered = response.hovered();
     let pressed = response.is_pointer_button_down_on();
     if primary {
-        let fill = if hovered { lerp_color(p.accent, p.text, 0.12) } else { p.accent };
-        painter.rect_filled(rect, CornerRadius::same(255), fill);
+        let (a, b) = p.gradient();
+        let shade = |c: Color32| {
+            if pressed {
+                lerp_color(c, Color32::BLACK, 0.12)
+            } else if hovered {
+                lerp_color(c, Color32::WHITE, 0.12)
+            } else {
+                c
+            }
+        };
+        painter.add(p.glow(a, if hovered { 14 } else { 8 }).as_shape(rect, CornerRadius::same(255)));
+        paint_gradient_rect(painter, rect, rect.height() / 2.0, shade(a), shade(b), false);
     } else {
         let fill = if pressed {
             p.track
@@ -266,6 +291,7 @@ pub fn round_button(ui: &mut Ui, icon: Icon, tooltip: &str, primary: bool, p: &P
         p.text_dim
     };
     icons::paint(painter, Rect::from_center_size(rect.center(), Vec2::splat(15.0)), icon, color);
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tooltip));
     response.on_hover_text(tooltip).on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
@@ -277,29 +303,38 @@ pub fn status_gradient(status: Status, p: &Palette) -> (Color32, Color32) {
         Status::Failed => (p.red, p.red),
         Status::Paused => (p.yellow, p.yellow),
         Status::Queued => (p.text_dim, p.text_dim),
-        _ => (p.accent, p.accent),
+        _ => (p.accent, p.accent2),
     }
 }
 
-/// A slim progress bar painted into `rect` (no layout allocation): solid accent
-/// while live, neutral once finished.
+/// A slim progress bar painted into `rect` (no layout allocation): the live
+/// gradient while data moves, the state colour otherwise.
 pub fn paint_progress(ui: &Ui, rect: Rect, d: &DownloadView, p: &Palette) {
     let painter = ui.painter();
-    painter.rect_filled(rect, CornerRadius::same((rect.height() / 2.0) as u8), p.track);
+    let round = CornerRadius::same((rect.height() / 2.0) as u8);
+    painter.rect_filled(rect, round, p.track);
     let (from, to) = match d.status {
-        // Finished bars are neutral, so the ones still moving are what the eye finds.
+        // Finished bars are quieter, so the ones still moving are what the eye finds.
         Status::Completed => {
-            let c = lerp_color(p.track, p.text_dim, 0.45);
+            let c = lerp_color(p.track, p.green, 0.6);
             (c, c)
         }
         s => status_gradient(s, p),
     };
     match d.fraction() {
         Some(frac) if frac > 0.0 => {
-            let end = rect.left() + rect.width() * frac;
-            let filled = Rect::from_min_max(rect.min, pos2(end.max(rect.left() + rect.height()), rect.max.y));
-            let _ = to;
-            painter.rect_filled(filled, CornerRadius::same((rect.height() / 2.0) as u8), from);
+            let end = (rect.left() + rect.width() * frac.min(1.0)).max(rect.left() + rect.height());
+            let filled = Rect::from_min_max(rect.min, pos2(end, rect.max.y));
+            if from == to {
+                painter.rect_filled(filled, round, from);
+            } else {
+                // The gradient spans the filled part, so its bright end leads.
+                paint_gradient_rect(painter, filled, rect.height() / 2.0, from, to, false);
+            }
+        }
+        // Size unknown: a travelling slice says "working", or a still wash with less motion.
+        None if d.status.is_active() && crate::theme::reduced_motion() => {
+            painter.rect_filled(rect, round, from.gamma_multiply(0.45));
         }
         None if d.status.is_active() => {
             let t = ui.input(|i| i.time) as f32;
@@ -580,7 +615,16 @@ pub fn icon(ui: &mut Ui, icon: Icon, size: f32, color: Color32) -> Response {
 /// and section marks used in lists, cards and dialog titles.
 pub fn paint_icon_tile(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color32, p: &Palette) {
     let r = (rect.height() * 0.28).round().clamp(radius::XS as f32, radius::LG as f32);
-    painter.rect(rect, CornerRadius::same(r as u8), p.card_hover, Stroke::new(1.0, p.border), StrokeKind::Inside);
+    // Neutral icons sit on a plain step; coloured ones on a wash of their colour.
+    let (fill, stroke) = if color == p.text_dim {
+        (p.card_hover, Stroke::new(1.0, p.border))
+    } else {
+        (
+            lerp_color(p.card, color, if p.dark { 0.16 } else { 0.11 }),
+            Stroke::new(1.0, color.gamma_multiply(if p.dark { 0.22 } else { 0.18 })),
+        )
+    };
+    painter.rect(rect, CornerRadius::same(r as u8), fill, stroke, StrokeKind::Inside);
     let glyph = (rect.height() * 0.52).round();
     icons::paint(painter, Rect::from_center_size(rect.center(), Vec2::splat(glyph)), icon, color);
 }
@@ -614,11 +658,13 @@ pub fn icon_button(ui: &mut Ui, icon: Icon, tooltip: &str, p: &Palette) -> Respo
     }
     let color = if response.hovered() { p.text } else { p.text_dim };
     icons::paint(ui.painter(), Rect::from_center_size(rect.center(), Vec2::splat(17.0)), icon, color);
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tooltip));
     response.on_hover_text(tooltip).on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
-/// Keyboard focus outline, drawn just outside `rect`.
-fn focus_ring(ui: &Ui, rect: Rect, r: u8, p: &Palette) {
+/// Keyboard focus outline, drawn just outside `rect`. Every hand-painted control
+/// draws it, so Tab always shows where it is.
+pub fn focus_ring(ui: &Ui, rect: Rect, r: u8, p: &Palette) {
     ui.painter().rect_stroke(
         rect.expand(2.5),
         CornerRadius::same(r + 3),
@@ -731,6 +777,19 @@ pub fn button(ui: &mut Ui, kind: ButtonKind, icon: Option<Icon>, text: &str, ena
     }
     painter.galley(pos2(x, rect.center().y - galley.size().y / 2.0), galley, fg);
     if enabled { response.on_hover_cursor(egui::CursorIcon::PointingHand) } else { response }
+}
+
+/// Width [`button`] will take for `text`, to centre a row of buttons.
+pub fn button_width(ui: &Ui, icon: bool, text: &str, solid: bool) -> f32 {
+    let family = if solid { crate::theme::semi() } else { egui::FontFamily::Proportional };
+    let text_w = ui.painter().layout_no_wrap(text.to_owned(), FontId::new(13.5, family), Color32::WHITE).size().x;
+    let icon_w = match (icon, text.is_empty()) {
+        (true, true) => 16.0,
+        (true, false) => 24.0,
+        (false, _) => 0.0,
+    };
+    let pad = if text.is_empty() { 8.0 } else { 14.0 };
+    (text_w + icon_w + pad * 2.0).max(CONTROL_H)
 }
 
 /// Single-line text field with the standard height, padding and outline.
@@ -858,6 +917,10 @@ pub fn segmented<T: PartialEq + Copy>(ui: &mut Ui, value: &mut T, options: &[(T,
         let color = if selected { p.text } else { p.text_dim };
         let family = if selected { crate::theme::semi() } else { egui::FontFamily::Proportional };
         ui.painter().text(cell.center(), Align2::CENTER_CENTER, *label, FontId::new(13.0, family), color);
+        if r.has_focus() {
+            focus_ring(ui, cell, radius::SM, p);
+        }
+        r.widget_info(|| egui::WidgetInfo::selected(egui::Role::RadioButton, true, selected, *label));
         if r.clicked() && !selected {
             *value = *option;
             response.mark_changed();
@@ -932,6 +995,11 @@ pub fn toggle(ui: &mut Ui, on: &mut bool, p: &Palette) -> Response {
     let knob = pos2(x, rect.center().y);
     ui.painter().circle_filled(knob + vec2(0.0, 0.8), 8.2, Color32::from_black_alpha(40));
     ui.painter().circle_filled(knob, 8.0, Color32::WHITE);
+    if response.has_focus() {
+        focus_ring(ui, rect, 11, p);
+    }
+    let state = *on;
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Switch, true, state, ""));
     response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
@@ -988,7 +1056,7 @@ pub fn caps_galley(ui: &Ui, text: &str, size: f32, color: Color32) -> std::sync:
 
 /// A card or section title, in sentence case.
 pub fn caption(ui: &mut Ui, text: &str, p: &Palette) {
-    ui.label(egui::RichText::new(text).size(13.0).color(p.text));
+    ui.label(egui::RichText::new(text).size(13.5).family(crate::theme::semi()).color(p.text));
 }
 
 /// A card title row: caption on the left and an optional action link on the
@@ -1024,19 +1092,27 @@ pub fn section(ui: &mut Ui, text: &str, p: &Palette) -> bool {
     let open = ui.ctx().data_mut(|d| *d.get_persisted_mut_or(id, true));
     let width = ui.available_width().min(150.0);
     let (rect, r) = ui.allocate_exact_size(vec2(width, 20.0), Sense::click());
-    let color = if r.hovered() { p.text } else { p.text_dim };
-    let galley = caps_galley(ui, text, 12.0, color);
+    let color = if r.hovered() { p.text } else { p.text_dim.gamma_multiply(0.85) };
+    let mut job = egui::text::LayoutJob::default();
+    job.append(
+        text,
+        0.0,
+        egui::TextFormat { font_id: FontId::new(11.5, crate::theme::semi()), color, ..Default::default() },
+    );
+    let galley = ui.painter().layout_job(job);
     let text_w = galley.size().x;
     let x = rect.left() + 10.0;
     ui.painter().galley(pos2(x, rect.center().y - galley.size().y / 2.0), galley, color);
-    if r.hovered() {
-        let caret = if open { Icon::CaretDown } else { Icon::CaretUp };
-        icons::paint(
-            ui.painter(),
-            Rect::from_center_size(pos2(x + text_w + 10.0, rect.center().y), vec2(10.0, 10.0)),
-            caret,
-            color,
-        );
+    // Folded sections always show their caret, so it is clear something is hidden.
+    if r.hovered() || !open {
+        // A drawn chevron: down when open, right when folded.
+        let c = pos2(x + text_w + 10.0, rect.center().y);
+        let pts = if open {
+            vec![c + vec2(-3.5, -1.75), c + vec2(0.0, 1.75), c + vec2(3.5, -1.75)]
+        } else {
+            vec![c + vec2(-1.75, -3.5), c + vec2(1.75, 0.0), c + vec2(-1.75, 3.5)]
+        };
+        ui.painter().add(Shape::line(pts, PathStroke::new(1.4, color)));
     }
     if r.on_hover_text(if open { "Fold away" } else { "Show" }).clicked() {
         ui.ctx().data_mut(|d| d.insert_persisted(id, !open));
@@ -1047,8 +1123,13 @@ pub fn section(ui: &mut Ui, text: &str, p: &Palette) -> bool {
 
 /// The live signal: a small accent dot while data is moving, a hollow ring when idle.
 pub fn live_dot(ui: &mut Ui, live: bool, p: &Palette) {
-    let (rect, _) = ui.allocate_exact_size(vec2(10.0, 16.0), Sense::hover());
+    let (rect, _) = ui.allocate_exact_size(vec2(14.0, 16.0), Sense::hover());
     if live {
+        if !crate::theme::reduced_motion() {
+            let t = (ui.input(|i| i.time) as f32 * 0.8).fract();
+            ui.painter().circle_filled(rect.center(), 3.5 + 4.5 * t, p.accent.gamma_multiply(0.45 * (1.0 - t)));
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(50));
+        }
         ui.painter().circle_filled(rect.center(), 3.5, p.accent);
     } else {
         ui.painter().circle_stroke(rect.center(), 3.0, Stroke::new(1.0, p.text_dim));
@@ -1070,27 +1151,35 @@ pub fn paint_pill(
     max_w: f32,
     p: &Palette,
 ) -> Rect {
-    // The dot carries the state; only states that need attention or are live colour the text.
-    let fg = if color == p.red || color == p.yellow || color == p.accent { color } else { p.text_dim };
-    let galley = painter.layout_no_wrap(text.to_owned(), FontId::proportional(12.5), fg);
-    let w = (galley.size().x + 14.0).min(max_w);
+    // Queued and other neutral states read calmly; the rest carry their colour.
+    let neutral = color == p.text_dim;
+    let fg = if neutral { lerp_color(p.text_dim, p.text, 0.3) } else { color };
+    let font = FontId::new(12.0, crate::theme::semi());
+    let text = fit_text(painter, text, &font, (max_w - 26.0).max(0.0));
+    let galley = painter.layout_no_wrap(text, font, fg);
+    let w = (galley.size().x + 26.0).min(max_w.max(0.0));
     let rect = Rect::from_min_size(pos2(left_center.x, left_center.y - 11.0), vec2(w, 22.0));
-    painter.circle_filled(rect.left_center() + vec2(3.0, 0.0), 3.0, color);
+    let fill = if neutral { p.track.gamma_multiply(if p.dark { 0.8 } else { 0.7 }) } else { p.tint(color) };
+    painter.rect_filled(rect, CornerRadius::same(255), fill);
+    painter.circle_filled(rect.left_center() + vec2(10.0, 0.0), 3.0, color);
     painter.with_clip_rect(rect.shrink(1.0)).galley(
-        pos2(rect.left() + 12.0, rect.center().y - galley.size().y / 2.0),
+        pos2(rect.left() + 18.0, rect.center().y - galley.size().y / 2.0),
         galley,
         fg,
     );
     rect
 }
 
-/// Pill-shaped status badge.
-pub fn pill(ui: &mut Ui, text: &str, color: Color32) -> Response {
-    let galley = ui.painter().layout_no_wrap(text.to_owned(), FontId::proportional(12.5), color);
-    let size = galley.size() + vec2(12.0, 6.0);
-    let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
-    ui.painter().circle_filled(rect.left_center() + vec2(3.0, 0.0), 3.0, color);
-    ui.painter().galley(pos2(rect.left() + 12.0, rect.center().y - galley.size().y / 2.0), galley, color);
+/// Width [`paint_pill`] takes for `text`.
+pub fn pill_width(painter: &egui::Painter, text: &str) -> f32 {
+    painter.layout_no_wrap(text.to_owned(), FontId::new(12.0, crate::theme::semi()), Color32::WHITE).size().x + 26.0
+}
+
+/// Pill-shaped status badge placed in the layout.
+pub fn pill(ui: &mut Ui, text: &str, color: Color32, p: &Palette) -> Response {
+    let w = pill_width(ui.painter(), text);
+    let (rect, response) = ui.allocate_exact_size(vec2(w, 22.0), Sense::hover());
+    paint_pill(ui.painter(), rect.left_center(), text, color, w, p);
     response
 }
 
@@ -1109,6 +1198,10 @@ pub fn chip(ui: &mut Ui, label: &str, on: bool, p: &Palette) -> Response {
     };
     ui.painter().rect(rect, CornerRadius::same(255), fill, stroke, egui::StrokeKind::Inside);
     ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, label, font, fg);
+    if response.has_focus() {
+        focus_ring(ui, rect, 255, p);
+    }
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, on, label));
     response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
