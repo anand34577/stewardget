@@ -6,6 +6,8 @@ All notable changes to StewardGet are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-11-14
+
 ### Changed
 - **A livelier look.** File types have their own colours again (video, music, images, documents, archives, programs, custom categories), shown as tinted tiles in the list, cards, details, overview and history. The accent gains a partner hue: primary buttons and live progress bars run as a gradient. Primary buttons have a soft glow, cards a soft lift and a line of light along the top.
 - **Less motion when Windows asks for it.** With *Animation effects* off (Settings > Accessibility > Visual effects), the live dot stops pulsing, progress of unknown size stops sweeping, and fades and switches change at once.
