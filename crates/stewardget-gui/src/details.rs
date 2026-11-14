@@ -47,12 +47,19 @@ impl StewardGetApp {
         // Header line: icon, then the actions on the right, and the name, status
         // and details in the room that leaves (truncated, never under the buttons).
         let status = status_label(&d, &p);
-        let mut sub = format!("{}  \u{00b7}  {}", self.cfg.category_label(d.category), crate::capture::host_of(&d.url));
-        if let Some(total) = d.total {
-            sub = format!("{sub}  \u{00b7}  {}", format_bytes(total));
+        // Kind, site and size; whatever is unknown is left out rather than shown empty.
+        let mut parts = vec![self.cfg.category_label(d.category)];
+        let host = crate::capture::host_of(&d.url);
+        if !host.is_empty() {
+            parts.push(host);
         }
+        if let Some(total) = d.total {
+            parts.push(format_bytes(total));
+        }
+        let sub = parts.join("  \u{00b7}  ");
+        let shown_name = widgets::display_name(&d.file_name, &d.url);
         ui.horizontal(|ui| {
-            widgets::icon_tile(ui, Icon::for_category(d.category), 38.0, p.text_dim, &p);
+            widgets::icon_tile(ui, Icon::for_category(d.category), 38.0, p.category(d.category), &p);
             ui.add_space(4.0);
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
@@ -90,16 +97,16 @@ impl StewardGetApp {
                         ui.spacing_mut().item_spacing.y = 3.0;
                         ui.add(
                             egui::Label::new(
-                                RichText::new(&d.file_name)
+                                RichText::new(&shown_name)
                                     .size(theme::size::LG + 1.0)
                                     .family(theme::semi())
                                     .color(p.text),
                             )
                             .truncate(),
                         )
-                        .on_hover_text(&d.file_name);
+                        .on_hover_text(&shown_name);
                         ui.horizontal(|ui| {
-                            widgets::pill(ui, &status.0, status.1);
+                            widgets::pill(ui, &status.0, status.1, &p);
                             ui.add(
                                 egui::Label::new(RichText::new(&sub).size(theme::size::SM).color(p.text_dim))
                                     .truncate(),
@@ -205,7 +212,7 @@ impl StewardGetApp {
                     );
                     ui.horizontal(|ui| {
                         let (label, color) = status_label(d, &p);
-                        widgets::pill(ui, &label, color);
+                        widgets::pill(ui, &label, color, &p);
                         ui.add(
                             egui::Label::new(
                                 RichText::new(crate::capture::host_of(&d.url)).size(theme::size::SM).color(p.text_dim),
@@ -220,13 +227,7 @@ impl StewardGetApp {
             // Progress ring and the figures that go with it.
             let (hero, _) = ui.allocate_exact_size(vec2(ui.available_width(), 128.0), egui::Sense::hover());
             let painter = ui.painter();
-            painter.rect(
-                hero,
-                egui::CornerRadius::same(theme::radius::LG),
-                p.bg,
-                egui::Stroke::new(1.0, p.border),
-                egui::StrokeKind::Inside,
-            );
+            painter.add(widgets::card_surface(hero, p.bg, egui::Stroke::new(1.0, p.border), &p));
             let center = hero.left_center() + vec2(64.0, 0.0);
             let (from, to) = widgets::status_gradient(d.status, &p);
             let live = d.status == Status::Downloading;

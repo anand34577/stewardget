@@ -73,7 +73,12 @@ impl StewardGetApp {
                             });
                             let value = if live { format_speed(snap.speed) } else { "Idle".to_owned() };
                             let color = if live { p.text } else { p.text_dim };
-                            ui.label(RichText::new(value).size(crate::theme::size::DISPLAY + 4.0).color(color));
+                            ui.label(
+                                RichText::new(value)
+                                    .size(crate::theme::size::DISPLAY + 4.0)
+                                    .family(crate::theme::semi())
+                                    .color(color),
+                            );
                             let line = match (active.len(), eta) {
                                 (0, _) if waiting > 0 => format!("{waiting} waiting to start"),
                                 (0, _) => "Nothing is downloading. Paste a link to begin.".to_owned(),
@@ -184,7 +189,7 @@ impl StewardGetApp {
             ui.set_min_width(ui.available_width());
             if widgets::card_header(ui, "Downloading", Some("See all"), &p) {
                 self.page = Page::Downloads;
-                self.filter = ListFilter::All;
+                self.filter = ListFilter::Active;
             }
             if active.is_empty() {
                 empty_line(ui, &p, Icon::Download, "Nothing is downloading right now.");
@@ -212,7 +217,7 @@ impl StewardGetApp {
                 let name_w = rect.width() - 170.0;
                 let name = widgets::fit_text(
                     painter,
-                    &d.file_name,
+                    &widgets::display_name(&d.file_name, &d.url),
                     &egui::FontId::new(13.5, crate::theme::semi()),
                     name_w - text_x,
                 );
@@ -253,7 +258,10 @@ impl StewardGetApp {
                     );
                 }
                 if response.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                    // The Downloading list always shows it, whatever list was open last.
                     self.page = Page::Downloads;
+                    self.filter = ListFilter::Active;
+                    self.search.clear();
                     self.selection.clear();
                     self.selection.insert(d.id);
                     self.cursor = Some(d.id);
@@ -316,7 +324,11 @@ impl StewardGetApp {
                     egui::FontId::proportional(12.0),
                     p.text_dim,
                 );
-                if response.on_hover_text("Open").on_hover_cursor(egui::CursorIcon::PointingHand).clicked() && ok {
+                let exists = crate::table::file_exists(&e.path);
+                let tip = if exists { "Open" } else { "The file was moved or deleted" };
+                let response = response.on_hover_text(tip);
+                let response = if exists { response.on_hover_cursor(egui::CursorIcon::PointingHand) } else { response };
+                if response.clicked() && ok && exists {
                     self.open_path(&e.path);
                 }
             }
@@ -487,7 +499,7 @@ impl StewardGetApp {
                 );
             }
         });
-        ui.add_space(5.0);
+        ui.add_space(12.0);
     }
 
     /// Offers a queue that runs in the hours the connection is least used.

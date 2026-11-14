@@ -94,7 +94,7 @@ impl StewardGetApp {
 
         egui::Frame::new().inner_margin(Margin::symmetric(20, 16)).show(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.label(RichText::new("Settings").size(19.0).family(theme::semi()).color(p.text));
+                ui.label(RichText::new("Settings").size(theme::size::XL + 2.0).family(theme::semi()).color(p.text));
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if widgets::button(ui, ButtonKind::Primary, Some(Icon::Check), "Save", dirty, &p).clicked() {
                         match self.engine.update_config(draft.clone()) {
@@ -125,11 +125,21 @@ impl StewardGetApp {
                 });
             });
             ui.add_space(6.0);
-            ui.add(
-                egui::TextEdit::singleline(&mut self.settings_search)
+            let search = ui.add(
+                widgets::input(&mut self.settings_search)
                     .hint_text("Search settings…")
-                    .desired_width(260.0),
+                    .margin(Margin { left: 32, right: 10, top: 7, bottom: 7 })
+                    .desired_width(280.0),
             );
+            crate::icons::paint(
+                ui.painter(),
+                egui::Rect::from_center_size(search.rect.left_center() + vec2(16.0, 0.0), vec2(14.0, 14.0)),
+                Icon::Search,
+                if search.has_focus() { p.accent } else { p.text_dim },
+            );
+            if search.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                self.settings_search.clear();
+            }
             ui.add_space(6.0);
             let searching = !self.settings_search.trim().is_empty();
 
@@ -590,7 +600,7 @@ impl StewardGetApp {
                 row(ui, &p, "Accept invalid certificates", "Dangerous. Only for trusted internal servers.", |ui| {
                     toggle(ui, &mut draft.insecure_tls, &p);
                     if draft.insecure_tls {
-                        widgets::pill(ui, "insecure", p.red);
+                        widgets::pill(ui, "insecure", p.red, &p);
                     }
                 });
             }),
@@ -846,11 +856,11 @@ fn tab_button(ui: &mut Ui, icon: Icon, label: &str, selected: bool, p: &Palette,
     let width = if full_width { ui.available_width() } else { galley.size().x + 46.0 };
     let (rect, response) = ui.allocate_exact_size(vec2(width, 34.0), Sense::click());
     if selected {
-        ui.painter().rect_filled(
-            rect,
-            CornerRadius::same(crate::theme::radius::MD),
-            p.accent.gamma_multiply(if p.dark { 0.18 } else { 0.12 }),
-        );
+        ui.painter().rect_filled(rect, CornerRadius::same(crate::theme::radius::MD), p.selected_fill());
+        if full_width {
+            let bar = egui::Rect::from_center_size(rect.left_center() + vec2(1.5, 0.0), vec2(3.0, rect.height() * 0.5));
+            ui.painter().rect_filled(bar, CornerRadius::same(2), p.accent);
+        }
     } else if response.hovered() {
         ui.painter().rect_filled(rect, CornerRadius::same(crate::theme::radius::MD), p.card_hover);
     }
@@ -863,6 +873,10 @@ fn tab_button(ui: &mut Ui, icon: Icon, label: &str, selected: bool, p: &Palette,
     );
     let fg = if selected { p.text } else { p.text_dim };
     ui.painter().galley(rect.left_center() + vec2(36.0, -galley.size().y / 2.0), galley, fg);
+    if response.has_focus() {
+        widgets::focus_ring(ui, rect, crate::theme::radius::MD, p);
+    }
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Tab, true, selected, label));
     response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 

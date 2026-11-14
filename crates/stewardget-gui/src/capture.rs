@@ -359,7 +359,7 @@ impl StewardGetApp {
                         ui.horizontal(|ui| {
                             link_status(ui, &p, &check);
                             if waiting > 0 {
-                                widgets::pill(ui, &format!("+{waiting} waiting"), p.accent2)
+                                widgets::pill(ui, &format!("+{waiting} waiting"), p.accent2, &p)
                                     .on_hover_text("More downloads from the browser are waiting for this window");
                             }
                         });
@@ -541,7 +541,7 @@ impl StewardGetApp {
                                     },
                                     |ui| {
                                         if item.known {
-                                            widgets::pill(ui, "in list", p.yellow);
+                                            widgets::pill(ui, "in list", p.yellow, &p);
                                         }
                                     },
                                 );
@@ -685,10 +685,10 @@ fn link_status(ui: &mut Ui, p: &Palette, check: &Option<Result<LinkInfo, String>
             let size = info.size.map_or("Unknown size".to_owned(), format_bytes);
             ui.label(RichText::new(size).size(12.0).color(p.text_dim));
             if info.resumable {
-                widgets::pill(ui, "Resumable", p.green)
+                widgets::pill(ui, "Resumable", p.green, p)
                     .on_hover_text("Pausing keeps the progress, and it downloads over several connections.");
             } else {
-                widgets::pill(ui, "No resume support", p.yellow).on_hover_text(
+                widgets::pill(ui, "No resume support", p.yellow, p).on_hover_text(
                     "The server doesn't support byte ranges: one connection, and pausing restarts from zero.",
                 );
             }
@@ -716,7 +716,7 @@ fn header(ui: &mut Ui, p: &Palette, icon: Icon, text: &str, waiting: usize) {
         ui.label(RichText::new(text).size(17.0).family(theme::semi()).color(p.text));
         if waiting > 0 {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                widgets::pill(ui, &format!("{waiting} more waiting"), p.accent2);
+                widgets::pill(ui, &format!("{waiting} more waiting"), p.accent2, p);
             });
         }
     });

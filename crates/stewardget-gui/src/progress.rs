@@ -231,6 +231,24 @@ pub fn shown_connections(d: &DownloadView, default_connections: usize) -> usize 
         .clamp(1, 32)
 }
 
+const CLOSE_WHEN_DONE: &str = "Close when finished";
+
+/// The "Close when finished" box, kept on one line.
+fn close_when_done(ui: &mut Ui, w: &mut ProgressWindow) {
+    ui.scope(|ui| {
+        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+        ui.checkbox(&mut w.close_when_done, CLOSE_WHEN_DONE);
+    });
+}
+
+/// Width the "Close when finished" box needs: the box, its gap and the label.
+fn close_when_done_width(ui: &Ui) -> f32 {
+    let font = egui::TextStyle::Button.resolve(ui.style());
+    let text = ui.painter().layout_no_wrap(CLOSE_WHEN_DONE.to_owned(), font, egui::Color32::WHITE).size().x;
+    let s = ui.spacing();
+    s.icon_width + s.icon_spacing + text + s.button_padding.x * 2.0
+}
+
 /// File icon, name and where it comes from.
 fn header(ui: &mut Ui, p: &Palette, d: &DownloadView) {
     ui.horizontal(|ui| {
@@ -271,6 +289,7 @@ fn running_body(
     }
     if d.status != Status::Failed {
         ui.add_space(5.0);
+        let mut wrap_close = false;
         ui.horizontal(|ui| {
             ui.label(RichText::new("Speed limit").color(p.text_dim));
             let current = d.options.speed_limit;
@@ -293,10 +312,17 @@ fn running_body(
                     action = Some(Action::Connections(n));
                 }
             }
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                ui.checkbox(&mut w.close_when_done, "Close when finished");
-            });
+            // On the same row only when it fits whole; a squeezed label wrapped one letter per line.
+            if ui.available_width() >= close_when_done_width(ui) {
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| close_when_done(ui, w));
+            } else {
+                wrap_close = true;
+            }
         });
+        if wrap_close {
+            ui.add_space(2.0);
+            close_when_done(ui, w);
+        }
     }
     if w.confirm_stop && d.status.can_pause() {
         ui.add_space(6.0);

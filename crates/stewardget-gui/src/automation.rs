@@ -163,9 +163,7 @@ impl StewardGetApp {
             ui.add_space(4.0);
             let mut remove = None;
             let mut up = None;
-            let count = draft.post_actions.len();
-            for i in 0..count {
-                let rule = &mut draft.post_actions[i];
+            for (i, rule) in draft.post_actions.iter_mut().enumerate() {
                 ui.push_id(("post-rule", i), |ui| {
                     egui::Frame::new()
                         .fill(p.card_hover.gamma_multiply(0.5))
@@ -516,10 +514,10 @@ fn tool_block(ui: &mut Ui, p: &crate::theme::Palette, tool: &ToolInfo, chosen: &
 
     row(ui, p, tool.name, tool.help, |ui| {
         match (&found, &version) {
-            (None, _) => widgets::pill(ui, "not found", p.yellow),
-            (Some(_), None) => widgets::pill(ui, "checking…", p.text_dim),
-            (Some(_), Some(Ok(v))) => widgets::pill(ui, &format!("ready · {v}"), p.green),
-            (Some(_), Some(Err(_))) => widgets::pill(ui, "not working", p.red),
+            (None, _) => widgets::pill(ui, "not found", p.yellow, p),
+            (Some(_), None) => widgets::pill(ui, "checking…", p.text_dim, p),
+            (Some(_), Some(Ok(v))) => widgets::pill(ui, &format!("ready · {v}"), p.green, p),
+            (Some(_), Some(Err(_))) => widgets::pill(ui, "not working", p.red, p),
         };
         if widgets::button(ui, ButtonKind::Ghost, Some(Icon::FolderOpen), "Choose file…", !installing, p)
             .on_hover_text("Pick the program on your computer")

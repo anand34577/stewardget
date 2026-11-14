@@ -20,7 +20,6 @@ pub mod size {
     pub const DISPLAY: f32 = 34.0;
 }
 
-/// Corner radii.
 /// Corner radii. One step per kind of thing, so the same kind of element is
 /// rounded the same way everywhere: `XS` tags and key caps, `SM` items inside
 /// menus and lists, `MD` controls (buttons, fields, drop-downs, nav entries),
@@ -34,8 +33,31 @@ pub mod radius {
     pub const XL: u8 = 14;
 }
 
-/// Letter spacing for short upper-case labels (about 7% of their size).
-pub const CAPS_TRACKING: f32 = 0.0;
+/// Letter spacing for short upper-case overlines (section titles, column heads).
+pub const CAPS_TRACKING: f32 = 0.2;
+
+static REDUCED_MOTION: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Whether the system asks for less motion (Windows: Settings > Accessibility >
+/// Visual effects > Animation effects off). Looping and decorative animation is
+/// skipped then, and transitions are instant. Read when the appearance is applied.
+pub fn reduced_motion() -> bool {
+    REDUCED_MOTION.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+#[cfg(windows)]
+fn system_reduces_motion() -> bool {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{SPI_GETCLIENTAREAANIMATION, SystemParametersInfoW};
+    let mut enabled: i32 = 1;
+    // SAFETY: SPI_GETCLIENTAREAANIMATION writes one BOOL to the pointer we pass.
+    let ok = unsafe { SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, (&raw mut enabled).cast(), 0) };
+    ok != 0 && enabled == 0
+}
+
+#[cfg(not(windows))]
+fn system_reduces_motion() -> bool {
+    false
+}
 
 #[derive(Clone, Copy)]
 pub struct Palette {
@@ -55,6 +77,9 @@ pub struct Palette {
     pub accent: Color32,
     /// Text and icons drawn on top of `accent`.
     pub on_accent: Color32,
+    /// The accent's partner hue: the far end of gradients (primary buttons, live
+    /// progress, charts) and secondary highlights. Close enough in hue to read as
+    /// one colour, far enough to give surfaces some life.
     pub accent2: Color32,
     pub green: Color32,
     pub yellow: Color32,
@@ -132,10 +157,9 @@ impl Palette {
                 ..Self::dark_base()
             },
         };
-        let (a, _) = accent_colors(accent, p.dark);
+        let (a, b) = accent_colors(accent, p.dark);
         p.accent = a;
-        // One signal colour: what used to take a second hue now takes the accent.
-        p.accent2 = a;
+        p.accent2 = b;
         p.on_accent = if luminance(a) > 0.55 { rgb(17, 20, 28) } else { Color32::WHITE };
         p
     }
@@ -173,16 +197,48 @@ impl Palette {
         }
     }
 
-    /// Colour of a category's icon: muted, like every other icon.
+    /// Colour of a category: each kind of file has its own hue, so a list can be
+    /// scanned by type at a glance. Tuned per theme to stay readable as an icon on
+    /// a tint of itself.
     pub fn category(&self, category: Category) -> Color32 {
-        let _ = category;
-        self.text_dim
+        const DARK: [(u8, u8, u8); 7] = [
+            (244, 114, 182), // rose: video
+            (167, 139, 250), // violet: audio
+            (251, 191, 36),  // amber: images
+            (96, 165, 250),  // blue: documents
+            (251, 146, 60),  // orange: archives
+            (45, 212, 191),  // teal: programs
+            (163, 230, 53),  // lime: custom
+        ];
+        const LIGHT: [(u8, u8, u8); 7] =
+            [(219, 39, 119), (124, 58, 237), (180, 110, 4), (37, 99, 235), (214, 76, 8), (13, 128, 118), (77, 124, 15)];
+        let hue = |i: usize| {
+            let (r, g, b) = if self.dark { DARK[i % 7] } else { LIGHT[i % 7] };
+            Color32::from_rgb(r, g, b)
+        };
+        match category {
+            Category::Video => hue(0),
+            Category::Audio => hue(1),
+            Category::Image => hue(2),
+            Category::Document => hue(3),
+            Category::Archive => hue(4),
+            Category::Program => hue(5),
+            Category::Other => self.text_dim,
+            // Custom categories cycle through the palette, starting with a hue the
+            // built-in ones don't use.
+            Category::Custom(id) => hue(6 + id as usize),
+        }
     }
 
-    /// Fill of primary buttons and live progress: the accent, solid. Kept as a
-    /// pair so callers that paint two ends stay simple.
+    /// The two ends of primary buttons and live progress.
     pub fn gradient(&self) -> (Color32, Color32) {
-        (self.accent, self.accent)
+        (self.accent, self.accent2)
+    }
+
+    /// A translucent wash of `color` for the fill behind a coloured icon, a status
+    /// pill or a callout: strong enough to read as that colour on every surface.
+    pub fn tint(&self, color: Color32) -> Color32 {
+        color.gamma_multiply(if self.dark { 0.16 } else { 0.11 })
     }
 
     /// Fill of the selected row or navigation entry.
@@ -195,30 +251,41 @@ impl Palette {
         if self.dark { Color32::from_black_alpha(165) } else { Color32::from_rgba_unmultiplied(15, 17, 26, 90) }
     }
 
-    /// Elevation for things that float above the page (dialogs, menus). Cards and
-    /// buttons get none on dark, where surface steps and hairlines carry depth.
+    /// Elevation: soft, neutral shadows that grow with `blur`. Dark themes need
+    /// more opacity for the same perceived lift.
     pub fn shadow(&self, offset: i8, blur: u8) -> Shadow {
-        let alpha = match (self.dark, blur >= 18) {
-            (true, true) => 120,
-            (true, false) => return Shadow::NONE,
-            (false, true) => 24,
-            (false, false) => 10,
+        let alpha = match (self.dark, blur) {
+            (true, b) if b >= 18 => 140,
+            (true, b) if b >= 8 => 70,
+            (true, _) => 40,
+            (false, b) if b >= 18 => 30,
+            (false, b) if b >= 8 => 16,
+            (false, _) => 10,
         };
         Shadow { offset: [0, offset], blur, spread: 0, color: Color32::from_black_alpha(alpha) }
     }
 
-    /// Under a card: nothing on dark, a small neutral lift on light.
+    /// Under a card: a soft lift that separates it from the canvas.
     pub fn card_shadow(&self) -> Shadow {
-        self.shadow(1, 4)
+        self.shadow(1, 6)
     }
 
-    /// No coloured halos. Kept so callers don't need to change.
+    /// A soft coloured halo under accent-filled controls (primary buttons, the
+    /// live dot). Fainter on light themes, where colour carries further.
     pub fn glow(&self, color: Color32, blur: u8) -> Shadow {
-        let _ = (color, blur);
-        Shadow::NONE
+        let strength = if self.dark { 0.40 } else { 0.28 };
+        Shadow { offset: [0, 3], blur, spread: 0, color: color.gamma_multiply(strength) }
+    }
+
+    /// The hairline of light along the top edge of raised surfaces (cards, the
+    /// canvas) that makes them read as lit from above.
+    pub fn highlight(&self) -> Color32 {
+        if self.dark { Color32::from_white_alpha(9) } else { Color32::from_white_alpha(180) }
     }
 
     pub fn apply(&self, ctx: &egui::Context) {
+        let reduce = system_reduces_motion();
+        REDUCED_MOTION.store(reduce, std::sync::atomic::Ordering::Relaxed);
         let mut visuals = if self.dark { Visuals::dark() } else { Visuals::light() };
         visuals.dark_mode = self.dark;
         visuals.panel_fill = self.sidebar;
@@ -305,6 +372,8 @@ impl Palette {
                 ..egui::style::ScrollStyle::floating()
             };
             style.interaction.selectable_labels = false;
+            // Fades, slides and toggles happen at once when the system asks for less motion.
+            style.animation_time = if reduce { 0.0 } else { 0.15 };
             // Text that doesn't fit wraps (labels that say `truncate` still cut) instead of
             // widening the row, which would push its neighbours and the window's edge out.
             style.wrap_mode = Some(egui::TextWrapMode::Wrap);
@@ -313,20 +382,22 @@ impl Palette {
 }
 
 fn accent_colors(accent: Accent, dark: bool) -> (Color32, Color32) {
+    // The accent and its gradient partner: a neighbouring hue of similar weight,
+    // so text on either end stays readable (see the contrast test).
     let rgb = Color32::from_rgb;
     match (accent, dark) {
-        (Accent::Violet, true) => (rgb(139, 108, 255), rgb(34, 211, 238)),
-        (Accent::Violet, false) => (rgb(109, 74, 255), rgb(8, 145, 178)),
-        (Accent::Blue, true) => (rgb(84, 142, 255), rgb(45, 212, 191)),
-        (Accent::Blue, false) => (rgb(37, 99, 235), rgb(13, 148, 136)),
-        (Accent::Teal, true) => (rgb(45, 212, 191), rgb(96, 165, 250)),
-        (Accent::Teal, false) => (rgb(13, 148, 136), rgb(37, 99, 235)),
+        (Accent::Violet, true) => (rgb(139, 108, 255), rgb(168, 85, 247)),
+        (Accent::Violet, false) => (rgb(109, 74, 255), rgb(147, 51, 234)),
+        (Accent::Blue, true) => (rgb(84, 142, 255), rgb(99, 102, 241)),
+        (Accent::Blue, false) => (rgb(37, 99, 235), rgb(79, 70, 229)),
+        (Accent::Teal, true) => (rgb(45, 212, 191), rgb(56, 189, 248)),
+        (Accent::Teal, false) => (rgb(13, 148, 136), rgb(8, 145, 178)),
         (Accent::Green, true) => (rgb(74, 222, 128), rgb(45, 212, 191)),
         (Accent::Green, false) => (rgb(22, 163, 74), rgb(13, 148, 136)),
         (Accent::Amber, true) => (rgb(251, 191, 36), rgb(251, 146, 60)),
         (Accent::Amber, false) => (rgb(217, 119, 6), rgb(234, 88, 12)),
-        (Accent::Rose, true) => (rgb(251, 113, 133), rgb(192, 132, 252)),
-        (Accent::Rose, false) => (rgb(225, 29, 72), rgb(147, 51, 234)),
+        (Accent::Rose, true) => (rgb(251, 113, 133), rgb(244, 114, 182)),
+        (Accent::Rose, false) => (rgb(225, 29, 72), rgb(219, 39, 119)),
     }
 }
 
@@ -395,6 +466,13 @@ mod tests {
                     let dim = contrast(p.text_dim, bg);
                     assert!(body >= 7.0, "{theme:?}/{accent:?}: text on {name} is {body:.1}:1");
                     assert!(dim >= 3.5, "{theme:?}/{accent:?}: dim text on {name} is {dim:.1}:1");
+                }
+                // Category icons sit on a tint of themselves on a card.
+                for c in Category::ALL {
+                    let fg = p.category(c);
+                    let bg = crate::widgets::lerp_color(p.card, fg, if p.dark { 0.16 } else { 0.11 });
+                    let k = contrast(fg, bg);
+                    assert!(k >= 3.0, "{theme:?}/{accent:?}: {c:?} icon on its tint is {k:.1}:1");
                 }
                 let on = contrast(p.on_accent, p.accent);
                 assert!(on >= 3.0, "{theme:?}/{accent:?}: text on the accent is {on:.1}:1");

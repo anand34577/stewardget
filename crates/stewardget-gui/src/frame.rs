@@ -161,6 +161,7 @@ fn caption_button(ui: &mut Ui, kind: Caption, tip: &str, p: &Palette) -> Respons
             painter.line_segment([c + vec2(-s, s), c + vec2(s, -s)], stroke);
         }
     }
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tip));
     response.on_hover_text(tip)
 }
 

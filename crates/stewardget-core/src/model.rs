@@ -87,6 +87,9 @@ pub struct DownloadOptions {
     /// Set when this file is one half of a video (picture or sound) that is
     /// joined with its other half once both have arrived.
     pub mux: Option<crate::Mux>,
+    /// Found through yt-dlp: the page and format, so an expired link can be
+    /// renewed without the user finding the video again.
+    pub media: Option<crate::MediaSource>,
     /// What to do if the file name is taken in the folder; the setting's
     /// choice when `None`.
     pub existing: Option<crate::ExistingFile>,
