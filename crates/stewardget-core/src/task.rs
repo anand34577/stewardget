@@ -264,6 +264,7 @@ async fn run_inner(job: &Job) -> Result<Outcome, Error> {
         global: Arc::clone(&job.global_limiter),
         queue: Arc::clone(&job.queue_limiter),
         lanes,
+        default_route: AtomicBool::new(false),
         stop: job.cancel.child_token(),
         min_split,
         max_retries: job.config.max_retries,
@@ -524,6 +525,9 @@ struct WorkerCtx {
     global: Arc<RateLimiter>,
     queue: Arc<RateLimiter>,
     lanes: Vec<Lane>,
+    /// The chosen adapters can't reach the server (one lost its address or
+    /// its internet): connections leave through the system's default route.
+    default_route: AtomicBool,
     stop: CancellationToken,
     min_split: u64,
     max_retries: u32,
@@ -547,6 +551,16 @@ impl WorkerCtx {
     /// Where `lane` fetches from.
     fn lane_url(&self, lane: &Lane) -> Url {
         lane.mirror_url.clone().unwrap_or_else(|| self.current_url())
+    }
+
+    /// The client `lane` connects with.
+    fn lane_client<'a>(&'a self, lane: &'a Lane) -> &'a Client {
+        if self.default_route.load(Ordering::Relaxed) { &self.client } else { &lane.link.client }
+    }
+
+    /// The local address `lane` connects from, if it is tied to one.
+    fn lane_address(&self, lane: &Lane) -> Option<std::net::IpAddr> {
+        lane.link.address.filter(|_| !self.default_route.load(Ordering::Relaxed))
     }
 
     fn alive_lanes(&self) -> usize {
@@ -685,6 +699,7 @@ async fn work(ctx: &Arc<WorkerCtx>, lane: &mut usize, flow: &mut Flow) -> Result
             let this = &ctx.lanes[*lane];
             let before = ctx.table().segments[idx].written;
             let url = ctx.lane_url(this);
+            let adapter_bound = ctx.lane_address(this).is_some();
             match fetch_segment(ctx, idx, this, *lane, &url, flow).await {
                 Ok(()) => {
                     ctx.table().segments[idx].active = false;
@@ -724,6 +739,13 @@ async fn work(ctx: &Arc<WorkerCtx>, lane: &mut usize, flow: &mut Flow) -> Result
                         *this.stat.reason.lock_ok() = Some(e.to_string());
                         attempt = 0;
                         continue; // the top of the loop moves to a live lane
+                    }
+                    // No adapter left that works, but the computer may still be
+                    // online: Wi-Fi that reconnected has a new address.
+                    if adapter_bound && !progressed && attempt >= 2 && matches!(e, Error::Network(_) | Error::Timeout) {
+                        ctx.default_route.store(true, Ordering::Relaxed);
+                        attempt = 0;
+                        continue;
                     }
                     if !e.is_retryable() || attempt >= ctx.max_retries {
                         ctx.table().release(idx);
@@ -780,7 +802,7 @@ async fn fetch_segment(
         tokio::select! {
             biased;
             _ = ctx.stop.cancelled() => return Err(Error::Cancelled),
-            r = tokio::time::timeout(ctx.header_timeout, ftp::open(url, offset, lane.link.address)) => {
+            r = tokio::time::timeout(ctx.header_timeout, ftp::open(url, offset, ctx.lane_address(lane))) => {
                 r.map_err(|_| Error::Timeout)??
             }
         }
@@ -871,7 +893,7 @@ async fn fetch_segment(
 
 /// Sends the ranged request for a segment and checks the answer.
 async fn open_http(ctx: &WorkerCtx, lane: &Lane, url: &Url, offset: u64, end: u64) -> Result<ftp::ByteStream, Error> {
-    let mut req = lane.link.client.get(url.clone()).headers(ctx.headers_for(url));
+    let mut req = ctx.lane_client(lane).get(url.clone()).headers(ctx.headers_for(url));
     if ctx.ranged {
         req = req.header(header::RANGE, format!("bytes={offset}-{}", end - 1));
         if let Some(etag) = &ctx.etag {
@@ -1077,5 +1099,91 @@ mod tests {
         let h = without_credentials(h);
         assert!(h.get(header::COOKIE).is_none() && h.get(header::AUTHORIZATION).is_none());
         assert!(h.get(header::REFERER).is_some(), "the referrer is not a credential");
+    }
+
+    struct SaveTo(PathBuf);
+
+    impl Hooks for SaveTo {
+        fn on_probe(&self, _probe: &Probe) -> PathBuf {
+            self.0.clone()
+        }
+        fn on_status(&self, _status: Status) {}
+    }
+
+    /// Serves `data` with byte ranges on the loopback address.
+    async fn serve(data: Arc<Vec<u8>>) -> Url {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            while let Ok((mut sock, _)) = listener.accept().await {
+                let data = Arc::clone(&data);
+                tokio::spawn(async move {
+                    let mut req = Vec::new();
+                    let mut tmp = [0u8; 2048];
+                    while !req.windows(4).any(|w| w == b"\r\n\r\n") {
+                        match sock.read(&mut tmp).await {
+                            Ok(0) | Err(_) => return,
+                            Ok(n) => req.extend_from_slice(&tmp[..n]),
+                        }
+                    }
+                    let req = String::from_utf8_lossy(&req).to_ascii_lowercase();
+                    let (a, b) = req
+                        .lines()
+                        .find_map(|l| l.strip_prefix("range: bytes="))
+                        .and_then(|r| r.trim().split_once('-'))
+                        .and_then(|(a, b)| Some((a.parse::<usize>().ok()?, b.parse::<usize>().ok()?)))
+                        .unwrap();
+                    let b = b.min(data.len() - 1);
+                    let head = format!(
+                        "HTTP/1.1 206 Partial Content\r\ncontent-length: {}\r\ncontent-range: bytes {a}-{b}/{}\r\nconnection: close\r\n\r\n",
+                        b - a + 1,
+                        data.len()
+                    );
+                    let _ = sock.write_all(head.as_bytes()).await;
+                    let _ = sock.write_all(&data[a..=b]).await;
+                });
+            }
+        });
+        Url::parse(&format!("http://{addr}/file.bin")).unwrap()
+    }
+
+    /// The saved adapter's address is gone (Wi-Fi reconnected and was given a
+    /// new one), yet the file is reachable over the default connection.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_vanished_adapter_address_falls_back_to_the_default_connection() {
+        let data: Arc<Vec<u8>> = Arc::new((0..512 * 1024).map(|i| (i % 251) as u8).collect());
+        let url = serve(Arc::clone(&data)).await;
+        let dir = std::env::temp_dir().join(format!("stewardget-stale-link-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // 192.0.2.0/24 is reserved for documentation: never a local address.
+        let gone: std::net::IpAddr = "192.0.2.1".parse().unwrap();
+        let bound = Client::builder().local_address(gone).build().unwrap();
+        let job = Job {
+            url,
+            options: DownloadOptions::default(),
+            config: Config {
+                connections: 2,
+                min_split_size: 64 * 1024,
+                max_retries: 3,
+                auto_tune: false,
+                ..Config::default()
+            },
+            client: Client::new(),
+            links: Arc::new(LinkPool { links: vec![Arc::new(Link::new("Wi-Fi", Some(gone), bound, 0))] }),
+            global_limiter: Arc::new(RateLimiter::new(0)),
+            queue_limiter: Arc::new(RateLimiter::new(0)),
+            shared: Arc::new(Shared::new(0)),
+            cancel: CancellationToken::new(),
+            hooks: Arc::new(SaveTo(dir.join("file.bin"))),
+            relaxed_resume: false,
+        };
+
+        let outcome = tokio::time::timeout(Duration::from_secs(45), run(job)).await.expect("the download finishes");
+        let Outcome::Completed { path, .. } = outcome else { panic!("{outcome:?}") };
+        assert!(std::fs::read(path).unwrap() == *data, "the file is intact");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

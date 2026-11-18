@@ -6,6 +6,9 @@ All notable changes to StewardGet are listed here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- Downloads no longer stay on *Reconnecting* and fail after Wi-Fi reconnects with a new address while several network adapters are in use. Adapters are followed to their new address, and a download whose adapters can't reach the server carries on over the default connection.
+
 ## [0.15.0] - 2026-11-14
 
 ### Changed

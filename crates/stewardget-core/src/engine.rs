@@ -1147,11 +1147,10 @@ impl Engine {
             None => {
                 // Only the caps changed: apply them without dropping connections.
                 for link in &self.inner.links.read_ok().links {
-                    if let Some(l) = config
-                        .interfaces
-                        .iter()
-                        .find(|l| Some(l.address.as_str()) == link.address.map(|a| a.to_string()).as_deref())
-                    {
+                    if let Some(l) = config.interfaces.iter().find(|l| {
+                        l.name == link.label
+                            || Some(l.address.as_str()) == link.address.map(|a| a.to_string()).as_deref()
+                    }) {
                         link.limiter.set_rate(l.limit);
                     }
                 }
@@ -1708,6 +1707,22 @@ impl Inner {
         }
     }
 
+    /// The links for a download starting now. Adapters come and go and change
+    /// address while the app runs, so the pool is rebuilt when it is out of date.
+    fn current_links(&self) -> Arc<LinkPool> {
+        let pool = Arc::clone(&self.links.read_ok());
+        let config = self.config();
+        let wanted: Vec<_> = usable_links(&config, &crate::net::adapters()).into_iter().map(|(_, a)| a).collect();
+        let in_use: Vec<_> = pool.links.iter().filter_map(|l| l.address).collect();
+        if wanted == in_use {
+            return pool;
+        }
+        let fresh = Arc::new(build_pool(&config, &self.client.read_ok()));
+        *self.links.write_ok() = Arc::clone(&fresh);
+        self.link_stats.lock_ok().clear();
+        fresh
+    }
+
     fn start(self: &Arc<Self>, item: &mut Item) {
         let url = match Url::parse(&item.rec.url) {
             Ok(u) => u,
@@ -1725,7 +1740,7 @@ impl Inner {
             options: item.rec.options.clone(),
             config: self.config(),
             client: self.client.read_ok().clone(),
-            links: Arc::clone(&self.links.read_ok()),
+            links: self.current_links(),
             global_limiter: Arc::clone(&self.global_limiter),
             queue_limiter: self.queue_limiter(item.rec.queue),
             shared: Arc::clone(&shared),
@@ -2521,24 +2536,40 @@ fn parse_url(input: &str) -> Result<Url, Error> {
 /// The links downloads use: the enabled adapters that are really present when
 /// bonding is on, otherwise the default connection.
 fn build_pool(config: &Config, base: &Client) -> LinkPool {
-    let present = crate::net::adapters();
     let mut links: Vec<Arc<Link>> = Vec::new();
-    if config.multi_link {
-        for l in config.interfaces.iter().filter(|l| l.enabled) {
-            let Ok(addr) = l.address.parse::<std::net::IpAddr>() else { continue };
-            if !present.iter().any(|a| a.address == addr) {
-                continue; // unplugged or switched off
-            }
-            if let Ok(client) = build_client_for(config, Some(addr)) {
-                let label = if l.name.trim().is_empty() { addr.to_string() } else { l.name.clone() };
-                links.push(Arc::new(Link::new(label, Some(addr), client, l.limit)));
-            }
+    for (l, addr) in usable_links(config, &crate::net::adapters()) {
+        if let Ok(client) = build_client_for(config, Some(addr)) {
+            let label = if l.name.trim().is_empty() { addr.to_string() } else { l.name.clone() };
+            links.push(Arc::new(Link::new(label, Some(addr), client, l.limit)));
         }
     }
     if links.is_empty() {
         links.push(Arc::new(Link::new("Default connection", None, base.clone(), 0)));
     }
     LinkPool { links }
+}
+
+/// The enabled adapters that are present, each with its current address. An
+/// adapter is found by its saved address, or by name once the network has
+/// given it a new one. Adapters that are unplugged or switched off are left out.
+fn usable_links<'a>(
+    config: &'a Config,
+    present: &[crate::net::Adapter],
+) -> Vec<(&'a crate::NetworkLink, std::net::IpAddr)> {
+    let mut usable: Vec<(&crate::NetworkLink, std::net::IpAddr)> = Vec::new();
+    if !config.multi_link {
+        return usable;
+    }
+    for l in config.interfaces.iter().filter(|l| l.enabled) {
+        let saved = l.address.parse().ok().filter(|addr| present.iter().any(|a| a.address == *addr));
+        let renamed = || present.iter().find(|a| !l.name.is_empty() && a.name == l.name).map(|a| a.address);
+        if let Some(addr) = saved.or_else(renamed)
+            && !usable.iter().any(|(_, used)| *used == addr)
+        {
+            usable.push((l, addr));
+        }
+    }
+    usable
 }
 
 fn build_client(config: &Config) -> Result<Client, Error> {
@@ -2683,6 +2714,33 @@ fn notify_events(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn adapters_are_followed_to_their_new_address() {
+        let link = |name: &str, address: &str| crate::NetworkLink {
+            name: name.into(),
+            address: address.into(),
+            ..Default::default()
+        };
+        let config = Config {
+            multi_link: true,
+            interfaces: vec![
+                link("Wi-Fi", "192.168.10.121"),
+                link("Ethernet 4", "10.80.113.215"),
+                link("Hotspot", "10.0.0.9"),
+            ],
+            ..Config::default()
+        };
+        let adapter = |name: &str, ip: &str| crate::net::Adapter { name: name.into(), address: ip.parse().unwrap() };
+        let present = [adapter("Wi-Fi", "10.127.194.97"), adapter("Hotspot", "10.0.0.9")];
+
+        let usable: Vec<_> =
+            usable_links(&config, &present).into_iter().map(|(l, a)| (l.name.as_str(), a.to_string())).collect();
+        assert_eq!(usable, [("Wi-Fi", "10.127.194.97".to_owned()), ("Hotspot", "10.0.0.9".to_owned())]);
+
+        let off = Config { multi_link: false, ..config };
+        assert!(usable_links(&off, &present).is_empty(), "bonding off: the default connection");
+    }
 
     #[test]
     fn file_name_matching() {
